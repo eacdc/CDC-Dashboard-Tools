@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CDC Projected Cashflow v2</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--mono:'Source Code Pro',monospace;--sans:'Inter',-apple-system,sans-serif;--bg:#ffffff;--bg2:#f8fafc;--bg3:#f1f5f9;--border:#e2e8f0;--border2:#cbd5e1;--text:#1e293b;--text2:#475569;--text3:#94a3b8;--dimnum:#d1d5db;--cyan:#0891b2;--pink:#be185d;--green:#059669;--red:#dc2626;--purple:#7c3aed;--amber:#d97706;--rowHover:#f8fafc;--sectionInBg:#f0fdfa;--sectionInBorder:#99f6e4;--sectionOutBg:#fdf2f8;--sectionOutBorder:#fbcfe8;--totalBg:#f8fafc;--netBg:#f0fdf4;}
+*{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);color:var(--text);font-family:var(--sans)}::-webkit-scrollbar{height:6px;width:6px}::-webkit-scrollbar-track{background:var(--bg2)}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}#root{min-height:100vh}.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:0.03em}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+var e=React.createElement,useState=React.useState,useRef=React.useRef;
+var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
+function parseHierarchy(t){var j=JSON.parse(t);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
+function mergeH(h1,h2){var g={},l={};for(var k in h1.groups)g[k]=h1.groups[k];for(var k in h2.groups)if(!g[k])g[k]=h2.groups[k];for(var k in h1.ledgers)l[k]=h1.ledgers[k];for(var k in h2.ledgers)if(!l[k])l[k]=h2.ledgers[k];for(var k in TPG)if(!g[k])g[k]=TPG[k];return{groups:g,ledgers:l};}
+function getChain(n,xd){var p=xd.ledgers[n];if(!p){if(xd.groups[n])p=n;else{for(var ln in xd.ledgers)if(ln.toLowerCase()===n.toLowerCase()){p=xd.ledgers[ln];break;}}}if(!p)return['Unclassified'];var ch=[p],sn={};while(p&&xd.groups[p]&&!sn[p]){sn[p]=1;p=xd.groups[p];if(p)ch.unshift(p);}return ch;}
+function chainHas(n,xd,kws){var cs=getChain(n,xd).join('>').toLowerCase();for(var i=0;i<kws.length;i++)if(cs.indexOf(kws[i])>=0)return true;return false;}
+function findIB(xd){var ib={};for(var ln in xd.ledgers)if(chainHas(ln,xd,['branch / divisions']))ib[ln]=1;return ib;}
+function parseDate(ds){if(!ds||ds.length<8)return new Date(2025,3,1);return new Date(parseInt(ds.substring(0,4)),parseInt(ds.substring(4,6))-1,parseInt(ds.substring(6,8)));}
+function daysBtw(d1,d2){return Math.round((d2-d1)/(864e5));}
+function addDays(d,n){var r=new Date(d);r.setDate(r.getDate()+n);return r;}
+function toYMD(d){return String(d.getFullYear())+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');}
+function parseTD(s){if(!s)return null;s=s.trim();var m={'Jan':0,'Feb':1,'Mar':2,'Apr':3,'May':4,'Jun':5,'Jul':6,'Aug':7,'Sep':8,'Oct':9,'Nov':10,'Dec':11};var p=s.split('-');if(p.length!==3)return null;var d=parseInt(p[0]),mo=m[p[1]],y=parseInt(p[2]);if(isNaN(d)||mo===undefined||isNaN(y))return null;if(y<100)y+=y<50?2000:1900;return new Date(y,mo,d);}
+function parseBillsCSV(text){var lines=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');var bills=[];var started=false;
+for(var i=0;i<lines.length;i++){var line=lines[i].trim();if(!line)continue;if(line.indexOf('Date')===0&&line.indexOf('Ref. No.')>0){started=true;continue;}if(line.indexOf(',,,Amount')>=0)continue;if(!started)continue;
+var fields=[];var cur='';var inQ=false;for(var ci=0;ci<line.length;ci++){var ch=line[ci];if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){fields.push(cur.trim());cur='';}else cur+=ch;}fields.push(cur.trim());
+if(fields.length<4)continue;var dt=parseTD(fields[0]);if(!dt)continue;var party=fields[2]||'';if(!party)continue;
+var amtClean=(fields[3]||'').replace(/,/g,'').replace(/Dr/gi,'').replace(/Cr/gi,'').trim();
+var rawAmt=parseFloat(amtClean)||0;if(rawAmt===0)continue;
+var refNo=fields[1]||'';
+var due=fields.length>4?parseTD(fields[4]):dt;var od=fields.length>5?parseInt(fields[5])||0:0;
+var isAdv=rawAmt<0;
+bills.push({date:toYMD(dt),dateObj:dt,refNo:refNo,party:party,amount:Math.abs(rawAmt),dueDate:due||dt,overdueDays:od,isAdvance:isAdv});}return bills;}
+function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
+
+function buildProjection(vouchers,xd,ib,recBills,payBills,asOfDate){
+var today=asOfDate||new Date();var todayYMD=toYMD(today);
+var SALE={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1};var PURCH={'Purchase':1};
+var RCV={'Bank Receipt':1,'Receipt':1};var PAY={'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Payment':1};
+var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
+function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,['sundry debtors']);}function isC(p){return chainHas(p,xd,['sundry creditors']);}function isIE(p){return chainHas(p,xd,['indirect expenses']);}
+
+// Step 1: Collect invoices and receipts from vouchers
+var dInv={},dRct={},cInv={},cPay={},ieM=Array(12).fill(0);
+var fyYear=today.getMonth()>=3?today.getFullYear():today.getFullYear()-1;
+var fyStartYMD=String(fyYear)+'0401';
+function mk(ds){if(ds<fyStartYMD)return-1;var m=parseInt(ds.substring(4,6));return(m-4+12)%12;}
+for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
+if(v.date>todayYMD)continue;// Skip vouchers after as-of date
+if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a});}
+if(PURCH[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a});}
+if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a});}
+if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a});}
+if(vt==='Journal'){var hLC=false;for(var ln in lds)if(lds[ln]<0&&isL(ln)){hLC=true;break;}
+if(hLC){for(var p in pls){if(!isD(p)||ib[p]||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
+else{var hB=false;for(var p in pls)if(ib[p]){hB=true;break;}if(hB)for(var p in pls){if(ib[p]||!isD(p)||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
+for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}
+for(var l in lds){if(lds[l]>=0||!isC(l)||ib[l])continue;(cPay[l]=cPay[l]||[]).push({date:v.date,amt:Math.abs(lds[l])});}}
+if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}
+// Credit Notes: Dr debtor (positive) = cancels invoice → treat as receipt for debtor
+if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
+// Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
+if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
+var mi=mk(v.date);if(mi>=0&&mi<12)for(var l in lds)if(isIE(l))ieM[mi]+=Math.abs(lds[l]);}
+
+// Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
+// Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}
+function combinedFIFO(openBills,yearInvs,yearRcts){
+  var evs=[];
+  for(var i=0;i<openBills.length;i++){var b=openBills[i];
+    if(b.isAdvance){evs.push({d:b.date,a:b.amount,t:'r',ref:b.refNo||'ADV'});}// Advance = pre-payment
+    else{evs.push({d:b.date,a:b.amount,t:'i',ref:b.refNo||'OB'});}}
+  for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];evs.push({d:inv.date,a:inv.amt,t:'i',ref:'INV'});}
+  for(var i=0;i<(yearRcts||[]).length;i++){var r=yearRcts[i];evs.push({d:r.date,a:r.amt,t:'r',ref:'RCT'});}
+  evs.sort(function(a,b){return a.d<b.d?-1:a.d>b.d?1:(a.t==='i'?-1:1);});
+
+  var q=[],da=[],adv=0;
+  for(var i=0;i<evs.length;i++){var ev=evs[i];
+    if(ev.t==='i'){
+      var rem=ev.a;
+      if(adv>0){var ab=Math.min(adv,rem);adv-=ab;rem-=ab;if(ab>0.5)da.push({d:0,a:ab});}
+      if(rem>0.5)q.push({d:ev.d,r:rem,ref:ev.ref});
+    } else {
+      var ra=ev.a,rd=parseDate(ev.d);
+      for(var qi=0;qi<q.length&&ra>0.5;qi++){
+        if(q[qi].r<0.5)continue;
+        var mt=Math.min(q[qi].r,ra);q[qi].r-=mt;ra-=mt;
+        var dy=daysBtw(parseDate(q[qi].d),rd);
+        if(dy>=0)da.push({d:Math.min(dy,730),a:mt});// cap at 730 for avg calc
+      }
+      if(ra>0.5)adv+=ra;
+    }
+  }
+  // Remaining unpaid
+  var unpaid=[];
+  for(var qi=0;qi<q.length;qi++){if(q[qi].r>0.5)unpaid.push({date:q[qi].d,amt:q[qi].r,ref:q[qi].ref});}
+  // Weighted avg days (only from matches, not from >730d)
+  var tw=0,ta=0;
+  for(var i=0;i<da.length;i++){if(da[i].d<=360){tw+=da[i].d*da[i].a;ta+=da[i].a;}}
+  var avg=ta>0?Math.round(tw/ta):-1;
+  return{avgDays:avg,unpaid:unpaid,matchedAmt:ta};
+}
+
+// Step 3: Process debtors
+// Group opening bills by party
+var obByD={};for(var i=0;i<recBills.length;i++){var b=recBills[i];(obByD[b.party]=obByD[b.party]||[]).push(b);}
+// Get all debtor parties (from opening bills + this year's invoices)
+var allDebtors={};for(var p in obByD)allDebtors[p]=1;for(var p in dInv)allDebtors[p]=1;
+
+var dStats={};// {party: {avgDays, unpaid, outstanding, group}}
+for(var p in allDebtors){
+  var ob=obByD[p]||[];var inv=dInv[p]||[];var rct=dRct[p]||[];
+  var res=combinedFIFO(ob,inv,rct);
+  var outstanding=res.unpaid.reduce(function(s,u){return s+u.amt;},0);
+  dStats[p]={avgDays:res.avgDays,unpaid:res.unpaid,outstanding:outstanding,matchedAmt:res.matchedAmt};}
+
+// Group & company averages for debtors
+var dAvg={};for(var p in dStats){if(dStats[p].avgDays>=0)dAvg[p]=dStats[p].avgDays;}
+function getGrp(p,root){var ch=getChain(p,xd);for(var i=0;i<ch.length;i++)if(ch[i]===root&&i+1<ch.length)return ch[i+1];return'Other';}
+function grpAvgs(pa,root){var gd={};for(var p in pa){var g=getGrp(p,root);if(!gd[g])gd[g]={t:0,c:0};gd[g].t+=pa[p];gd[g].c++;}var r={};for(var g in gd)if(gd[g].c>0)r[g]=Math.round(gd[g].t/gd[g].c);return r;}
+var dGA=grpAvgs(dAvg,'Sundry Debtors');
+var dt=0,dc=0;for(var p in dAvg){dt+=dAvg[p];dc++;}var cdAvg=dc>0?Math.round(dt/dc):-1;
+function effDays(p,pa,ga,ca,root){if(pa.hasOwnProperty(p))return{days:pa[p],source:'own'};var g=getGrp(p,root);if(ga[g]!==undefined)return{days:ga[g],source:'group'};if(ca>=0)return{days:ca,source:'company'};return{days:-1,source:'none'};}
+
+// Project debtors
+var pMo=[];var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);pMo.push(mn[md.getMonth()]+"'"+String(md.getFullYear()).slice(-2));}
+function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
+
+var pIn={},pInSt={},pInM=[0,0,0],exD={},tDOS=0,incDC=0;
+for(var p in dStats){
+  var ds=dStats[p];if(ds.outstanding<1)continue;
+  tDOS+=ds.outstanding;
+  var ef=effDays(p,dAvg,dGA,cdAvg,'Sundry Debtors');
+  // Exclusion: no payment history OR avg > 360
+  if(ef.days<0||ef.days>360){exD[p]={reason:ef.days<0?'no_history':'over_360',days:ef.days,outstanding:ds.outstanding};continue;}
+  // Also exclude individual bills overdue > 360 days with no payment pattern
+  var pa=[0,0,0],tp=0,ul=[],exBillAmt=0;
+  for(var bi=0;bi<ds.unpaid.length;bi++){
+    var b=ds.unpaid[bi];
+    var billAge=daysBtw(parseDate(b.date),today);
+    // If bill is older than 360 days AND party's own avg > 180, likely won't pay
+    if(billAge>360&&(ef.source!=='own'||ef.days>180)){exBillAmt+=b.amt;continue;}
+    var pd=addDays(parseDate(b.date),ef.days);
+    if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());// overdue or invalid → expect this month
+    var mi=pmi(pd);
+    if(mi>=0){pa[mi]+=b.amt;tp+=b.amt;}
+    ul.push({date:b.date,amt:b.amt,ref:b.ref||''});
+  }
+  if(exBillAmt>0&&tp<1){exD[p]={reason:'all_bills_stale',days:ef.days,outstanding:ds.outstanding};continue;}
+  if(tp>0){var gr=getGrp(p,'Sundry Debtors');pIn[p]=pa;pInSt[p]={days:ef.days,source:ef.source,outstanding:ds.outstanding,projected:tp,group:gr,unpaidList:ul,excludedBills:exBillAmt};for(var m=0;m<3;m++)pInM[m]+=pa[m];incDC++;
+  } else if(ds.outstanding>0){exD[p]={reason:'due_after_3mo',days:ef.days,outstanding:ds.outstanding};}
+}
+
+// Step 4: Process creditors (same logic)
+var obByC={};for(var i=0;i<payBills.length;i++){var b=payBills[i];(obByC[b.party]=obByC[b.party]||[]).push(b);}
+var allCreditors={};for(var p in obByC)allCreditors[p]=1;for(var p in cInv)allCreditors[p]=1;
+var cStats={};
+for(var p in allCreditors){
+  var ob=obByC[p]||[];var inv=cInv[p]||[];var pay=cPay[p]||[];
+  var res=combinedFIFO(ob,inv,pay);
+  cStats[p]={avgDays:res.avgDays,unpaid:res.unpaid,outstanding:res.unpaid.reduce(function(s,u){return s+u.amt;},0),matchedAmt:res.matchedAmt};}
+
+var cAvgMap={};for(var p in cStats){if(cStats[p].avgDays>=0)cAvgMap[p]=cStats[p].avgDays;}
+var cGA=grpAvgs(cAvgMap,'Sundry Creditors');
+var ct=0,cc=0;for(var p in cAvgMap){ct+=cAvgMap[p];cc++;}var ccAvg=cc>0?Math.round(ct/cc):-1;
+
+var pOut={},pOutSt={},pOutM=[0,0,0],exC={},tCOS=0,incCC=0;
+for(var p in cStats){
+  var cs=cStats[p];if(cs.outstanding<1)continue;
+  tCOS+=cs.outstanding;
+  var ef=effDays(p,cAvgMap,cGA,ccAvg,'Sundry Creditors');
+  if(ef.days<0||ef.days>360){exC[p]={reason:ef.days<0?'no_history':'over_360',days:ef.days,outstanding:cs.outstanding};continue;}
+  var pa=[0,0,0],tp=0,ul=[],exBA=0;
+  for(var bi=0;bi<cs.unpaid.length;bi++){
+    var b=cs.unpaid[bi];var billAge=daysBtw(parseDate(b.date),today);
+    if(billAge>360&&(ef.source!=='own'||ef.days>180)){exBA+=b.amt;continue;}
+    var pd=addDays(parseDate(b.date),ef.days);
+    if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);
+    if(mi>=0){pa[mi]+=b.amt;tp+=b.amt;}ul.push({date:b.date,amt:b.amt,ref:b.ref||''});
+  }
+  if(exBA>0&&tp<1){exC[p]={reason:'all_bills_stale',days:ef.days,outstanding:cs.outstanding};continue;}
+  if(tp>0){var gr=getGrp(p,'Sundry Creditors');pOut[p]=pa;pOutSt[p]={days:ef.days,source:ef.source,outstanding:cs.outstanding,projected:tp,group:gr,unpaidList:ul,excludedBills:exBA};for(var m=0;m<3;m++)pOutM[m]+=pa[m];incCC++;
+  } else if(cs.outstanding>0){exC[p]={reason:'due_after_3mo',days:ef.days,outstanding:cs.outstanding};}
+}
+
+// Indirect expenses
+var lM=[];for(var i=11;i>=0;i--){if(ieM[i]>0){lM.push(ieM[i]);if(lM.length>=3)break;}}
+var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
+var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
+
+return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)}};}
+
+function recalc(data,dOvr,excl){var today=data.asOfDate||new Date();function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
+function rp(st,p){var od=dOvr.hasOwnProperty(p)?dOvr[p]:st.days;var sr=dOvr.hasOwnProperty(p)?'override':st.source;var ul=st.unpaidList||[];var pa=[0,0,0],tp=0;
+for(var i=0;i<ul.length;i++){var pd=addDays(parseDate(ul[i].date),od);if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);if(mi<0)continue;pa[mi]+=ul[i].amt;tp+=ul[i].amt;}
+return{pa:pa,tp:tp,d:od,s:sr};}
+var nIn={},nInS={},nInM=[0,0,0];for(var p in data.projInflowStats){var st=data.projInflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nIn[p]=r.pa;nInS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nInM[m]+=r.pa[m];}}
+var nOut={},nOutS={},nOutM=[0,0,0];for(var p in data.projOutflowStats){var st=data.projOutflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nOut[p]=r.pa;nOutS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nOutM[m]+=r.pa[m];}}
+var net=data.projMonths.map(function(_,m){return nInM[m]-nOutM[m]-data.projIndExp[m];});
+return{projMonths:data.projMonths,xd:data.xd,projInflows:nIn,projInflowStats:nInS,projInM:nInM,projOutflows:nOut,projOutflowStats:nOutS,projOutM:nOutM,projIndExp:data.projIndExp,projNetM:net,companyAvgDays:data.companyAvgDays,debtorCount:Object.keys(nIn).length,creditorCount:Object.keys(nOut).length,totalOutstanding:data.totalOutstanding,excluded:data.excluded,excludedTotals:data.excludedTotals};}
+
+var GRID_COL1=320;function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
+
+function ProjRow(pr){var pn=pr.name,mo=pr.monthly,st=pr.stats,mc=pr.mc,ex=pr.excluded;
+var sE=useState(false),ed=sE[0],sEd=sE[1];var sV=useState(''),ev=sV[0],sEv=sV[1];
+var tot=mo.reduce(function(a,b){return a+b;},0);var dm=ex?[0,0,0]:mo;var dt=ex?0:tot;
+function commit(){var n=parseInt(ev);if(!isNaN(n)&&n>=0&&n<999&&pr.onDC)pr.onDC(pn,n);sEd(false);}
+var badge=st?(ed?e('input',{type:'number',value:ev,onChange:function(v){sEv(v.target.value);},onBlur:commit,onKeyDown:function(v){if(v.key==='Enter')commit();if(v.key==='Escape')sEd(false);},autoFocus:true,style:{width:'40px',fontSize:'9px',padding:'1px 3px',border:'1px solid var(--cyan)',borderRadius:'3px',fontFamily:'var(--mono)',outline:'none'}}):e('span',{onClick:function(v){v.stopPropagation();sEd(true);sEv(String(st.days));},style:{fontSize:'9px',padding:'1px 5px',borderRadius:'3px',marginLeft:'6px',fontFamily:'var(--mono)',cursor:'pointer',background:st.source==='own'?'#dbeafe':st.source==='group'?'#fef3c7':st.source==='override'?'#d1fae5':'#f3e8ff',color:st.source==='own'?'#1e40af':st.source==='group'?'#92400e':st.source==='override'?'#065f46':'#6b21a8'}},st.days+'d')):null;
+var xBtn=e('span',{onClick:function(v){v.stopPropagation();if(pr.onTE)pr.onTE(pn);},style:{fontSize:'9px',padding:'1px 4px',borderRadius:'3px',marginLeft:'4px',cursor:'pointer',fontFamily:'var(--mono)',background:ex?'#fecaca':'transparent',color:ex?'#dc2626':'var(--text3)',border:'1px solid '+(ex?'#fca5a5':'var(--border)')}},ex?'\u2715':'\u2212');
+var cells=[e('div',{key:'n',style:{padding:'8px 12px',display:'flex',alignItems:'center',gap:'4px',borderRight:'1px solid var(--border)',minWidth:0,fontSize:'12px',color:ex?'var(--text3)':'var(--text2)',textDecoration:ex?'line-through':'none'}},e('span',{style:{overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},pn),badge,xBtn)];
+for(var i=0;i<mc;i++)cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'8px 10px',textAlign:'right',fontSize:'12.5px',color:dm[i]===0?'var(--dimnum)':ex?'var(--text3)':'var(--text2)',borderRight:'1px solid var(--border)',textDecoration:ex?'line-through':'none'}},fmt(dm[i])));
+cells.push(e('div',{key:'t',className:'num',style:{padding:'8px 10px',textAlign:'right',fontSize:'12.5px',fontWeight:600,color:dt===0?'var(--dimnum)':ex?'var(--text3)':'var(--text)',background:'var(--totalBg)',textDecoration:ex?'line-through':'none'}},fmt(dt)));
+return e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)',opacity:ex?0.5:1},onMouseEnter:function(v){v.currentTarget.style.background='var(--rowHover)';},onMouseLeave:function(v){v.currentTarget.style.background='transparent';}},cells);}
+
+function SecH(pr){var cells=[e('div',{key:'n',style:{padding:'10px 16px',display:'flex',alignItems:'center',gap:'8px',borderRight:'1px solid var(--border)',fontSize:'13px',fontWeight:700,color:pr.color}},e('span',{style:{fontSize:'10px',transform:pr.open?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),pr.label)];
+for(var i=0;i<pr.mc;i++)cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:pr.color,borderRight:'1px solid var(--border)'}},fmt(pr.monthly[i])));
+cells.push(e('div',{key:'t',className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:pr.color,background:pr.bg}},fmt(pr.monthly.reduce(function(a,b){return a+b;},0))));
+return e('div',{onClick:pr.onToggle,style:{display:'grid',gridTemplateColumns:gtc(pr.mc),background:pr.bg,borderTop:'2px solid '+pr.bc,borderBottom:'2px solid '+pr.bc,cursor:'pointer'}},cells);}
+
+function TotR(pr){var tot=pr.monthly.reduce(function(a,b){return a+b;},0);var cells=[e('div',{key:'n',style:{padding:'12px 16px',fontSize:'14px',fontWeight:700,borderRight:'1px solid var(--border)'}},pr.label)];
+for(var i=0;i<pr.mc;i++)cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'12px 10px',textAlign:'right',fontSize:'14px',fontWeight:700,color:pr.monthly[i]>=0?'var(--green)':'var(--red)',borderRight:'1px solid var(--border)'}},fmt(pr.monthly[i])));
+cells.push(e('div',{key:'t',className:'num',style:{padding:'12px 10px',textAlign:'right',fontSize:'14px',fontWeight:700,color:tot>=0?'var(--green)':'var(--red)',background:'var(--netBg)'}},fmt(tot)));
+return e('div',{style:{display:'grid',gridTemplateColumns:gtc(pr.mc),borderTop:'3px solid var(--border2)',background:'var(--netBg)'}},cells);}
+
+function expXLS(d,gOpen,excluded){var rows=[],hdr=['Particulars','Avg Days','Source'].concat(d.projMonths).concat(['TOTAL']);
+
+function walkTree(node,prefix,depth,allFlows,allStats,type){
+  var cks=Object.keys(node.ch||{}).sort(function(a,b){return((node.ch[b].mo||[0,0,0])[0]||0)-((node.ch[a].mo||[0,0,0])[0]||0);});
+  var sp=(node.ps||[]).slice().sort(function(a,b){return((allFlows[b]||[0,0,0])[0]||0)-((allFlows[a]||[0,0,0])[0]||0);});
+  var pad='';for(var x=0;x<depth;x++)pad+='  ';
+  cks.forEach(function(g){
+    var c=node.ch[g];var gk=prefix+'_'+g;var isOpen=!!gOpen[gk];
+    var gt=(c.mo||[0,0,0]).reduce(function(s,v){return s+v;},0);
+    var row=[pad+g,'',''];for(var m=0;m<3;m++)row.push((c.mo||[0,0,0])[m]);row.push(Math.round(gt*100)/100);
+    rows.push(row);
+    if(isOpen)walkTree(c,gk,depth+1,allFlows,allStats,type);
+  });
+  sp.forEach(function(p){
+    var st=allStats[p]||{};var m=allFlows[p]||[0,0,0];var t=m.reduce(function(s,v){return s+v;},0);
+    var ex=excluded[p]?'[EXCL] ':'';
+    rows.push([pad+ex+p,st.days||'',st.source||''].concat(m).concat([Math.round(t*100)/100]));
+  });
+}
+
+rows.push(['PROJECTED INFLOWS']);
+if(d._inTree)walkTree(d._inTree,'in',1,d.projInflows,d.projInflowStats,'d');
+else for(var p in d.projInflows){var s=d.projInflowStats[p],m=d.projInflows[p];rows.push([p,s.days,s.source].concat(m).concat([m.reduce(function(a,b){return a+b;},0)]));}
+rows.push(['Total In','',''].concat(d.projInM).concat([d.projInM.reduce(function(a,b){return a+b;},0)]));rows.push([]);
+
+rows.push(['PROJECTED OUTFLOWS']);
+if(d._outTree)walkTree(d._outTree,'out',1,d.projOutflows,d.projOutflowStats,'c');
+else for(var p in d.projOutflows){var s=d.projOutflowStats[p],m=d.projOutflows[p];rows.push([p,s.days,s.source].concat(m).concat([m.reduce(function(a,b){return a+b;},0)]));}
+rows.push(['Total Out','',''].concat(d.projOutM).concat([d.projOutM.reduce(function(a,b){return a+b;},0)]));rows.push([]);
+
+rows.push(['Indirect Exp','',''].concat(d.projIndExp).concat([d.projIndExp.reduce(function(a,b){return a+b;},0)]));rows.push([]);
+rows.push(['NET','',''].concat(d.projNetM).concat([d.projNetM.reduce(function(a,b){return a+b;},0)]));rows.push([]);
+rows.push(['EXCLUDED DEBTORS (>360d/no history)']);for(var p in d.excluded.debtors){var x=d.excluded.debtors[p];rows.push([p,x.days>=0?x.days:'none',x.reason,x.outstanding]);}rows.push([]);
+rows.push(['EXCLUDED CREDITORS']);for(var p in d.excluded.creditors){var x=d.excluded.creditors[p];rows.push([p,x.days>=0?x.days:'none',x.reason,x.outstanding]);}
+var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:45},{wch:10},{wch:10}];for(var i=0;i<4;i++)ws['!cols'].push({wch:14});var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Proj CF');XLSX.writeFile(wb,'CDC_Projected_CF.xlsx');}
+
+function FB(pr){var ref=useRef();return e('div',{onClick:function(){ref.current&&ref.current.click();},style:{padding:'7px 10px',marginTop:'3px',borderRadius:'6px',border:pr.file?'2px solid var(--cyan)':'1px dashed var(--border2)',background:pr.file?'var(--bg2)':'var(--bg)',cursor:'pointer'}},e('input',{ref:ref,type:'file',accept:pr.accept,style:{display:'none'},onChange:function(v){v.target.files&&v.target.files[0]&&pr.onFile(v.target.files[0]);}}),e('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'12px'}},pr.file?'\u2705':pr.icon),e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:pr.file?'var(--cyan)':'var(--text2)'}},pr.file?pr.file.name:pr.label),e('div',{style:{fontSize:'7px',color:'var(--text3)',marginTop:'1px'}},pr.file?(pr.file.size/1048576).toFixed(1)+' MB':pr.hint))));}
+
+function Upload(pr){var f={},st={};var flds=['khF','kvF','ahF','avF','kbrF','kbpF','abpF'];for(var i=0;i<flds.length;i++){var s=useState(null);f[flds[i]]=s[0];st[flds[i]]=s[1];}
+var sE=useState(null),err=sE[0],sEr=sE[1];var sL=useState(false),ld=sL[0],sLd=sL[1];var sS=useState(''),status=sS[0],sSt=sS[1];
+var sAsOf=useState(new Date().toISOString().slice(0,10)),asOfDate=sAsOf[0],setAsOfDate=sAsOf[1];
+function go(){sEr(null);sLd(true);sSt('Reading...');var ps=[f.khF.text(),f.kvF.text(),f.ahF.text(),f.avF.text(),f.kbrF.text(),f.kbpF.text()];if(f.abpF)ps.push(f.abpF.text());
+Promise.all(ps).then(function(r){sSt('Processing...');setTimeout(function(){try{var kx=parseHierarchy(r[0]),ax=parseHierarchy(r[2]),xd=mergeH(kx,ax),ib=findIB(xd);
+var kV=JSON.parse(r[1]),aV=JSON.parse(r[3]),vs=kV.concat(aV);sSt(vs.length+' vouchers. Parsing bills...');
+var rb=parseBillsCSV(r[4]),pb=parseBillsCSV(r[5]);if(r[6])pb=pb.concat(parseBillsCSV(r[6]));
+sSt(rb.length+' receivable, '+pb.length+' payable bills.');
+setTimeout(function(){try{var asOf=new Date(asOfDate+'T00:00:00');
+pr.onData(buildProjection(vs,xd,ib,rb,pb,asOf));}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);
+}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);}).catch(function(ex){sEr(ex.message);sLd(false);});}
+var ok=f.khF&&f.kvF&&f.ahF&&f.avF&&f.kbrF&&f.kbpF&&!ld;
+return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px'}},
+e('div',{style:{width:'620px',padding:'24px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
+e('div',{style:{textAlign:'center',marginBottom:'12px'}},e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'var(--mono)',marginBottom:'4px'}},'Cash Intelligence v2'),e('h1',{style:{fontSize:'20px',fontWeight:700,margin:0}},'Projected Cashflow'),e('p',{style:{color:'#64748b',fontSize:'11px',marginTop:'4px'}},'Bill-wise outstanding \u00B7 FIFO avg days \u00B7 360d cutoff \u00B7 3mo forward')),
+e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
+e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--cyan)',fontFamily:'var(--mono)'}},'KOLKATA'),e(FB,{label:'Hierarchy JSON',hint:'kol_hierarchy.json',accept:'.json',file:f.khF,onFile:st.khF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'kol_vouchers.json',accept:'.json',file:f.kvF,onFile:st.kvF,icon:'\uD83D\uDCCA'})),
+e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--purple)',fontFamily:'var(--mono)'}},'AHMEDABAD'),e(FB,{label:'Hierarchy JSON',hint:'ahm_hierarchy.json',accept:'.json',file:f.ahF,onFile:st.ahF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'ahm_vouchers.json',accept:'.json',file:f.avF,onFile:st.avF,icon:'\uD83D\uDCCA'}))),
+e('div',{style:{marginTop:'6px',fontSize:'9px',fontWeight:600,color:'var(--amber)',fontFamily:'var(--mono)'}},'BILL-WISE OUTSTANDING'),
+e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
+e('div',null,e(FB,{label:'Kol Bills Receivable',hint:'CSV from Tally',accept:'.csv',file:f.kbrF,onFile:st.kbrF,icon:'\uD83D\uDCC4'}),e(FB,{label:'Kol Bills Payable',hint:'CSV from Tally',accept:'.csv',file:f.kbpF,onFile:st.kbpF,icon:'\uD83D\uDCC4'})),
+e('div',null,e(FB,{label:'Ahm Bills Payable',hint:'Optional',accept:'.csv',file:f.abpF,onFile:st.abpF,icon:'\uD83D\uDCC4'}),e('div',{style:{padding:'7px 10px',marginTop:'3px',borderRadius:'6px',border:'1px dashed var(--border)',background:'var(--bg2)',fontSize:'8px',color:'var(--text3)'}},'No Ahm receivable needed'))),
+e('div',{style:{marginTop:'8px',display:'flex',alignItems:'center',gap:'10px'}},
+e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--green)',fontFamily:'var(--mono)'}},'AS-OF DATE'),
+e('input',{type:'date',value:asOfDate,onChange:function(v){setAsOfDate(v.target.value);},style:{padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'12px',fontFamily:'var(--mono)',outline:'none'}}),
+e('span',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Vouchers up to this date \u00B7 Projection starts from here')),
+err&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',marginTop:'6px',fontSize:'10px',fontFamily:'var(--mono)',whiteSpace:'pre-wrap',maxHeight:'120px',overflow:'auto'}},err),
+ld&&status&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#ecfeff',border:'1px solid #a5f3fc',color:'#0891b2',marginTop:'6px',fontSize:'10px',fontFamily:'var(--mono)'}},status),
+e('button',{onClick:go,disabled:!ok,style:{width:'100%',marginTop:'10px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ok?'pointer':'not-allowed',background:ok?'#0891b2':'#f1f5f9',color:ok?'#fff':'#94a3b8'}},ld?'Analyzing...':'Generate Projected Cashflow')));}
+
+function Dash(pr){var data=pr.data,mc=3;
+// Restore overrides from localStorage
+var savedOvr=null;try{var raw=window.localStorage&&localStorage.getItem('cdc_pcf_overrides');if(raw)savedOvr=JSON.parse(raw);}catch(e){}
+var sCW=useState(340),cW=sCW[0],sCw=sCW[1];var sSr=useState(''),sr=sSr[0],sSrch=sSr[1];
+var sIO=useState(true),iO=sIO[0],sIOp=sIO[1];var sOO=useState(true),oO=sOO[0],sOOp=sOO[1];var sES=useState(false),eS=sES[0],sESp=sES[1];
+var sDO=useState(savedOvr&&savedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
+var sEx=useState(savedOvr&&savedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
+var sGO=useState(savedOvr&&savedOvr.groupOpen||{}),gO=sGO[0],sGOp=sGO[1];
+// Auto-save to localStorage on any change
+function persistOverrides(newDO,newEx){
+  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,savedAt:new Date().toISOString()}));}}catch(e){}}
+// Save overrides as downloadable JSON
+function saveOverridesJSON(){
+  var obj={daysOverrides:dO,excluded:ex,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
+  var blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='cdc_pcf_overrides.json';a.click();URL.revokeObjectURL(url);}
+// Load overrides from uploaded JSON
+function loadOverridesJSON(file){
+  file.text().then(function(t){try{var obj=JSON.parse(t);
+    if(obj.daysOverrides){sDOv(obj.daysOverrides);persistOverrides(obj.daysOverrides,obj.excluded);}
+    if(obj.excluded){sExp(obj.excluded);}
+  }catch(e){alert('Invalid overrides file: '+e.message);}});}
+
+GRID_COL1=cW;
+function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null);return x;});}
+function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x);return x;});}
+function tG(k){sGOp(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;return x;});}
+var ed=recalc(data,dO,ex);var mos=ed.projMonths;
+var tI=ed.projInM.reduce(function(a,b){return a+b;},0),tO=ed.projOutM.reduce(function(a,b){return a+b;},0),tIE=ed.projIndExp.reduce(function(a,b){return a+b;},0),tN=ed.projNetM.reduce(function(a,b){return a+b;},0);
+
+function gGC(p,ty){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});var rt=ty==='d'?'Sundry Debtors':'Sundry Creditors';
+for(var i=0;i<ch.length;i++)if(ch[i]===rt&&i+1<ch.length)return ch.slice(i+1);var st=ty==='d'?ed.projInflowStats[p]:ed.projOutflowStats[p];return[(st&&st.group)||'Other'];}
+function bGT(parties,af,ty){var tree={ch:{},ps:[],mo:[0,0,0]};
+parties.forEach(function(p){var ch=gGC(p,ty);var nd=tree;for(var i=0;i<ch.length;i++){var g=ch[i];if(g===p)break;if(!nd.ch[g])nd.ch[g]={ch:{},ps:[],mo:[0,0,0]};nd=nd.ch[g];}nd.ps.push(p);
+var m=af[p]||[0,0,0];var n2=tree;if(!ex[p])for(var mm=0;mm<3;mm++)n2.mo[mm]+=m[mm];
+for(var i=0;i<ch.length;i++){var g=ch[i];if(g===p)break;n2=n2.ch[g];if(!ex[p])for(var mm=0;mm<3;mm++)n2.mo[mm]+=m[mm];}});return tree;}
+
+var iP=Object.keys(ed.projInflows).filter(function(p){return(ed.projInflows[p].reduce(function(s,v){return s+v;},0)>=50000)||ex[p];});
+var oP=Object.keys(ed.projOutflows).filter(function(p){return(ed.projOutflows[p].reduce(function(s,v){return s+v;},0)>=50000)||ex[p];});
+if(sr){var sl=sr.toLowerCase();iP=iP.filter(function(p){return p.toLowerCase().indexOf(sl)>=0;});oP=oP.filter(function(p){return p.toLowerCase().indexOf(sl)>=0;});}
+var iT=bGT(iP,ed.projInflows,'d'),oT=bGT(oP,ed.projOutflows,'c');
+
+function rGN(nd,pfx,dep,clr,bg,af,as,isSr){var rows=[];
+var cks=Object.keys(nd.ch).sort(function(a,b){return(nd.ch[b].mo[0]||0)-(nd.ch[a].mo[0]||0);});
+var sp=nd.ps.slice().sort(function(a,b){return((af[b]||[0,0,0])[0]||0)-((af[a]||[0,0,0])[0]||0);});
+cks.forEach(function(g){var c=nd.ch[g],gk=pfx+'_'+g,go=!!gO[gk]||isSr,gt=c.mo.reduce(function(s,v){return s+v;},0),ind=12+dep*16;
+rows.push(e('div',{key:gk,onClick:function(){tG(gk);},style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)',background:bg,cursor:'pointer'},onMouseEnter:function(v){v.currentTarget.style.opacity='0.85';},onMouseLeave:function(v){v.currentTarget.style.opacity='1';}},
+e('div',{style:{padding:'7px 12px 7px '+ind+'px',display:'flex',alignItems:'center',gap:'5px',borderRight:'1px solid var(--border)',fontSize:'11.5px',fontWeight:600,color:clr}},e('span',{style:{fontSize:'7px',transform:go?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),g,e('span',{style:{fontSize:'9px',color:'var(--text3)',fontWeight:400}},(c.ps.length+Object.keys(c.ch).length))),
+c.mo.map(function(v,i){return e('div',{key:'m'+i,className:'num',style:{padding:'7px 10px',textAlign:'right',fontSize:'11.5px',fontWeight:600,color:v===0?'var(--dimnum)':clr,borderRight:'1px solid var(--border)'}},fmt(v));}),
+e('div',{className:'num',style:{padding:'7px 10px',textAlign:'right',fontSize:'11.5px',fontWeight:600,color:gt===0?'var(--dimnum)':clr,background:'var(--totalBg)'}},fmt(gt))));
+if(go)rows=rows.concat(rGN(c,gk,dep+1,clr,bg,af,as,isSr));});
+sp.forEach(function(p){rows.push(e(ProjRow,{key:pfx+'_p_'+p,name:p,monthly:af[p]||[0,0,0],stats:as[p],mc:mc,excluded:!!ex[p],onDC:onDC,onTE:onTE}));});return rows;}
+
+var exDC=Object.keys(ed.excluded.debtors).length,exCC=Object.keys(ed.excluded.creditors).length;
+var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
+var hC=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];
+mos.forEach(function(m,i){hC.push(e('div',{key:'m'+i,style:hs},m));});hC.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
+
+return e('div',{style:{minHeight:'100vh',background:'var(--bg)'}},
+e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'8px'}},
+e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC \u00B7 Projected CF \u00B7 Bill-Wise \u00B7 As of '+(ed.asOfDate?ed.asOfDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'Today')),e('div',{style:{fontSize:'18px',fontWeight:700,marginTop:'2px'}},'Cash Intelligence Dashboard'),
+e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'Avg: Dr '+ed.companyAvgDays.debtor+'d Cr '+ed.companyAvgDays.creditor+'d \u00B7 '+iP.length+'/'+oP.length+' parties \u00B7 Excluded: '+exDC+'Dr+'+exCC+'Cr ('+fmt(ed.excludedTotals.debtors)+'/'+fmt(ed.excludedTotals.creditors)+')')),
+e('div',{style:{display:'flex',gap:'14px',alignItems:'center',flexWrap:'wrap'}},
+e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tI))),
+e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tO+tIE))),
+e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tN>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tN>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tN))),
+e('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},e('button',{onClick:function(){expXLS(Object.assign({},ed,{_inTree:iT,_outTree:oT}),gO,ex);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
+e('button',{onClick:saveOverridesJSON,style:{background:'var(--amber)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCBE Save'+(Object.keys(dO).length+Object.keys(ex).length>0?' ('+( Object.keys(dO).length+Object.keys(ex).length)+')':'')),
+e('label',{style:{background:'var(--purple)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCC2 Load',e('input',{type:'file',accept:'.json',style:{display:'none'},onChange:function(ev){if(ev.target.files&&ev.target.files[0])loadOverridesJSON(ev.target.files[0]);}})),
+e('button',{onClick:function(){sDOv({});sExp({});persistOverrides({},{});},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--red)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21BA Clear'),
+e('button',{onClick:pr.onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9')))),
+e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'10px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},
+e('input',{type:'text',placeholder:'\uD83D\uDD0D Search...',value:sr,onChange:function(v){sSrch(v.target.value);},style:{width:'180px',padding:'5px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'12px',outline:'none'}}),
+e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:cW,onChange:function(v){sCw(parseInt(v.target.value));},style:{width:'60px',accentColor:'var(--cyan)'}}),
+e('div',{style:{marginLeft:'auto',display:'flex',gap:'6px',fontSize:'9px',fontFamily:'var(--mono)'}},
+e('span',{style:{background:'#dbeafe',padding:'2px 5px',borderRadius:'3px',color:'#1e40af'}},'own'),e('span',{style:{background:'#fef3c7',padding:'2px 5px',borderRadius:'3px',color:'#92400e'}},'grp'),e('span',{style:{background:'#f3e8ff',padding:'2px 5px',borderRadius:'3px',color:'#6b21a8'}},'co'),e('span',{style:{background:'#d1fae5',padding:'2px 5px',borderRadius:'3px',color:'#065f46'}},'ovr'),e('span',{style:{background:'#fef2f2',padding:'2px 5px',borderRadius:'3px',color:'#dc2626'}},'\u2265360d excl'))),
+e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(cW+mc*130+130)+'px'}},
+e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hC),
+e(SecH,{label:'PROJECTED INFLOWS ('+iP.length+' \u2265 50K)',monthly:ed.projInM,mc:mc,color:'var(--cyan)',bg:'var(--sectionInBg)',bc:'var(--sectionInBorder)',open:iO,onToggle:function(){sIOp(!iO);}}),
+iO&&rGN(iT,'in',0,'var(--cyan)','#f0fdfa',ed.projInflows,ed.projInflowStats,sr&&sr.length>0),
+e(SecH,{label:'PROJECTED OUTFLOWS ('+oP.length+' \u2265 50K)',monthly:ed.projOutM,mc:mc,color:'var(--pink)',bg:'var(--sectionOutBg)',bc:'var(--sectionOutBorder)',open:oO,onToggle:function(){sOOp(!oO);}}),
+oO&&rGN(oT,'out',0,'var(--pink)','#fdf2f8',ed.projOutflows,ed.projOutflowStats,sr&&sr.length>0),
+e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),background:'#fdf2f8',borderTop:'2px solid #fbcfe8',borderBottom:'2px solid #fbcfe8'}},
+[e('div',{key:'n',style:{padding:'10px 16px',fontSize:'13px',fontWeight:700,color:'var(--pink)',borderRight:'1px solid var(--border)'}},'INDIRECT EXP (3mo avg)')].concat(ed.projIndExp.map(function(v,i){return e('div',{key:'m'+i,className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:'var(--pink)',borderRight:'1px solid var(--border)'}},fmt(v));})).concat([e('div',{key:'t',className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:'var(--pink)',background:'#fdf2f8'}},fmt(tIE))])),
+e(TotR,{label:'NET PROJECTED CASHFLOW',monthly:ed.projNetM,mc:mc}),
+e('div',{onClick:function(){sESp(!eS);},style:{padding:'10px 16px',background:'#fef2f2',borderTop:'2px solid #fecaca',cursor:'pointer',display:'flex',alignItems:'center',gap:'8px'}},e('span',{style:{fontSize:'10px',transform:eS?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),e('span',{style:{fontSize:'12px',fontWeight:600,color:'#dc2626'}},'EXCLUDED: '+exDC+' Dr ('+fmt(ed.excludedTotals.debtors)+') + '+exCC+' Cr ('+fmt(ed.excludedTotals.creditors)+')'),e('span',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'8px'}},'>360d or no payment history')),
+eS&&e('div',{style:{background:'#fef2f2',padding:'8px 16px',maxHeight:'300px',overflow:'auto'}},
+e('div',{style:{fontSize:'10px',fontWeight:600,color:'#dc2626',marginBottom:'4px'}},'Excluded Debtors:'),
+Object.keys(ed.excluded.debtors).sort(function(a,b){return ed.excluded.debtors[b].outstanding-ed.excluded.debtors[a].outstanding;}).map(function(p){var d=ed.excluded.debtors[p];return e('div',{key:'xd_'+p,style:{fontSize:'10px',color:'var(--text2)',padding:'2px 0',fontFamily:'var(--mono)'}},p+' \u2014 '+fmt(d.outstanding)+' ('+d.reason+')');}),
+e('div',{style:{fontSize:'10px',fontWeight:600,color:'#dc2626',marginTop:'8px',marginBottom:'4px'}},'Excluded Creditors:'),
+Object.keys(ed.excluded.creditors).sort(function(a,b){return ed.excluded.creditors[b].outstanding-ed.excluded.creditors[a].outstanding;}).map(function(p){var d=ed.excluded.creditors[p];return e('div',{key:'xc_'+p,style:{fontSize:'10px',color:'var(--text2)',padding:'2px 0',fontFamily:'var(--mono)'}},p+' \u2014 '+fmt(d.outstanding)+' ('+d.reason+')');})))),
+e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},'Bill-wise FIFO \u00B7 360d cutoff \u00B7 Dr avg '+ed.companyAvgDays.debtor+'d \u00B7 Cr avg '+ed.companyAvgDays.creditor+'d'));}
+
+function App(){var s=useState(null),d=s[0],sD=s[1];var sE=useState(null),aE=sE[0],sAE=sE[1];
+if(aE)return e('div',{style:{padding:'40px',maxWidth:'600px',margin:'0 auto'}},e('h2',{style:{color:'#dc2626'}},'Error'),e('pre',{style:{background:'#fef2f2',padding:'16px',borderRadius:'8px',fontSize:'11px',whiteSpace:'pre-wrap',fontFamily:'var(--mono)'}},aE),e('button',{onClick:function(){sAE(null);sD(null);},style:{marginTop:'12px',padding:'8px 16px',background:'#0891b2',color:'#fff',border:'none',borderRadius:'6px',cursor:'pointer'}},'Reset'));
+try{return d?e(Dash,{data:d,onReset:function(){sD(null);}}):e(Upload,{onData:function(v){try{sD(v);}catch(ex){sAE(ex.message);}}});}catch(ex){return e('div',{style:{padding:'40px'}},e('pre',{style:{color:'#dc2626'}},ex.message));}}
+var EB=function(){};EB.prototype=Object.create(React.Component.prototype);EB.prototype.constructor=EB;EB.prototype.componentDidCatch=function(e,i){this.setState({e:e.message+'\n'+(i&&i.componentStack||'')});};EB.getDerivedStateFromError=function(e){return{e:e.message};};
+EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style:{padding:'40px'}},e('h2',{style:{color:'#dc2626'}},'Error'),e('pre',{style:{background:'#fef2f2',padding:'16px',borderRadius:'8px',fontSize:'11px',whiteSpace:'pre-wrap',fontFamily:'var(--mono)',overflow:'auto'}},this.state.e),e('button',{onClick:function(){location.reload();},style:{marginTop:'12px',padding:'8px 16px',background:'#0891b2',color:'#fff',border:'none',borderRadius:'6px',cursor:'pointer'}},'Reload'));return this.props.children;};
+ReactDOM.render(e(EB,null,e(App)),document.getElementById('root'));
+</script>
+</body>
+</html>
