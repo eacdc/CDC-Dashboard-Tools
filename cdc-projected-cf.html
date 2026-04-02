@@ -49,9 +49,7 @@ function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,
 
 // Step 1: Collect invoices and receipts from vouchers
 var dInv={},dRct={},cInv={},cPay={},ieM=Array(12).fill(0);
-var fyYear=today.getMonth()>=3?today.getFullYear():today.getFullYear()-1;
-var fyStartYMD=String(fyYear)+'0401';
-function mk(ds){if(ds<fyStartYMD)return-1;var m=parseInt(ds.substring(4,6));return(m-4+12)%12;}
+function mk(ds){var m=parseInt(ds.substring(4,6));return(m-4+12)%12;}
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
 if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a});}
@@ -146,8 +144,8 @@ for(var p in dStats){
   for(var bi=0;bi<ds.unpaid.length;bi++){
     var b=ds.unpaid[bi];
     var billAge=daysBtw(parseDate(b.date),today);
-    // If bill is older than 360 days AND party's own avg > 180, likely won't pay
-    if(billAge>360&&(ef.source!=='own'||ef.days>180)){exBillAmt+=b.amt;continue;}
+    // If bill is older than 360 days AND party has no own payment history, likely won't pay
+    if(billAge>360&&ef.source!=='own'){exBillAmt+=b.amt;continue;}
     var pd=addDays(parseDate(b.date),ef.days);
     if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());// overdue or invalid → expect this month
     var mi=pmi(pd);
@@ -181,7 +179,7 @@ for(var p in cStats){
   var pa=[0,0,0],tp=0,ul=[],exBA=0;
   for(var bi=0;bi<cs.unpaid.length;bi++){
     var b=cs.unpaid[bi];var billAge=daysBtw(parseDate(b.date),today);
-    if(billAge>360&&(ef.source!=='own'||ef.days>180)){exBA+=b.amt;continue;}
+    if(billAge>360&&ef.source!=='own'){exBA+=b.amt;continue;}
     var pd=addDays(parseDate(b.date),ef.days);
     if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);
     if(mi>=0){pa[mi]+=b.amt;tp+=b.amt;}ul.push({date:b.date,amt:b.amt,ref:b.ref||''});
@@ -196,7 +194,57 @@ var lM=[];for(var i=11;i>=0;i--){if(ieM[i]>0){lM.push(ieM[i]);if(lM.length>=3)br
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
 
-return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)}};}
+return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)}};};
+
+// ============ PREDICTION VS ACTUAL ============
+function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
+  dOvr=dOvr||{};excl=excl||{};
+  var today=data.asOfDate||new Date();
+  var lmEnd=new Date(today.getFullYear(),today.getMonth(),0);
+  var lmStart=new Date(lmEnd.getFullYear(),lmEnd.getMonth(),1);
+  var lmSYMD=String(lmStart.getFullYear())+String(lmStart.getMonth()+1).padStart(2,'0')+'01';
+  var lmEYMD=String(lmEnd.getFullYear())+String(lmEnd.getMonth()+1).padStart(2,'0')+String(lmEnd.getDate()).padStart(2,'0');
+  var lmLabel=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][lmStart.getMonth()]+"'"+String(lmStart.getFullYear()).slice(-2);
+
+  // Step 1: Re-run buildProjection as of 1st of last month
+  var predData=buildProjection(vouchers,xd,ib,recBills,payBills2||[],lmStart);
+  // Apply overrides via recalc (same as main dashboard)
+  var predRecalc=recalc(predData,dOvr,excl);
+  // Month 0 of that projection = predicted amounts for last month
+  var predicted={};
+  for(var p in predRecalc.projInflowStats){
+    var mo=predRecalc.projInflows[p];
+    if(mo&&mo[0]>5000&&!excl[p])predicted[p]={amt:mo[0],days:predRecalc.projInflowStats[p].days};
+  }
+  // Use the recalc total which correctly excludes manual exclusions
+  var tP=predRecalc.projInM[0]||0;
+
+  // Step 2: Actual receipts during last month
+  var actual={};
+  var LK=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
+  function gCS(pn){var p=xd.ledgers[pn];if(!p)return'';var ch=[p],se={};while(p&&xd.groups[p]&&!se[p]){se[p]=1;p=xd.groups[p];if(p)ch.unshift(p);}return ch.join('>').toLowerCase();}
+  function isL(pn){var cs=gCS(pn);for(var k=0;k<LK.length;k++)if(cs.indexOf(LK[k])>=0)return true;return false;}
+  function isD(pn){return gCS(pn).indexOf('sundry debtors')>=0;}
+  var RCV={'Bank Receipt':1,'Receipt':1};
+  for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi];
+    if(v.date<lmSYMD||v.date>lmEYMD)continue;
+    var vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
+    if(RCV[vt])for(var p in pls){if(pls[p]>0&&isD(p)&&!ib[p])actual[p]=(actual[p]||0)+pls[p];}
+    if(vt==='Journal'){var hLC=false;for(var l in lds)if(lds[l]<0&&isL(l)){hLC=true;break;}
+      var hBr=false;for(var pp in pls)if(ib[pp]){hBr=true;break;}
+      for(var p in pls){if(!isD(p)||ib[p]||pls[p]<=0)continue;if(hLC||hBr)actual[p]=(actual[p]||0)+pls[p];}}
+    if(vt==='Credit Notes'||vt==='Credit Note')for(var p in pls){if(pls[p]>0&&isD(p)&&!ib[p])actual[p]=(actual[p]||0)+pls[p];}
+  }
+
+  // Step 3: Combine
+  var all={};for(var p in predicted)all[p]=1;for(var p in actual)all[p]=1;
+  var rows=[],tA=0;
+  for(var p in all){var pr=(predicted[p]||{}).amt||0,ac=actual[p]||0;
+    if(pr<5000&&ac<5000)continue;
+    rows.push({p:p,pr:pr,ac:ac,v:ac-pr,days:(predicted[p]||{}).days||0});tA+=ac;}
+  rows.sort(function(a,b){return b.ac-a.ac;});
+  return{month:lmLabel,rows:rows,tP:tP,tA:tA,tV:tA-tP};
+}
 
 function recalc(data,dOvr,excl){var today=data.asOfDate||new Date();function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
 function rp(st,p){var od=dOvr.hasOwnProperty(p)?dOvr[p]:st.days;var sr=dOvr.hasOwnProperty(p)?'override':st.source;var ul=st.unpaidList||[];var pa=[0,0,0],tp=0;
@@ -277,7 +325,7 @@ var kV=JSON.parse(r[1]),aV=JSON.parse(r[3]),vs=kV.concat(aV);sSt(vs.length+' vou
 var rb=parseBillsCSV(r[4]),pb=parseBillsCSV(r[5]);if(r[6])pb=pb.concat(parseBillsCSV(r[6]));
 sSt(rb.length+' receivable, '+pb.length+' payable bills.');
 setTimeout(function(){try{var asOf=new Date(asOfDate+'T00:00:00');
-pr.onData(buildProjection(vs,xd,ib,rb,pb,asOf));}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);
+pr.onData({proj:buildProjection(vs,xd,ib,rb,pb,asOf),vs:vs,xd:xd,ib:ib,rb:rb,pb:pb});}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);
 }catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);}).catch(function(ex){sEr(ex.message);sLd(false);});}
 var ok=f.khF&&f.kvF&&f.ahF&&f.avF&&f.kbrF&&f.kbpF&&!ld;
 return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px'}},
@@ -298,11 +346,14 @@ err&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#fef2f2',borde
 ld&&status&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#ecfeff',border:'1px solid #a5f3fc',color:'#0891b2',marginTop:'6px',fontSize:'10px',fontFamily:'var(--mono)'}},status),
 e('button',{onClick:go,disabled:!ok,style:{width:'100%',marginTop:'10px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ok?'pointer':'not-allowed',background:ok?'#0891b2':'#f1f5f9',color:ok?'#fff':'#94a3b8'}},ld?'Analyzing...':'Generate Projected Cashflow')));}
 
-function Dash(pr){var data=pr.data,mc=3;
+function Dash(pr){var data=pr.data.proj||pr.data,rawVs=pr.data.vs,rawXd=pr.data.xd,rawIb=pr.data.ib,rawRb=pr.data.rb,mc=3;
+var pva=null;// PVA computed below after state init
 // Restore overrides from localStorage
 var savedOvr=null;try{var raw=window.localStorage&&localStorage.getItem('cdc_pcf_overrides');if(raw)savedOvr=JSON.parse(raw);}catch(e){}
 var sCW=useState(340),cW=sCW[0],sCw=sCW[1];var sSr=useState(''),sr=sSr[0],sSrch=sSr[1];
 var sIO=useState(true),iO=sIO[0],sIOp=sIO[1];var sOO=useState(true),oO=sOO[0],sOOp=sOO[1];var sES=useState(false),eS=sES[0],sESp=sES[1];
+var sPVA=useState(true),pvO=sPVA[0],sPVAp=sPVA[1];
+var sView=useState('projection'),viewMode=sView[0],setView=sView[1];
 var sDO=useState(savedOvr&&savedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
 var sEx=useState(savedOvr&&savedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
 var sGO=useState(savedOvr&&savedOvr.groupOpen||{}),gO=sGO[0],sGOp=sGO[1];
@@ -325,7 +376,8 @@ GRID_COL1=cW;
 function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null);return x;});}
 function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x);return x;});}
 function tG(k){sGOp(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;return x;});}
-var ed=recalc(data,dO,ex);var mos=ed.projMonths;
+var ed=recalc(data,dO,ex);
+try{if(rawVs&&rawXd)pva=buildPVA(data,rawVs,rawXd,rawIb||{},rawRb||[],pr.data.pb||[],dO,ex);}catch(e){console.error('PVA error:',e);}var mos=ed.projMonths;
 var tI=ed.projInM.reduce(function(a,b){return a+b;},0),tO=ed.projOutM.reduce(function(a,b){return a+b;},0),tIE=ed.projIndExp.reduce(function(a,b){return a+b;},0),tN=ed.projNetM.reduce(function(a,b){return a+b;},0);
 
 function gGC(p,ty){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});var rt=ty==='d'?'Sundry Debtors':'Sundry Creditors';
@@ -364,6 +416,10 @@ e('div',{style:{display:'flex',gap:'14px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tI))),
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tO+tIE))),
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tN>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tN>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tN))),
+e('div',{style:{display:'flex',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}},
+e('button',{onClick:function(){setView('projection');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='projection'?'2px solid var(--cyan)':'1px solid var(--border)',background:viewMode==='projection'?'var(--cyan)':'var(--bg2)',color:viewMode==='projection'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Projection'),
+e('button',{onClick:function(){setView('excluded');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='excluded'?'2px solid #dc2626':'1px solid var(--border)',background:viewMode==='excluded'?'#dc2626':'var(--bg2)',color:viewMode==='excluded'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Excluded ('+Object.keys(ed.excluded.debtors).length+' Dr + '+Object.keys(ed.excluded.creditors).length+' Cr)'),
+pva?e('button',{onClick:function(){setView('pva');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='pva'?'2px solid var(--purple)':'1px solid var(--border)',background:viewMode==='pva'?'var(--purple)':'var(--bg2)',color:viewMode==='pva'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Pred vs Actual ('+pva.month+')'):null),
 e('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},e('button',{onClick:function(){expXLS(Object.assign({},ed,{_inTree:iT,_outTree:oT}),gO,ex);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
 e('button',{onClick:saveOverridesJSON,style:{background:'var(--amber)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCBE Save'+(Object.keys(dO).length+Object.keys(ex).length>0?' ('+( Object.keys(dO).length+Object.keys(ex).length)+')':'')),
 e('label',{style:{background:'var(--purple)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCC2 Load',e('input',{type:'file',accept:'.json',style:{display:'none'},onChange:function(ev){if(ev.target.files&&ev.target.files[0])loadOverridesJSON(ev.target.files[0]);}})),
@@ -375,21 +431,85 @@ e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}}
 e('div',{style:{marginLeft:'auto',display:'flex',gap:'6px',fontSize:'9px',fontFamily:'var(--mono)'}},
 e('span',{style:{background:'#dbeafe',padding:'2px 5px',borderRadius:'3px',color:'#1e40af'}},'own'),e('span',{style:{background:'#fef3c7',padding:'2px 5px',borderRadius:'3px',color:'#92400e'}},'grp'),e('span',{style:{background:'#f3e8ff',padding:'2px 5px',borderRadius:'3px',color:'#6b21a8'}},'co'),e('span',{style:{background:'#d1fae5',padding:'2px 5px',borderRadius:'3px',color:'#065f46'}},'ovr'),e('span',{style:{background:'#fef2f2',padding:'2px 5px',borderRadius:'3px',color:'#dc2626'}},'\u2265360d excl'))),
 e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(cW+mc*130+130)+'px'}},
-e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hC),
+viewMode==='projection'?e('div',null,e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hC),
 e(SecH,{label:'PROJECTED INFLOWS ('+iP.length+' \u2265 50K)',monthly:ed.projInM,mc:mc,color:'var(--cyan)',bg:'var(--sectionInBg)',bc:'var(--sectionInBorder)',open:iO,onToggle:function(){sIOp(!iO);}}),
 iO&&rGN(iT,'in',0,'var(--cyan)','#f0fdfa',ed.projInflows,ed.projInflowStats,sr&&sr.length>0),
 e(SecH,{label:'PROJECTED OUTFLOWS ('+oP.length+' \u2265 50K)',monthly:ed.projOutM,mc:mc,color:'var(--pink)',bg:'var(--sectionOutBg)',bc:'var(--sectionOutBorder)',open:oO,onToggle:function(){sOOp(!oO);}}),
 oO&&rGN(oT,'out',0,'var(--pink)','#fdf2f8',ed.projOutflows,ed.projOutflowStats,sr&&sr.length>0),
 e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),background:'#fdf2f8',borderTop:'2px solid #fbcfe8',borderBottom:'2px solid #fbcfe8'}},
 [e('div',{key:'n',style:{padding:'10px 16px',fontSize:'13px',fontWeight:700,color:'var(--pink)',borderRight:'1px solid var(--border)'}},'INDIRECT EXP (3mo avg)')].concat(ed.projIndExp.map(function(v,i){return e('div',{key:'m'+i,className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:'var(--pink)',borderRight:'1px solid var(--border)'}},fmt(v));})).concat([e('div',{key:'t',className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:'var(--pink)',background:'#fdf2f8'}},fmt(tIE))])),
-e(TotR,{label:'NET PROJECTED CASHFLOW',monthly:ed.projNetM,mc:mc}),
-e('div',{onClick:function(){sESp(!eS);},style:{padding:'10px 16px',background:'#fef2f2',borderTop:'2px solid #fecaca',cursor:'pointer',display:'flex',alignItems:'center',gap:'8px'}},e('span',{style:{fontSize:'10px',transform:eS?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),e('span',{style:{fontSize:'12px',fontWeight:600,color:'#dc2626'}},'EXCLUDED: '+exDC+' Dr ('+fmt(ed.excludedTotals.debtors)+') + '+exCC+' Cr ('+fmt(ed.excludedTotals.creditors)+')'),e('span',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'8px'}},'>360d or no payment history')),
-eS&&e('div',{style:{background:'#fef2f2',padding:'8px 16px',maxHeight:'300px',overflow:'auto'}},
-e('div',{style:{fontSize:'10px',fontWeight:600,color:'#dc2626',marginBottom:'4px'}},'Excluded Debtors:'),
-Object.keys(ed.excluded.debtors).sort(function(a,b){return ed.excluded.debtors[b].outstanding-ed.excluded.debtors[a].outstanding;}).map(function(p){var d=ed.excluded.debtors[p];return e('div',{key:'xd_'+p,style:{fontSize:'10px',color:'var(--text2)',padding:'2px 0',fontFamily:'var(--mono)'}},p+' \u2014 '+fmt(d.outstanding)+' ('+d.reason+')');}),
-e('div',{style:{fontSize:'10px',fontWeight:600,color:'#dc2626',marginTop:'8px',marginBottom:'4px'}},'Excluded Creditors:'),
-Object.keys(ed.excluded.creditors).sort(function(a,b){return ed.excluded.creditors[b].outstanding-ed.excluded.creditors[a].outstanding;}).map(function(p){var d=ed.excluded.creditors[p];return e('div',{key:'xc_'+p,style:{fontSize:'10px',color:'var(--text2)',padding:'2px 0',fontFamily:'var(--mono)'}},p+' \u2014 '+fmt(d.outstanding)+' ('+d.reason+')');})))),
-e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},'Bill-wise FIFO \u00B7 360d cutoff \u00B7 Dr avg '+ed.companyAvgDays.debtor+'d \u00B7 Cr avg '+ed.companyAvgDays.creditor+'d'));}
+e(TotR,{label:'NET PROJECTED CASHFLOW',monthly:ed.projNetM,mc:mc})):null,
+viewMode==='excluded'?(function(){
+  var staleD=[],staleDT=0,notDueD=[],notDueDT=0,otherD=[],otherDT=0;
+  var staleC=[],staleCT=0,notDueC=[],notDueCT=0,otherC=[],otherCT=0;
+  for(var p in ed.excluded.debtors){var d=ed.excluded.debtors[p];
+    if(d.reason==='all_bills_stale'||d.reason==='over_360'||d.reason==='no_history'){staleD.push({p:p,d:d});staleDT+=d.outstanding;}
+    else if(d.reason==='due_after_3mo'){notDueD.push({p:p,d:d});notDueDT+=d.outstanding;}
+    else{otherD.push({p:p,d:d});otherDT+=d.outstanding;}}
+  for(var p in ed.excluded.creditors){var d=ed.excluded.creditors[p];
+    if(d.reason==='all_bills_stale'||d.reason==='over_360'||d.reason==='no_history'){staleC.push({p:p,d:d});staleCT+=d.outstanding;}
+    else if(d.reason==='due_after_3mo'){notDueC.push({p:p,d:d});notDueCT+=d.outstanding;}
+    else{otherC.push({p:p,d:d});otherCT+=d.outstanding;}}
+  staleD.sort(function(a,b){return b.d.outstanding-a.d.outstanding;});
+  notDueD.sort(function(a,b){return b.d.outstanding-a.d.outstanding;});
+  staleC.sort(function(a,b){return b.d.outstanding-a.d.outstanding;});
+  notDueC.sort(function(a,b){return b.d.outstanding-a.d.outstanding;});
+  function rS(title,color,items,total){
+    if(items.length===0)return null;
+    return e('div',{style:{marginBottom:'24px'}},
+      e('div',{style:{fontSize:'13px',fontWeight:700,color:color,marginBottom:'10px',borderBottom:'2px solid '+color,paddingBottom:'6px'}},
+        title+' ('+items.length+' parties, '+fmt(total)+')'),
+      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 80px 120px 100px',gap:'0',fontSize:'10px',fontFamily:'var(--mono)',color:'var(--text3)',borderBottom:'1px solid var(--border)',paddingBottom:'4px',marginBottom:'4px'}},
+        e('div',{style:{fontWeight:600}},'PARTY'),e('div',{style:{textAlign:'right',fontWeight:600}},'AVG DAYS'),e('div',{style:{textAlign:'right',fontWeight:600}},'REASON'),e('div',{style:{textAlign:'right',fontWeight:600}},'OUTSTANDING')),
+      items.map(function(x,xi){return e('div',{key:'ex_'+xi,style:{display:'grid',gridTemplateColumns:'1fr 80px 120px 100px',gap:'0',padding:'4px 0',borderBottom:'1px solid var(--border)',fontSize:'11px',fontFamily:'var(--mono)',background:xi%2===0?'var(--bg1)':'var(--bg2)'}},
+        e('div',{style:{color:'var(--text1)'}},x.p),
+        e('div',{style:{textAlign:'right',color:'var(--text3)'}},x.d.days>=0?x.d.days+'d':'--'),
+        e('div',{style:{textAlign:'right',color:'var(--text3)',fontSize:'9px'}},x.d.reason),
+        e('div',{style:{textAlign:'right',color:color,fontWeight:600}},fmt(x.d.outstanding)));}));}
+  return e('div',{style:{padding:'16px'}},
+    e('div',{style:{fontSize:'11px',color:'var(--text3)',marginBottom:'16px',fontFamily:'var(--mono)'}},'Parties excluded from projection'),
+    e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--cyan)',marginBottom:'12px',borderBottom:'2px solid var(--cyan)',paddingBottom:'6px'}},'DEBTORS (Receivables) - '+fmt(staleDT+otherDT+notDueDT)),
+    rS('STALE / NO HISTORY','#dc2626',staleD.concat(otherD),staleDT+otherDT),
+    rS('NOT DUE (beyond 3 months)','#d97706',notDueD,notDueDT),
+    e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--red)',marginTop:'24px',marginBottom:'12px',borderBottom:'2px solid var(--red)',paddingBottom:'6px'}},'CREDITORS (Payables) - '+fmt(staleCT+otherCT+notDueCT)),
+    rS('STALE / NO HISTORY','#dc2626',staleC.concat(otherC),staleCT+otherCT),
+    rS('NOT DUE (beyond 3 months)','#d97706',notDueC,notDueCT));
+})():null,
+viewMode==='pva'&&pva?e('div',{style:{padding:'0'}},
+e('div',{style:{padding:'16px 24px',background:'var(--bg2)',borderBottom:'2px solid var(--purple)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+e('div',{},
+e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--purple)',fontFamily:'var(--mono)'}},'PREDICTION vs ACTUAL: '+pva.month),
+e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'Predicted from vouchers before '+pva.month+' | Actual receipts during '+pva.month)),
+e('div',{style:{display:'flex',gap:'16px',fontSize:'12px',fontFamily:'var(--mono)',alignItems:'center'}},
+e('span',{style:{color:'var(--text2)'}},'Predicted: '+fmt(pva.tP)),
+e('span',{style:{color:'var(--cyan)',fontWeight:700}},'Actual: '+fmt(pva.tA)),
+e('span',{style:{color:pva.tV>=0?'var(--green)':'var(--red)',fontWeight:700}},(pva.tV>=0?'+':'')+fmt(pva.tV)+' ('+(pva.tP>0?Math.round(pva.tA/pva.tP*100):0)+'%)'),
+e('button',{onClick:function(){var hdr=['Party','Avg Days','Predicted','Actual','Variance'];var rows=pva.rows.map(function(r){return[r.p,r.days,Math.round(r.pr),Math.round(r.ac),Math.round(r.v)];});rows.push(['TOTAL','',Math.round(pva.tP),Math.round(pva.tA),Math.round(pva.tV)]);var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:40},{wch:10},{wch:14},{wch:14},{wch:14}];var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'PredVsActual_'+pva.month);XLSX.writeFile(wb,'CDC_PredVsActual_'+pva.month+'.xlsx');},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'))),
+e('div',{style:{overflowY:'auto'}},
+e('div',{style:{display:'grid',gridTemplateColumns:'1fr 80px 110px 110px 110px',borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
+e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'PARTY'),
+e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AVG DAYS'),
+e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'PREDICTED'),
+e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--mono)',textAlign:'right'}},'ACTUAL'),
+e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'VARIANCE')),
+pva.rows.map(function(r,ri){
+var vc=r.v>=0?'var(--green)':'var(--red)';
+var surprise=r.pr===0&&r.ac>0;
+return e('div',{key:'pva_'+ri,style:{display:'grid',gridTemplateColumns:'1fr 80px 110px 110px 110px',borderBottom:'1px solid var(--border)',background:ri%2===0?'transparent':'var(--bg2)'}},
+e('div',{style:{padding:'6px 24px',fontSize:'11px',color:surprise?'var(--cyan)':'var(--text1)',fontFamily:'var(--mono)',fontWeight:surprise?600:400}},r.p+(surprise?' *':'')),
+e('div',{style:{padding:'6px 10px',fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},r.days>0?r.days+'d':'--'),
+e('div',{style:{padding:'6px 10px',fontSize:'11px',color:r.pr>0?'var(--text1)':'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},r.pr>0?fmt(r.pr):'-'),
+e('div',{style:{padding:'6px 10px',fontSize:'11px',color:r.ac>0?'var(--cyan)':'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:600}},r.ac>0?fmt(r.ac):'-'),
+e('div',{style:{padding:'6px 10px',fontSize:'11px',color:vc,fontFamily:'var(--mono)',textAlign:'right',fontWeight:600}},(r.v>=0?'+':'')+fmt(r.v)));}),
+e('div',{style:{display:'grid',gridTemplateColumns:'1fr 80px 110px 110px 110px',borderTop:'2px solid var(--border)',background:'var(--bg2)',position:'sticky',bottom:0}},
+e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'}},'TOTAL'),
+e('div',{},''),
+e('div',{style:{padding:'8px 10px',fontSize:'12px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)',textAlign:'right'}},fmt(pva.tP)),
+e('div',{style:{padding:'8px 10px',fontSize:'12px',fontWeight:700,color:'var(--cyan)',fontFamily:'var(--mono)',textAlign:'right'}},fmt(pva.tA)),
+e('div',{style:{padding:'8px 10px',fontSize:'12px',fontWeight:700,color:pva.tV>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',textAlign:'right'}},(pva.tV>=0?'+':'')+fmt(pva.tV))),
+e('div',{style:{padding:'8px 24px',fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)'}},'* = not predicted but payment received'))):null,
+
+e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},'Bill-wise FIFO \u00B7 360d cutoff \u00B7 Dr avg '+ed.companyAvgDays.debtor+'d \u00B7 Cr avg '+ed.companyAvgDays.creditor+'d'))))}
 
 function App(){var s=useState(null),d=s[0],sD=s[1];var sE=useState(null),aE=sE[0],sAE=sE[1];
 if(aE)return e('div',{style:{padding:'40px',maxWidth:'600px',margin:'0 auto'}},e('h2',{style:{color:'#dc2626'}},'Error'),e('pre',{style:{background:'#fef2f2',padding:'16px',borderRadius:'8px',fontSize:'11px',whiteSpace:'pre-wrap',fontFamily:'var(--mono)'}},aE),e('button',{onClick:function(){sAE(null);sD(null);},style:{marginTop:'12px',padding:'8px 16px',background:'#0891b2',color:'#fff',border:'none',borderRadius:'6px',cursor:'pointer'}},'Reset'));
