@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.5 (08-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.6 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.5';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.6';var APP_BUILD='08-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -54,7 +54,10 @@ var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
 function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,['sundry debtors']);}function isC(p){return chainHas(p,xd,['sundry creditors']);}function isIE(p){return chainHas(p,xd,['indirect expenses']);}
 // Bank Accounts + Cash-in-hand — used to detect real cash-moving vouchers so that
 // non-cash provisions (depreciation, gratuity, audit accrual etc.) drop out of the IE cash projection.
-function isBC(p){return chainHas(p,xd,['bank accounts'])||chainHas(p,xd,['cash-in-hand']);}
+// Permissive: match 'bank' or 'cash' anywhere in the group chain — covers default Tally
+// group names ('Bank Accounts', 'Cash-in-hand') as well as common variants ('Bank A/c',
+// 'Cash in Hand', 'Bank OCC', etc.).
+function isBC(p){var cs=getChain(p,xd).join('>').toLowerCase();return cs.indexOf('bank')>=0||cs.indexOf('cash')>=0;}
 
 // Step 1: Collect invoices and receipts from vouchers
 // ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
@@ -221,6 +224,8 @@ for(var p in cStats){
 // values, so per-month sums are negative for normal expense months. Negate to get the
 // positive outflow magnitude; clamp at 0 for rare reversal-heavy months.
 __ieDebug.ieByMonth=ieByMonth;__ieDebug.ledgersClassifiedAsIE=Object.keys(xd.ledgers||{}).filter(isIE).slice(0,20);
+__ieDebug.ledgersClassifiedAsBankCash=Object.keys(xd.ledgers||{}).filter(isBC).slice(0,30);
+__ieDebug.totalLedgersClassifiedAsBankCash=Object.keys(xd.ledgers||{}).filter(isBC).length;
 try{window.__ieDebug=__ieDebug;console.log('%c[IE Debug]','color:#0891b2;font-weight:bold','Inspect window.__ieDebug',__ieDebug);}catch(_){}
 var lM=[];
 for(var k=1;k<=3;k++){
