@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Consolidated Dashboard v1.3 (08-Jun-2026)</title>
+<title>CDC Consolidated Dashboard v1.4 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -42,7 +42,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.3';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.4';var APP_BUILD='08-Jun-2026';
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 var PL_CATS={'Sales Accounts':'revenue','Direct Incomes':'revenue','Indirect Incomes':'revenue','Purchase Accounts':'purchase','Direct Expenses':'direct_expense','Indirect Expenses':'indirect_expense'};
@@ -100,13 +100,14 @@ function buildTree(ledgerData,xd,lu,monthCount){monthCount=monthCount||12;
   if(gA['Unclassified']){var un={name:'Unclassified',monthly:Array(monthCount).fill(0),depth:1,type:'group'};var uL=[];for(var ln in gA['Unclassified']){var lm=gA['Unclassified'][ln];lm.forEach(function(v,i){un.monthly[i]+=v;});uL.push({name:ln,monthly:lm,depth:2,type:'ledger'});}un.ledgers=uL;if(un.monthly.some(function(v){return v!==0;}))tree.push(un);}return tree;
 }
 
-function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset){
-  monthCount=monthCount||12;fyOffset=fyOffset||0;
+function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
+  monthCount=monthCount||12;fyOffset=fyOffset||0;branch=branch||'all';
+  // Branch filter: when not 'all', restrict to vouchers tagged with that branch AND skip the
+  // inter-branch elimination (the other branch is now an external party, not a sibling unit).
+  if(branch!=='all'){vouchers=vouchers.filter(function(v){return v._branch===branch;});ibLedgers={};}
   var lu=buildLookups(xd);var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
   var dates=vouchers.map(function(v){return v.date;}).sort();var lastD=dates[dates.length-1];var lastY=parseInt(lastD.substring(0,4)),lastM=parseInt(lastD.substring(4,6));var currentFY=lastM>=4?lastY:lastY-1;
-  // startFY is the FY for bin 0. fyOffset 0 = current FY, -1 = prior FY, etc.
   var startFY=currentFY+fyOffset;
-  // Range filter: keep only vouchers within [startFY-Apr-01, startFY+ceil(monthCount/12)-Apr-01)
   var fyStart=String(startFY)+'0401';var fyEnd=String(startFY+Math.ceil(monthCount/12))+'0401';
   vouchers=vouchers.filter(function(v){return v.date>=fyStart&&v.date<fyEnd;});
   var months=[];for(var __i=0;__i<monthCount;__i++){var __fyOff=Math.floor(__i/12);var __mi=__i%12;var __mo=(3+__mi)%12;var __yr=startFY+__fyOff+(__mo>=3?0:1);months.push(MN[__mi]+"'"+String(__yr).slice(-2));}
@@ -190,7 +191,7 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset){
   var cfInM=sumTree(cfInTree),cfOutM=sumTree(cfOutTree);
   var cfNetM=months.map(function(_,i){return Math.round((cfInM[i]-cfOutM[i])*100)/100;});
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
-  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
+  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
 
 function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
@@ -225,11 +226,14 @@ function Upload(props){
       var ibCount=Object.keys(ibLedgers).length;
       setStatus('Parsing vouchers...');setTimeout(function(){try{
         var kVouchers=JSON.parse(r[1]);var aVouchers=JSON.parse(r[3]);
+        // Tag each voucher with its source branch so we can filter to KOL-only / AHM-only later.
+        for(var __i=0;__i<kVouchers.length;__i++)kVouchers[__i]._branch='kol';
+        for(var __j=0;__j<aVouchers.length;__j++)aVouchers[__j]._branch='ahm';
         var vouchers=kVouchers.concat(aVouchers);
         var stock=r[4]?parseStock(r[4]):null;
         setStatus(vouchers.length+' vouchers (KOL:'+kVouchers.length+' AHM:'+aVouchers.length+'), '+ibCount+' IB ledgers. Building...');
         setTimeout(function(){try{
-          var data=processData(vouchers,xd,stock,ibLedgers,12);
+          var data=processData(vouchers,xd,stock,ibLedgers,12,0,'all');
           data.branchStats={kol:kVouchers.length,ahm:aVouchers.length,ibElim:ibCount};
           // Keep raw inputs so Dash can re-run processData when the FY toggle changes
           // without forcing the user to re-upload.
@@ -277,7 +281,7 @@ function Dash(props){
   return e('div',{style:{minHeight:'100vh',background:'var(--bg)',color:'var(--text)',fontFamily:'var(--sans)'}},
     e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'10px'}},
       e('div',null,
-        e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC Printers \u00B7 CONSOLIDATED \u00B7 FY '+data.fy),
+        e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC Printers \u00B7 '+(data.branch==='kol'?'KOLKATA':(data.branch==='ahm'?'AHMEDABAD':'CONSOLIDATED'))+' \u00B7 FY '+data.fy),
         e('div',{style:{fontSize:'18px',fontWeight:700,color:'var(--text)',marginTop:'2px'}},'Consolidated Dashboard'),
         bs.kol&&e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'KOL: '+bs.kol+' \u00B7 AHM: '+bs.ahm+' vouchers \u00B7 '+bs.ibElim+' IB ledgers eliminated')),
       e('div',{style:{display:'flex',gap:'16px',alignItems:'center',flexWrap:'wrap'}},
@@ -289,7 +293,9 @@ function Dash(props){
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tNet>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tNet>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tNet))),
         e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
 // FY toggle: switches between Current FY (fyOffset=0) and Prior FY (fyOffset=-1), 12 months each.
-e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
+e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
+// Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
+e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},__lbl);})),
 e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegistry);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
     e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'220px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
     e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+mc*105+115)+'px'}},
