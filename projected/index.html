@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.7 (08-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.8 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.7';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.8';var APP_BUILD='08-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -356,9 +356,23 @@ rows.push(['EXCLUDED DEBTORS (>360d/no history)']);for(var p in d.excluded.debto
 rows.push(['EXCLUDED CREDITORS']);for(var p in d.excluded.creditors){var x=d.excluded.creditors[p];rows.push([p,x.days>=0?x.days:'none',x.reason,x.outstanding]);}
 var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:45},{wch:10},{wch:10}];for(var i=0;i<4;i++)ws['!cols'].push({wch:14});var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Proj CF');XLSX.writeFile(wb,'CDC_Projected_CF.xlsx');}
 
-function FB(pr){var ref=useRef();return e('div',{onClick:function(){ref.current&&ref.current.click();},style:{padding:'7px 10px',marginTop:'3px',borderRadius:'6px',border:pr.file?'2px solid var(--cyan)':'1px dashed var(--border2)',background:pr.file?'var(--bg2)':'var(--bg)',cursor:'pointer'}},e('input',{ref:ref,type:'file',accept:pr.accept,style:{display:'none'},onChange:function(v){v.target.files&&v.target.files[0]&&pr.onFile(v.target.files[0]);}}),e('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'12px'}},pr.file?'\u2705':pr.icon),e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:pr.file?'var(--cyan)':'var(--text2)'}},pr.file?pr.file.name:pr.label),e('div',{style:{fontSize:'7px',color:'var(--text3)',marginTop:'1px'}},pr.file?(pr.file.size/1048576).toFixed(1)+' MB':pr.hint))));}
+function FB(pr){var ref=useRef();var cached=pr.file&&pr.file.isCached;var borderColor=pr.file?(cached?'2px solid #d97706':'2px solid var(--cyan)'):'1px dashed var(--border2)';var bg=pr.file?(cached?'#fffbeb':'var(--bg2)'):'var(--bg)';var icon=pr.file?(cached?'\ud83d\udcbe':'\u2705'):pr.icon;var nameColor=cached?'#d97706':(pr.file?'var(--cyan)':'var(--text2)');var sub=pr.file?(cached?'Cached \u00b7 click to replace':(pr.file.size/1048576).toFixed(1)+' MB'):pr.hint;return e('div',{onClick:function(){ref.current&&ref.current.click();},style:{padding:'7px 10px',marginTop:'3px',borderRadius:'6px',border:borderColor,background:bg,cursor:'pointer'}},e('input',{ref:ref,type:'file',accept:pr.accept,style:{display:'none'},onChange:function(v){v.target.files&&v.target.files[0]&&pr.onFile(v.target.files[0]);}}),e('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'12px'}},icon),e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:nameColor}},pr.file?pr.file.name:pr.label),e('div',{style:{fontSize:'7px',color:'var(--text3)',marginTop:'1px'}},sub))));}
 
-function Upload(pr){var f={},st={};var flds=['khF','kvF','ahF','avF','kbrF','kbpF','abpF'];for(var i=0;i<flds.length;i++){var s=useState(null);f[flds[i]]=s[0];st[flds[i]]=s[1];}
+// Bills CSVs change rarely — cache the raw text in localStorage so the user doesn't have
+// to re-upload them every session. Stored as {name, savedAt, content} per slot.
+// A "FileShim" object presents the same .name/.size/.text() API as a real File, so the
+// rest of the code path (Promise.all + .text() in go()) keeps working unchanged.
+var BILLS_SLOTS=['kbrF','kbpF','abpF'];
+function billsKey(slot){return 'cdc_pcf_bills_'+slot;}
+function FileShim(name,content,savedAt){this.name=name;this.size=(content||'').length;this.savedAt=savedAt;this.isCached=true;this._content=content;}
+FileShim.prototype.text=function(){return Promise.resolve(this._content);};
+function loadCachedBills(slot){try{if(!window.localStorage)return null;var raw=localStorage.getItem(billsKey(slot));if(!raw)return null;var o=JSON.parse(raw);if(!o||!o.content)return null;return new FileShim(o.name||slot+'.csv',o.content,o.savedAt);}catch(e){return null;}}
+function saveCachedBills(slot,file){try{if(!window.localStorage)return;file.text().then(function(txt){try{localStorage.setItem(billsKey(slot),JSON.stringify({name:file.name,content:txt,savedAt:new Date().toISOString()}));}catch(e){console.warn('Bills cache write failed (storage full?)',e);}});}catch(e){}}
+function clearCachedBills(){try{if(!window.localStorage)return;for(var i=0;i<BILLS_SLOTS.length;i++)localStorage.removeItem(billsKey(BILLS_SLOTS[i]));}catch(e){}}
+
+function Upload(pr){var f={},st={};var flds=['khF','kvF','ahF','avF','kbrF','kbpF','abpF'];for(var i=0;i<flds.length;i++){var initial=BILLS_SLOTS.indexOf(flds[i])>=0?loadCachedBills(flds[i]):null;var s=useState(initial);f[flds[i]]=s[0];st[flds[i]]=s[1];}
+// Wrap bills setters to also persist to localStorage on upload.
+(function(){function wrap(slot){var orig=st[slot];st[slot]=function(file){if(file&&!file.isCached)saveCachedBills(slot,file);orig(file);};}for(var i=0;i<BILLS_SLOTS.length;i++)wrap(BILLS_SLOTS[i]);})();
 var sE=useState(null),err=sE[0],sEr=sE[1];var sL=useState(false),ld=sL[0],sLd=sL[1];var sS=useState(''),status=sS[0],sSt=sS[1];
 var sAsOf=useState(new Date().toISOString().slice(0,10)),asOfDate=sAsOf[0],setAsOfDate=sAsOf[1];
 function go(){sEr(null);sLd(true);sSt('Reading...');var ps=[f.khF.text(),f.kvF.text(),f.ahF.text(),f.avF.text(),f.kbrF.text(),f.kbpF.text()];if(f.abpF)ps.push(f.abpF.text());
@@ -376,7 +390,7 @@ e('div',{style:{textAlign:'center',marginBottom:'12px'}},e('div',{style:{fontSiz
 e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--cyan)',fontFamily:'var(--mono)'}},'KOLKATA'),e(FB,{label:'Hierarchy JSON',hint:'kol_hierarchy.json',accept:'.json',file:f.khF,onFile:st.khF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'kol_vouchers.json',accept:'.json',file:f.kvF,onFile:st.kvF,icon:'\uD83D\uDCCA'})),
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--purple)',fontFamily:'var(--mono)'}},'AHMEDABAD'),e(FB,{label:'Hierarchy JSON',hint:'ahm_hierarchy.json',accept:'.json',file:f.ahF,onFile:st.ahF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'ahm_vouchers.json',accept:'.json',file:f.avF,onFile:st.avF,icon:'\uD83D\uDCCA'}))),
-e('div',{style:{marginTop:'6px',fontSize:'9px',fontWeight:600,color:'var(--amber)',fontFamily:'var(--mono)'}},'BILL-WISE OUTSTANDING'),
+e('div',{style:{marginTop:'6px',display:'flex',alignItems:'center',justifyContent:'space-between'}},e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--amber)',fontFamily:'var(--mono)'}},'BILL-WISE OUTSTANDING'),e('span',{onClick:function(){clearCachedBills();for(var i=0;i<BILLS_SLOTS.length;i++)st[BILLS_SLOTS[i]](null);},style:{fontSize:'8px',color:'var(--text3)',fontFamily:'var(--mono)',cursor:'pointer',textDecoration:'underline'}},'clear cached')),
 e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
 e('div',null,e(FB,{label:'Kol Bills Receivable',hint:'CSV from Tally',accept:'.csv',file:f.kbrF,onFile:st.kbrF,icon:'\uD83D\uDCC4'}),e(FB,{label:'Kol Bills Payable',hint:'CSV from Tally',accept:'.csv',file:f.kbpF,onFile:st.kbpF,icon:'\uD83D\uDCC4'})),
 e('div',null,e(FB,{label:'Ahm Bills Payable',hint:'Optional',accept:'.csv',file:f.abpF,onFile:st.abpF,icon:'\uD83D\uDCC4'}),e('div',{style:{padding:'7px 10px',marginTop:'3px',borderRadius:'6px',border:'1px dashed var(--border)',background:'var(--bg2)',fontSize:'8px',color:'var(--text3)'}},'No Ahm receivable needed'))),
