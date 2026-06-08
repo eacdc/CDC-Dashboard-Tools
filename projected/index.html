@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.6 (08-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.7 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.6';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.7';var APP_BUILD='08-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -52,12 +52,15 @@ var SALE={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1};var PURCH={'Purc
 var RCV={'Bank Receipt':1,'Receipt':1};var PAY={'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Payment':1};
 var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
 function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,['sundry debtors']);}function isC(p){return chainHas(p,xd,['sundry creditors']);}function isIE(p){return chainHas(p,xd,['indirect expenses']);}
-// Bank Accounts + Cash-in-hand — used to detect real cash-moving vouchers so that
-// non-cash provisions (depreciation, gratuity, audit accrual etc.) drop out of the IE cash projection.
-// Permissive: match 'bank' or 'cash' anywhere in the group chain — covers default Tally
-// group names ('Bank Accounts', 'Cash-in-hand') as well as common variants ('Bank A/c',
-// 'Cash in Hand', 'Bank OCC', etc.).
-function isBC(p){var cs=getChain(p,xd).join('>').toLowerCase();return cs.indexOf('bank')>=0||cs.indexOf('cash')>=0;}
+// Non-cash IE — ledger names that hit P&L as "Indirect Expense" but never move cash:
+// depreciation, provisions (gratuity, bonus, audit accrual), amortization, write-offs,
+// bad debt etc. Exclude these from the cash-flow projection by ledger NAME pattern.
+function isNonCashIE(p){var n=(p||'').toLowerCase();
+  return n.indexOf('depreciation')>=0||n.indexOf('depriciation')>=0
+      ||n.indexOf('provision')>=0
+      ||n.indexOf('amortization')>=0||n.indexOf('amortisation')>=0
+      ||n.indexOf('written off')>=0||n.indexOf('write off')>=0||n.indexOf('write-off')>=0
+      ||n.indexOf('bad debt')>=0;}
 
 // Step 1: Collect invoices and receipts from vouchers
 // ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
@@ -80,22 +83,19 @@ if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cP
 if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
 // Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
 if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
-// Indirect expenses: only count vouchers that ALSO touch Bank Accounts or Cash-in-hand
-// (i.e. real cash outflows). This automatically excludes:
-//   - Purchase vouchers (Dr IE / Cr Creditor — cash flows later via creditor cycle, already counted there)
-//   - Depreciation journals (Dr Depreciation / Cr Accumulated Depreciation — no cash ever)
-//   - Year-end provisions (Dr Gratuity / Cr Provision — accrual, no immediate cash)
-//   - Pure reclassification journals (no cash leg)
-// Sum SIGNED values so Cr reversals net off Dr expenses within the same month.
-// Bin by YYYYMM so multi-FY voucher data doesn't collide on a month-only key.
-var __vIE=false,__vIEAmt=0;for(var __l in lds)if(isIE(__l)){__vIE=true;__vIEAmt+=lds[__l];}
-var __hasBC=false;if(__vIE){for(var __l2 in lds)if(isBC(__l2)){__hasBC=true;break;}}
+// Indirect expenses: only skip Purchase vouchers (those flow through creditor cycle, double count).
+// For each IE ledger leg, also skip if the LEDGER name matches non-cash patterns (depreciation,
+// provision, amortization, write-off, bad debt). Net result: salary, electricity, bank charges,
+// interest, rent etc. all count; depreciation/gratuity/audit provisions drop out at source —
+// so accrual months don't inflate the projection.
+// Sum SIGNED values per YYYYMM bin (multi-FY data doesn't collide on month-only key).
+var __ieLs=[];for(var __l in lds)if(isIE(__l))__ieLs.push(__l);
+var __vIE=__ieLs.length>0,__vIEAmt=0;for(var __k=0;__k<__ieLs.length;__k++)__vIEAmt+=lds[__ieLs[__k]];
 if(__vIE){__ieDebug.totalVouchersWithIE++;__ieDebug.totalAmount+=__vIEAmt;
-  if(!__hasBC||vt==='Purchase'){var __reason=vt==='Purchase'?'Purchase (creditor cycle)':'No bank/cash leg (provision/accrual)';
-    __ieDebug.skippedByVoucherType[__reason]=(__ieDebug.skippedByVoucherType[__reason]||0)+1;
-    if(__ieDebug.sampleSkips.length<5)__ieDebug.sampleSkips.push({date:v.date,vt:vt,amt:__vIEAmt,ledgers:Object.keys(lds).filter(isIE),reason:__reason});}
-  else{__ieDebug.byVoucherType[vt]=(__ieDebug.byVoucherType[vt]||0)+1;if(__ieDebug.sampleHits.length<5)__ieDebug.sampleHits.push({date:v.date,vt:vt,amt:__vIEAmt,ledgers:Object.keys(lds).filter(isIE)});}}
-if(__vIE&&__hasBC&&vt!=='Purchase'){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l))ieByMonth[ymKey]=(ieByMonth[ymKey]||0)+lds[l];}}
+  if(vt==='Purchase'){var __r='Purchase (creditor cycle)';__ieDebug.skippedByVoucherType[__r]=(__ieDebug.skippedByVoucherType[__r]||0)+1;
+    if(__ieDebug.sampleSkips.length<5)__ieDebug.sampleSkips.push({date:v.date,vt:vt,amt:__vIEAmt,ledgers:__ieLs,reason:__r});}
+  else{__ieDebug.byVoucherType[vt]=(__ieDebug.byVoucherType[vt]||0)+1;if(__ieDebug.sampleHits.length<5)__ieDebug.sampleHits.push({date:v.date,vt:vt,amt:__vIEAmt,ledgers:__ieLs});}}
+if(vt!=='Purchase'){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l)&&!isNonCashIE(l))ieByMonth[ymKey]=(ieByMonth[ymKey]||0)+lds[l];}}
 
 // Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
 // Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}
@@ -224,8 +224,8 @@ for(var p in cStats){
 // values, so per-month sums are negative for normal expense months. Negate to get the
 // positive outflow magnitude; clamp at 0 for rare reversal-heavy months.
 __ieDebug.ieByMonth=ieByMonth;__ieDebug.ledgersClassifiedAsIE=Object.keys(xd.ledgers||{}).filter(isIE).slice(0,20);
-__ieDebug.ledgersClassifiedAsBankCash=Object.keys(xd.ledgers||{}).filter(isBC).slice(0,30);
-__ieDebug.totalLedgersClassifiedAsBankCash=Object.keys(xd.ledgers||{}).filter(isBC).length;
+__ieDebug.nonCashIELedgers=Object.keys(xd.ledgers||{}).filter(function(l){return isIE(l)&&isNonCashIE(l);});
+__ieDebug.totalNonCashIELedgers=__ieDebug.nonCashIELedgers.length;
 try{window.__ieDebug=__ieDebug;console.log('%c[IE Debug]','color:#0891b2;font-weight:bold','Inspect window.__ieDebug',__ieDebug);}catch(_){}
 var lM=[];
 for(var k=1;k<=3;k++){
