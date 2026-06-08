@@ -1,5 +1,28 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v1.7 — June 2026 (current)
+
+### Projected Cashflow — IE projection landed at ~2.5 Cr/mo
+
+End state of the IE projection logic after iterating through v1.2 → v1.7:
+
+- **Skip Purchase vouchers** — those bills flow through the creditor outflow cycle, double-count guard (from v1.2).
+- **Year-aware monthly bins** — `ieByMonth['YYYYMM']` so multi-FY data doesn't collide (from v1.1).
+- **Signed sum** — Cr reversals net off Dr expense within the month.
+- **Sign-flip fix** — Tally JSON convention has Dr expense entries as negative; negate before clamping at 0 (from v1.4).
+- **Last 3 complete calendar months** — March/Apr/May 2026 when today = Jun 2026 (from v1.1).
+- **Non-cash ledger blacklist** — exclude IE legs whose ledger name matches `depreciation`, `provision`, `amortization`, `write off`, `bad debt`. Caught the March 2026 10.45 Cr year-end spike (depreciation + gratuity + audit fee provisions).
+- **Diagnostic dump** — `window.__ieDebug` exposes per-month bins, voucher type counts, sample hits, sample skips with reasons, and the full non-cash ledger blacklist for verification.
+
+Result: ~2.5 Cr/month direct-paid IE, matching the historical Apr 2025 – Feb 2026 pattern of 1.5–2.5 Cr/month after excluding the year-end book-closing entries.
+
+### Hosting / deploy hygiene
+
+- **Cloudflare no-store** — `_headers` file added at repo root tells Render's CDN (Cloudflare) not to cache HTML. Fixes the 5-minute stale window after a deploy without needing `?nocache=` query strings.
+- **Version badge on all three dashboards** — `v1.x · Last updated dd-mmm-yyyy` green pill on the upload screen of projected, consolidated, and dashboard. Browser-tab title also stamped with the version. Lets the user confirm the live page matches the latest deploy at a glance.
+
+---
+
 ## v1.2 — June 2026
 
 ### Projected Cashflow — Loosened IE creditor filter
