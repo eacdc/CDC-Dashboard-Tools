@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.3 (08-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.4 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.3';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.4';var APP_BUILD='08-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -210,14 +210,16 @@ for(var p in cStats){
 
 // Indirect expenses — pick the 3 most recent COMPLETE calendar months before today.
 // Skip the current (partial) month so 8-day-into-June data doesn't pull the average down.
-// Use signed net per month; clamp to >=0 (we only project net positive outflows).
+// In this codebase's Tally JSON convention, Dr expense entries are stored as NEGATIVE
+// values, so per-month sums are negative for normal expense months. Negate to get the
+// positive outflow magnitude; clamp at 0 for rare reversal-heavy months.
 __ieDebug.ieByMonth=ieByMonth;__ieDebug.ledgersClassifiedAsIE=Object.keys(xd.ledgers||{}).filter(isIE).slice(0,20);
 try{window.__ieDebug=__ieDebug;console.log('%c[IE Debug]','color:#0891b2;font-weight:bold','Inspect window.__ieDebug',__ieDebug);}catch(_){}
 var lM=[];
 for(var k=1;k<=3;k++){
   var dm=new Date(today.getFullYear(),today.getMonth()-k,1);
   var ymK=String(dm.getFullYear())+String(dm.getMonth()+1).padStart(2,'0');
-  if(ieByMonth.hasOwnProperty(ymK))lM.push(Math.max(0,ieByMonth[ymK]));
+  if(ieByMonth.hasOwnProperty(ymK))lM.push(Math.max(0,-ieByMonth[ymK]));
 }
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
