@@ -2,7 +2,11 @@
 
 ## v1.1 — June 2026
 
-### Projected Cashflow (`cdc-projected-cf.html`)
+### Repo Structure
+
+Removed duplicate root files (`cdc-projected-cf.html`, `cdc-consolidated.html`, `cdc-dashboard-v2.html`). Render serves from `projected/index.html`, `consolidated/index.html`, `dashboard/index.html`, and those are now the single source of truth. Future edits go directly to the subdirectory files — no manual sync step.
+
+### Projected Cashflow (`projected/index.html`)
 
 #### Indirect Expense Projection — Three Combined Fixes
 The IE rolling average had three independent bugs that together inflated the projected outflow well above the actual run rate (e.g. 7.88 Cr projected vs ~3 Cr actual monthly):
