@@ -1,5 +1,17 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v1.2 — June 2026
+
+### Projected Cashflow — Loosened IE creditor filter
+
+v1.1 excluded any IE voucher that had a Sundry Creditor on either side. In practice this turned out to be too aggressive — in CDC's books almost every IE voucher carries a creditor leg (the payee in a Payment voucher is often classified as a Sundry Creditor), so the filter zeroed out the entire IE projection.
+
+The clean double-count only happens for **Purchase vouchers** — those always create a Sundry Creditor bill that will be settled via the creditor outflow cycle. For all other voucher types (Payment, Cash Voucher, Journal, etc.) the creditor leg is the payee being paid right now, not a future bill, so IE should count.
+
+Filter is now simply `vt !== 'Purchase'`. IE projection should reflect actual salary, electricity, bank charges, interest, rent and similar direct cash payments.
+
+---
+
 ## v1.1 — June 2026
 
 ### Repo Structure
