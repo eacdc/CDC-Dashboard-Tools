@@ -66,7 +66,12 @@ if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cP
 if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
 // Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
 if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
-var mi=mk(v.date);if(mi>=0&&mi<12)for(var l in lds)if(isIE(l))ieM[mi]+=Math.abs(lds[l]);}
+// Indirect expenses: skip vouchers where a sundry creditor is on the party side —
+// those bills are already projected via the creditor outflow cycle (avoids double-count).
+// Result: ieM holds only "cash-paid-direct" indirect expenses (salary, electricity,
+// bank charges, interest, rent paid direct, journal accruals without a creditor leg).
+var hasCre=false;for(var pp in pls){if(isC(pp)){hasCre=true;break;}}
+if(!hasCre){var mi=mk(v.date);if(mi>=0&&mi<12)for(var l in lds)if(isIE(l))ieM[mi]+=Math.abs(lds[l]);}}
 
 // Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
 // Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}

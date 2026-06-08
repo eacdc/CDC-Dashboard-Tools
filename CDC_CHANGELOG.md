@@ -1,5 +1,14 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v1.1 — June 2026
+
+### Projected Cashflow (`cdc-projected-cf.html`)
+
+#### Bug Fixes
+- **Indirect expense double-count** — Previously every voucher hitting an Indirect Expenses ledger was added to the rolling 3-month average, including Purchase vouchers where the credit leg was a Sundry Creditor. Those bills are already projected month-by-month through the creditor outflow cycle, so the same rupee was being subtracted twice from net cashflow. Fix: skip indirect-expense accumulation when any Sundry Creditor is on the voucher's party side. `ieM` now reflects only cash-paid-direct expenses (salary, electricity, bank charges, interest, rent paid direct, journal accruals without a creditor leg).
+
+---
+
 ## v1.0 — March 2026
 
 ### Projected Cashflow (`cdc-projected-cf.html`)
