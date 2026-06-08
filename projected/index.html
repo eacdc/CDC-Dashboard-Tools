@@ -1,10 +1,12 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CDC Projected Cashflow v2</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>CDC Projected Cashflow v1.1 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -18,6 +20,9 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
+var APP_VERSION='v1.1';var APP_BUILD='08-Jun-2026';
+// Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
+try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 function parseHierarchy(t){var j=JSON.parse(t);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
 function mergeH(h1,h2){var g={},l={};for(var k in h1.groups)g[k]=h1.groups[k];for(var k in h2.groups)if(!g[k])g[k]=h2.groups[k];for(var k in h1.ledgers)l[k]=h1.ledgers[k];for(var k in h2.ledgers)if(!l[k])l[k]=h2.ledgers[k];for(var k in TPG)if(!g[k])g[k]=TPG[k];return{groups:g,ledgers:l};}
@@ -49,8 +54,8 @@ var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
 function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,['sundry debtors']);}function isC(p){return chainHas(p,xd,['sundry creditors']);}function isIE(p){return chainHas(p,xd,['indirect expenses']);}
 
 // Step 1: Collect invoices and receipts from vouchers
-var dInv={},dRct={},cInv={},cPay={},ieM=Array(12).fill(0);
-function mk(ds){var m=parseInt(ds.substring(4,6));return(m-4+12)%12;}
+// ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
+var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
 if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a});}
@@ -67,7 +72,14 @@ if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cP
 if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
 // Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
 if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
-var mi=mk(v.date);if(mi>=0&&mi<12)for(var l in lds)if(isIE(l))ieM[mi]+=Math.abs(lds[l]);}
+// Indirect expenses: skip vouchers where a sundry creditor is on EITHER side —
+// those bills are already projected via the creditor outflow cycle (avoids double-count).
+// Sum SIGNED values (not Math.abs) so Cr reversal entries net off Dr expense entries.
+// Bin by YYYYMM (full year + month) so multi-FY voucher data doesn't collide on month-only key.
+var hasCre=false;
+for(var pp in pls){if(isC(pp)){hasCre=true;break;}}
+if(!hasCre)for(var ll in lds){if(isC(ll)){hasCre=true;break;}}
+if(!hasCre){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l))ieByMonth[ymKey]=(ieByMonth[ymKey]||0)+lds[l];}}
 
 // Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
 // Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}
@@ -190,8 +202,15 @@ for(var p in cStats){
   } else if(cs.outstanding>0){exC[p]={reason:'due_after_3mo',days:ef.days,outstanding:cs.outstanding};}
 }
 
-// Indirect expenses
-var lM=[];for(var i=11;i>=0;i--){if(ieM[i]>0){lM.push(ieM[i]);if(lM.length>=3)break;}}
+// Indirect expenses — pick the 3 most recent COMPLETE calendar months before today.
+// Skip the current (partial) month so 8-day-into-June data doesn't pull the average down.
+// Use signed net per month; clamp to >=0 (we only project net positive outflows).
+var lM=[];
+for(var k=1;k<=3;k++){
+  var dm=new Date(today.getFullYear(),today.getMonth()-k,1);
+  var ymK=String(dm.getFullYear())+String(dm.getMonth()+1).padStart(2,'0');
+  if(ieByMonth.hasOwnProperty(ymK))lM.push(Math.max(0,ieByMonth[ymK]));
+}
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
 
@@ -331,7 +350,7 @@ pr.onData({proj:buildProjection(vs,xd,ib,rb,pb,asOf),vs:vs,xd:xd,ib:ib,rb:rb,pb:
 var ok=f.khF&&f.kvF&&f.ahF&&f.avF&&f.kbrF&&f.kbpF&&!ld;
 return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px'}},
 e('div',{style:{width:'620px',padding:'24px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
-e('div',{style:{textAlign:'center',marginBottom:'12px'}},e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'var(--mono)',marginBottom:'4px'}},'Cash Intelligence v2'),e('h1',{style:{fontSize:'20px',fontWeight:700,margin:0}},'Projected Cashflow'),e('p',{style:{color:'#64748b',fontSize:'11px',marginTop:'4px'}},'Bill-wise outstanding \u00B7 FIFO avg days \u00B7 360d cutoff \u00B7 3mo forward')),
+e('div',{style:{textAlign:'center',marginBottom:'12px'}},e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'var(--mono)',marginBottom:'4px'}},'Cash Intelligence v2'),e('h1',{style:{fontSize:'20px',fontWeight:700,margin:0}},'Projected Cashflow'),e('p',{style:{color:'#64748b',fontSize:'11px',marginTop:'4px'}},'Bill-wise outstanding \u00B7 FIFO avg days \u00B7 360d cutoff \u00B7 3mo forward'),e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'var(--mono)',color:'#047857',letterSpacing:'1px'}},APP_VERSION+' \u00B7 Last updated '+APP_BUILD)),
 e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--cyan)',fontFamily:'var(--mono)'}},'KOLKATA'),e(FB,{label:'Hierarchy JSON',hint:'kol_hierarchy.json',accept:'.json',file:f.khF,onFile:st.khF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'kol_vouchers.json',accept:'.json',file:f.kvF,onFile:st.kvF,icon:'\uD83D\uDCCA'})),
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--purple)',fontFamily:'var(--mono)'}},'AHMEDABAD'),e(FB,{label:'Hierarchy JSON',hint:'ahm_hierarchy.json',accept:'.json',file:f.ahF,onFile:st.ahF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'ahm_vouchers.json',accept:'.json',file:f.avF,onFile:st.avF,icon:'\uD83D\uDCCA'}))),
@@ -411,7 +430,7 @@ mos.forEach(function(m,i){hC.push(e('div',{key:'m'+i,style:hs},m));});hC.push(e(
 
 return e('div',{style:{minHeight:'100vh',background:'var(--bg)'}},
 e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'8px'}},
-e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC \u00B7 Projected CF \u00B7 Bill-Wise \u00B7 As of '+(ed.asOfDate?ed.asOfDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'Today')),e('div',{style:{fontSize:'18px',fontWeight:700,marginTop:'2px'}},'Cash Intelligence Dashboard'),
+e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC \u00B7 Projected CF \u00B7 Bill-Wise \u00B7 As of '+(ed.asOfDate?ed.asOfDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'Today')+' \u00B7 '+APP_VERSION+' ('+APP_BUILD+')'),e('div',{style:{fontSize:'18px',fontWeight:700,marginTop:'2px'}},'Cash Intelligence Dashboard'),
 e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'Avg: Dr '+ed.companyAvgDays.debtor+'d Cr '+ed.companyAvgDays.creditor+'d \u00B7 '+iP.length+'/'+oP.length+' parties \u00B7 Excluded: '+exDC+'Dr+'+exCC+'Cr ('+fmt(ed.excludedTotals.debtors)+'/'+fmt(ed.excludedTotals.creditors)+')')),
 e('div',{style:{display:'flex',gap:'14px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tI))),
