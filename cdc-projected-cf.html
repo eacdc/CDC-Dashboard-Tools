@@ -48,8 +48,8 @@ var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
 function isL(p){return chainHas(p,xd,LKW);}function isD(p){return chainHas(p,xd,['sundry debtors']);}function isC(p){return chainHas(p,xd,['sundry creditors']);}function isIE(p){return chainHas(p,xd,['indirect expenses']);}
 
 // Step 1: Collect invoices and receipts from vouchers
-var dInv={},dRct={},cInv={},cPay={},ieM=Array(12).fill(0);
-function mk(ds){var m=parseInt(ds.substring(4,6));return(m-4+12)%12;}
+// ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
+var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
 if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a});}
@@ -68,13 +68,12 @@ if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)conti
 if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
 // Indirect expenses: skip vouchers where a sundry creditor is on EITHER side —
 // those bills are already projected via the creditor outflow cycle (avoids double-count).
-// Tally puts Sundry Creditors in party_ledgers for Purchases and sometimes in ledgers for
-// Journals, so we check both. Result: ieM holds only cash-paid-direct expenses
-// (salary, electricity, bank charges, interest, rent paid direct, journal accruals).
+// Sum SIGNED values (not Math.abs) so Cr reversal entries net off Dr expense entries.
+// Bin by YYYYMM (full year + month) so multi-FY voucher data doesn't collide on month-only key.
 var hasCre=false;
 for(var pp in pls){if(isC(pp)){hasCre=true;break;}}
 if(!hasCre)for(var ll in lds){if(isC(ll)){hasCre=true;break;}}
-if(!hasCre){var mi=mk(v.date);if(mi>=0&&mi<12)for(var l in lds)if(isIE(l))ieM[mi]+=Math.abs(lds[l]);}}
+if(!hasCre){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l))ieByMonth[ymKey]=(ieByMonth[ymKey]||0)+lds[l];}}
 
 // Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
 // Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}
@@ -197,8 +196,15 @@ for(var p in cStats){
   } else if(cs.outstanding>0){exC[p]={reason:'due_after_3mo',days:ef.days,outstanding:cs.outstanding};}
 }
 
-// Indirect expenses
-var lM=[];for(var i=11;i>=0;i--){if(ieM[i]>0){lM.push(ieM[i]);if(lM.length>=3)break;}}
+// Indirect expenses — pick the 3 most recent COMPLETE calendar months before today.
+// Skip the current (partial) month so 8-day-into-June data doesn't pull the average down.
+// Use signed net per month; clamp to >=0 (we only project net positive outflows).
+var lM=[];
+for(var k=1;k<=3;k++){
+  var dm=new Date(today.getFullYear(),today.getMonth()-k,1);
+  var ymK=String(dm.getFullYear())+String(dm.getMonth()+1).padStart(2,'0');
+  if(ieByMonth.hasOwnProperty(ymK))lM.push(Math.max(0,ieByMonth[ymK]));
+}
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
 

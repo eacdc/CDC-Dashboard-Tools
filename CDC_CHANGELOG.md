@@ -4,8 +4,16 @@
 
 ### Projected Cashflow (`cdc-projected-cf.html`)
 
-#### Bug Fixes
-- **Indirect expense double-count** — Previously every voucher hitting an Indirect Expenses ledger was added to the rolling 3-month average, including Purchase vouchers where the credit leg was a Sundry Creditor. Those bills are already projected month-by-month through the creditor outflow cycle, so the same rupee was being subtracted twice from net cashflow. Fix: skip indirect-expense accumulation when any Sundry Creditor is on the voucher's party side. `ieM` now reflects only cash-paid-direct expenses (salary, electricity, bank charges, interest, rent paid direct, journal accruals without a creditor leg).
+#### Indirect Expense Projection — Three Combined Fixes
+The IE rolling average had three independent bugs that together inflated the projected outflow well above the actual run rate (e.g. 7.88 Cr projected vs ~3 Cr actual monthly):
+
+1. **Year-blind binning** — `mk()` indexed by month only (`(m-4+12)%12`), so Mar 2025 and Mar 2026 collapsed into the same bucket. With multi-FY data (Apr 2025 – Jun 2026), the loop scanning backward from March would pick FY 25-26 Q4 numbers (bonus/gratuity/year-end spike) and never reach the recent FY 26-27 months. Replaced `ieM[0..11]` with `ieByMonth['YYYYMM']`.
+
+2. **`Math.abs` on every leg** — A Cr reversal entry (-50k) was being added as +50k, treating reversals as additional expense. Switched to signed sum; reversals now correctly net off the original Dr entry within the same month.
+
+3. **Sundry-creditor double-count** — Indirect expense bills booked via Purchase or Journal vouchers with a Sundry Creditor leg (sundry spares, repairs, professional fees etc.) were counted both in the creditor outflow projection and again in IE. Skip IE accumulation when any Sundry Creditor is on either `party_ledgers` or `ledgers`. IE now holds only cash-paid-direct expenses (salary, electricity, interest, bank charges, rent, journal accruals without a creditor leg).
+
+The averaging logic also changed: instead of scanning month bins backward from March, we now pick the 3 calendar months immediately preceding the current (partial) month, so the projection reflects the real recent run rate.
 
 ---
 
