@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Consolidated Dashboard v1.10 (08-Jun-2026)</title>
+<title>CDC Consolidated Dashboard v1.11 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -42,7 +42,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.10';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.11';var APP_BUILD='08-Jun-2026';
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 var PL_CATS={'Sales Accounts':'revenue','Direct Incomes':'revenue','Indirect Incomes':'revenue','Purchase Accounts':'purchase','Direct Expenses':'direct_expense','Indirect Expenses':'indirect_expense'};
@@ -453,6 +453,7 @@ function DrillModal(props){
   var t=props.target;var data=props.data;var raw=data._raw;
   if(!raw)return null;
   var sS=useState(''),srch=sS[0],setSrch=sS[1];
+  var sSort=useState('date_asc'),sortBy=sSort[0],setSortBy=sSort[1];
   var xd=raw.xd||data.xd;var lu=data.lu;if(!lu&&xd)lu=buildLookups(xd);
   var ovr=data.overrides||{};var invOvr=data.invoiceOverrides||{};
   var startFY=data.startFY,monthCount=data.monthCount||12;var branch=data.branch||'all';
@@ -476,25 +477,45 @@ function DrillModal(props){
       contributing.push({date:v.date,type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
     }
   }
-  contributing.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  // Sort
+  var sortFns={
+    date_asc:function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;},
+    date_desc:function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;},
+    amt_asc:function(a,b){return a.amount-b.amount;},
+    amt_desc:function(a,b){return b.amount-a.amount;},
+    abs_desc:function(a,b){return Math.abs(b.amount)-Math.abs(a.amount);},
+    party_asc:function(a,b){return (a.party||'').localeCompare(b.party||'');},
+    type_asc:function(a,b){return (a.type||'').localeCompare(b.type||'');}
+  };
+  contributing.sort(sortFns[sortBy]||sortFns.date_asc);
   if(srch){var sl=srch.toLowerCase();contributing=contributing.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.type||'').toLowerCase().indexOf(sl)>=0;});}
   var sumAmt=contributing.reduce(function(s,r){return s+r.amount;},0);
   function copyAsText(){var lines=['Date\tType\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+r.branch+'\t'+r.amount);});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
+  function thSort(label,col){var asc=col+'_asc',desc=col+'_desc';var nextSort=sortBy===asc?desc:asc;var arrow=sortBy===asc?' ↑':sortBy===desc?' ↓':'';return e('span',{onClick:function(){setSortBy(nextSort);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
+  function thSortAmt(){var nxt;if(sortBy==='amt_desc')nxt='amt_asc';else if(sortBy==='amt_asc')nxt='abs_desc';else nxt='amt_desc';var arrow=sortBy==='amt_asc'?' ↑':sortBy==='amt_desc'?' ↓':sortBy==='abs_desc'?' |↓|':'';return e('span',{onClick:function(){setSortBy(nxt);},style:{cursor:'pointer',userSelect:'none'}},'AMOUNT'+arrow);}
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)props.onClose();},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
     e('div',{style:{background:'#fff',width:'100%',maxWidth:'1100px',maxHeight:'90vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
       e('div',{style:{padding:'16px 22px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'12px'}},
         e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'DRILL DOWN'+(t.monthIdx>=0?' · '+(data.months[t.monthIdx]||''):' · all months')),e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},t.ledger),e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},contributing.length+' vouchers · ',e('span',{className:'num',style:{fontWeight:600,color:sumAmt>=0?'var(--text)':'var(--red)'}},'₹'+fmt(sumAmt)))),
         e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+          e('select',{value:sortBy,onChange:function(ev){setSortBy(ev.target.value);},style:{padding:'5px 8px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'11px',fontFamily:'var(--mono)',background:'var(--bg)',cursor:'pointer'}},
+            e('option',{value:'date_asc'},'Date ↑ (oldest)'),
+            e('option',{value:'date_desc'},'Date ↓ (newest)'),
+            e('option',{value:'abs_desc'},'|Amount| ↓ (biggest)'),
+            e('option',{value:'amt_desc'},'Amount ↓ (highest)'),
+            e('option',{value:'amt_asc'},'Amount ↑ (lowest)'),
+            e('option',{value:'party_asc'},'Party A-Z'),
+            e('option',{value:'type_asc'},'Type A-Z')),
           e('input',{type:'text',value:srch,placeholder:'🔍 party / type',onChange:function(ev){setSrch(ev.target.value);},style:{width:'180px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'12px'}}),
           e('button',{onClick:copyAsText,style:{background:'var(--cyan)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'📋'),
           e('button',{onClick:props.onClose,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕'))),
       e('div',{style:{overflowY:'auto',flex:1}},
         e('div',{style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'DATE'),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'TYPE'),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'PARTY'),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('DATE','date')),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('TYPE','type')),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('PARTY','party')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BRANCH'),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AMOUNT')),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt())),
         contributing.length===0?
           e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No transactions found.')
           :contributing.map(function(r,i){return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
