@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Consolidated Dashboard v1.7 (08-Jun-2026)</title>
+<title>CDC Consolidated Dashboard v1.8 (08-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -42,7 +42,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.7';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.8';var APP_BUILD='08-Jun-2026';
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 var PL_CATS={'Sales Accounts':'revenue','Direct Incomes':'revenue','Indirect Incomes':'revenue','Purchase Accounts':'purchase','Direct Expenses':'direct_expense','Indirect Expenses':'indirect_expense'};
@@ -90,11 +90,24 @@ function classify(name,xd,lu,overrides){if(overrides&&overrides[name])return ove
 // Ledger category overrides (audit tool). Stored as {ledgerName: 'revenue'|'purchase'|'direct_expense'|'indirect_expense'|'excluded'}.
 function loadLedgerOverrides(){try{if(!window.localStorage)return{};var raw=localStorage.getItem('cdc_ledger_overrides');return raw?JSON.parse(raw)||{}:{};}catch(e){return{};}}
 function saveLedgerOverrides(o){try{if(window.localStorage)localStorage.setItem('cdc_ledger_overrides',JSON.stringify(o||{}));}catch(e){}}
-// Party → account overrides (audit tool). Stored as {partyName: 'Sale - Packaging - Mono Carton'}.
-// On Sales / Purchase vouchers, when the dominant party has an override, the sale/purchase ledger
-// leg(s) get re-routed to the override account name.
-function loadPartyAcctOverrides(){try{if(!window.localStorage)return{};var raw=localStorage.getItem('cdc_party_acct_overrides');return raw?JSON.parse(raw)||{}:{};}catch(e){return{};}}
-function savePartyAcctOverrides(o){try{if(window.localStorage)localStorage.setItem('cdc_party_acct_overrides',JSON.stringify(o||{}));}catch(e){}}
+// Invoice (voucher) → account overrides. Each Sales / Purchase voucher gets a stable key, and
+// the user can re-route that single invoice's sale/purchase leg to a different account.
+// Stored as {voucherKey: 'Sale - Packaging - Mono Carton'}.
+function loadInvoiceOverrides(){try{if(!window.localStorage)return{};var raw=localStorage.getItem('cdc_invoice_acct_overrides');return raw?JSON.parse(raw)||{}:{};}catch(e){return{};}}
+function saveInvoiceOverrides(o){try{if(window.localStorage)localStorage.setItem('cdc_invoice_acct_overrides',JSON.stringify(o||{}));}catch(e){}}
+// Build a stable key for a voucher. Tries Tally voucher-number fields first; falls back to a
+// composite of date + sorted ledger lines (stable across re-uploads of the same data).
+function vchKey(v){
+  if(v.voucher_no)return 'V:'+v.voucher_no;
+  if(v.vchno)return 'V:'+v.vchno;
+  if(v.vch_no)return 'V:'+v.vch_no;
+  if(v.voucherNo)return 'V:'+v.voucherNo;
+  if(v.number)return 'V:'+v.number;
+  if(v.refNo)return 'V:'+v.refNo;
+  if(v.ref)return 'V:'+v.ref;
+  var amts=[];for(var ln in (v.ledgers||{}))amts.push(ln+':'+v.ledgers[ln]);amts.sort();
+  return 'C:'+v.date+'|'+v.type+'|'+amts.join('|');
+}
 // monthKey: year-aware bin index. startFY is the FY-start year for bucket 0.
 // e.g. startFY=2025 → Apr-2025 = 0, Mar-2026 = 11, Apr-2026 = 12, Mar-2027 = 23.
 function monthKey(ds,startFY){var y=parseInt(ds.substring(0,4)),m=parseInt(ds.substring(4,6));var fy=m>=4?y:y-1;return(fy-startFY)*12+((m-4+12)%12);}
@@ -110,7 +123,7 @@ function buildTree(ledgerData,xd,lu,monthCount){monthCount=monthCount||12;
 
 function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   monthCount=monthCount||12;fyOffset=fyOffset||0;branch=branch||'all';
-  var ovr=loadLedgerOverrides();var acctOvr=loadPartyAcctOverrides();
+  var ovr=loadLedgerOverrides();var invOvr=loadInvoiceOverrides();
   // Helper: dominant party in a voucher's party_ledgers map (by absolute amount).
   function __domParty(pls){var mx=0,d=null;for(var p in pls){var a=Math.abs(pls[p]);if(a>mx){mx=a;d=p;}}return d;}
   // Branch filter: when not 'all', restrict to vouchers tagged with that branch AND skip the
@@ -123,20 +136,26 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   vouchers=vouchers.filter(function(v){return v.date>=fyStart&&v.date<fyEnd;});
   var months=[];for(var __i=0;__i<monthCount;__i++){var __fyOff=Math.floor(__i/12);var __mi=__i%12;var __mo=(3+__mi)%12;var __yr=startFY+__fyOff+(__mo>=3?0:1);months.push(MN[__mi]+"'"+String(__yr).slice(-2));}
 
-  // P&L: skip inter-branch ledgers. For Sales/Purchase vouchers, if the dominant party has an
-  // account override, re-route the sale/purchase ledger leg(s) to the override account instead.
+  // P&L: skip inter-branch ledgers. For Sales/Purchase vouchers, if the user has set a per-invoice
+  // account override, re-route this voucher's sale/purchase leg(s) to the override account.
   var __SALE_VTS={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1,'Credit Notes':1,'Credit Note':1};
   var __PURCH_VTS={'Purchase':1,'Debit Note':1};
   var availSale={},availPurch={};
+  var invoiceList=[];// per-invoice audit rows (only Sale/Purchase vouchers above min amount get listed in UI later)
   var plData={revenue:{},purchase:{},direct_expense:{},indirect_expense:{},excluded:{}};
   for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi];var mi=monthKey(v.date,startFY);if(mi<0||mi>=monthCount)continue;
-    var __isSP=__SALE_VTS[v.type]||__PURCH_VTS[v.type];
-    var __partyOvrAcct=null;if(__isSP){var __dom=__domParty(v.party_ledgers||{});if(__dom&&acctOvr[__dom])__partyOvrAcct=acctOvr[__dom];}
+    var __isSale=!!__SALE_VTS[v.type],__isPurch=!!__PURCH_VTS[v.type],__isSP=__isSale||__isPurch;
+    var __key=__isSP?vchKey(v):null;
+    var __ovrAcct=__key&&invOvr[__key]?invOvr[__key]:null;
+    // First pass: find the primary sale/purchase account on this voucher (largest abs amount).
+    var __primaryAcct=null,__primaryAbs=0,__invoiceAmt=0;
+    if(__isSP){for(var __ll in v.ledgers){var __c0=classify(__ll,xd,lu,ovr);if(__c0==='revenue'||__c0==='purchase'){var __aa=Math.abs(v.ledgers[__ll]);if(__aa>__primaryAbs){__primaryAbs=__aa;__primaryAcct=__ll;}__invoiceAmt+=v.ledgers[__ll];}}}
     for(var ln in v.ledgers){if(ibLedgers[ln])continue;var amt=v.ledgers[ln];var cat=classify(ln,xd,lu,ovr);
       if(cat==='revenue')availSale[ln]=true;if(cat==='purchase')availPurch[ln]=true;
       var __effLn=ln,__effCat=cat;
-      if(__partyOvrAcct&&(cat==='revenue'||cat==='purchase')){__effLn=__partyOvrAcct;__effCat=classify(__partyOvrAcct,xd,lu,ovr);}
+      if(__ovrAcct&&(cat==='revenue'||cat==='purchase')){__effLn=__ovrAcct;__effCat=classify(__ovrAcct,xd,lu,ovr);}
       if(!plData[__effCat])plData[__effCat]={};if(!plData[__effCat][__effLn])plData[__effCat][__effLn]=Array(monthCount).fill(0);plData[__effCat][__effLn][mi]+=amt;}
+    if(__isSP&&__primaryAcct){var __dp=__domParty(v.party_ledgers||{});invoiceList.push({key:__key,date:v.date,type:v.type,side:__isSale?'sale':'purchase',party:__dp||'(none)',primaryAccount:__primaryAcct,overrideAccount:__ovrAcct,amount:__invoiceAmt,overridden:!!__ovrAcct});}
     // Also check party_ledgers for P&L items (some expenses may be there)
     for(var ln in v.party_ledgers){if(ibLedgers[ln])continue;var cat2=classify(ln,xd,lu,ovr);if(cat2!=='excluded'){if(!plData[cat2])plData[cat2]={};if(!plData[cat2][ln])plData[cat2][ln]=Array(monthCount).fill(0);plData[cat2][ln][mi]+=v.party_ledgers[ln];}}
   }
@@ -211,33 +230,12 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   var npM=months.map(function(_,i){return Math.round((gpM[i]+indExpM[i])*100)/100;});
   var cfInM=sumTree(cfInTree),cfOutM=sumTree(cfOutTree);
   var cfNetM=months.map(function(_,i){return Math.round((cfInM[i]-cfOutM[i])*100)/100;});
-  // Audit list — focused on individual PARTIES (debtors / creditors / one-off counterparties)
-  // tied to Sales & Purchase activity, not the aggregate P&L group accounts like 'Sale - Africa Export'.
-  // We re-scan vouchers in the FY window, tracking each party that appears in Sales / Purchase / Debit Note / Credit Note vouchers,
-  // and the primary sales/purchase account they were routed through.
-  var SALE_VTS={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1,'Credit Notes':1,'Credit Note':1};
-  var PURCH_VTS={'Purchase':1,'Debit Note':1};
-  var partyMap={};// {partyName: {total, side:'sale'|'purchase', acctTotals:{accountLedger:amount, ...}}}
-  for(var __vi=0;__vi<vouchers.length;__vi++){var __v=vouchers[__vi];var __vt=__v.type;
-    if(!SALE_VTS[__vt]&&!PURCH_VTS[__vt])continue;
-    var __side=SALE_VTS[__vt]?'sale':'purchase';
-    // Sum the sales/purchase ledger legs to find the dominant account
-    var __acctAmts={};for(var __l in __v.ledgers){var __c=classify(__l,xd,lu,ovr);if(__c==='revenue'||__c==='purchase')__acctAmts[__l]=(__acctAmts[__l]||0)+__v.ledgers[__l];}
-    for(var __p in __v.party_ledgers){var __amt=__v.party_ledgers[__p];if(!__amt)continue;
-      if(!partyMap[__p])partyMap[__p]={party:__p,total:0,side:__side,acctTotals:{}};
-      partyMap[__p].total+=__amt;
-      for(var __a in __acctAmts){partyMap[__p].acctTotals[__a]=(partyMap[__p].acctTotals[__a]||0)+__acctAmts[__a];}}
-  }
-  var auditList=[];
-  for(var __pk in partyMap){var __pm=partyMap[__pk];
-    // Pick the dominant sales/purchase account (by absolute amount) for this party.
-    var __dom=null,__domAbs=0;for(var __a in __pm.acctTotals){var __ab=Math.abs(__pm.acctTotals[__a]);if(__ab>__domAbs){__domAbs=__ab;__dom=__a;}}
-    auditList.push({ledger:__pm.party,category:__pm.side==='sale'?'revenue':'purchase',side:__pm.side,total:__pm.total,chain:getChain(__pm.party,xd,lu).join(' › '),primaryAccount:__dom,overrideAccount:acctOvr[__pm.party]||null,primaryAccountTotal:__dom?__pm.acctTotals[__dom]:0,overridden:!!ovr[__pm.party],acctOverridden:!!acctOvr[__pm.party]});
-  }
-  auditList.sort(function(a,b){return Math.abs(b.total)-Math.abs(a.total);});
+  // invoiceList was built in-place during the voucher loop above. Sort by descending abs(amount)
+  // so the biggest invoices float to the top of the audit table.
+  invoiceList.sort(function(a,b){return Math.abs(b.amount)-Math.abs(a.amount);});
   var availableAccounts={sale:Object.keys(availSale).sort(),purchase:Object.keys(availPurch).sort()};
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
-  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},audit:auditList,overrides:ovr,partyAcctOverrides:acctOvr,availableAccounts:availableAccounts,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
+  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
 
 function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
@@ -364,56 +362,72 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'));
 }
 
-// Audit view — list PARTIES (debtors/creditors/clients) with movement >= threshold, on Sales or Purchase side.
-// Each row shows the dominant sale/purchase account Tally has booked them under. The PRIMARY ACCOUNT
-// column is an editable dropdown — pick a different account to re-route ALL of that party's amounts
-// to it in P&L. Useful when a client is mis-classified (e.g. Africa Export → Packaging Mono Carton).
+// Audit view — list INVOICES (individual Sales / Purchase vouchers) with abs(amount) >= threshold.
+// Each row's PRIMARY ACCOUNT dropdown re-routes THAT SPECIFIC invoice's sale/purchase leg to a
+// different account. Per-voucher granularity (not per-party), because a single client can have
+// some invoices going to Sale - Africa Export and others to Sale - Packaging - Mono Carton.
 function AuditView(props){
   var data=props.data;
   var sT=useState(5),thr=sT[0],setThr=sT[1];// threshold in lakhs
   var sS=useState(''),srch=sS[0],setSrch=sS[1];
   var sSide=useState('both'),sideF=sSide[0],setSideF=sSide[1];// 'sale' | 'purchase' | 'both'
+  var sAcctF=useState(''),acctF=sAcctF[0],setAcctF=sAcctF[1];// optional account filter
   var thrAbs=thr*100000;
-  var rows=(data.audit||[]).filter(function(r){return Math.abs(r.total)>=thrAbs;});
+  var rows=(data.invoices||[]).filter(function(r){return Math.abs(r.amount)>=thrAbs;});
   if(sideF!=='both')rows=rows.filter(function(r){return r.side===sideF;});
-  if(srch){var sl=srch.toLowerCase();rows=rows.filter(function(r){return r.ledger.toLowerCase().indexOf(sl)>=0||r.chain.toLowerCase().indexOf(sl)>=0||(r.primaryAccount||'').toLowerCase().indexOf(sl)>=0||(r.overrideAccount||'').toLowerCase().indexOf(sl)>=0;});}
-  function setAcctOverride(party,acct){var aOvr=Object.assign({},data.partyAcctOverrides||{});if(!acct)delete aOvr[party];else aOvr[party]=acct;savePartyAcctOverrides(aOvr);props.onOverrideChange();}
-  function clearAll(){var n1=Object.keys(data.overrides||{}).length,n2=Object.keys(data.partyAcctOverrides||{}).length;if(!confirm('Clear all '+(n1+n2)+' overrides?'))return;saveLedgerOverrides({});savePartyAcctOverrides({});props.onOverrideChange();}
-  function copyAsText(){var lines=['Party\tSide\tGroup Chain\tPrimary Account\tOverride Account\tTotal'];rows.forEach(function(r){lines.push(r.ledger+'\t'+r.side+'\t'+r.chain+'\t'+(r.primaryAccount||'')+'\t'+(r.overrideAccount||'')+'\t'+r.total);});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+rows.length+' rows.');});}catch(e){alert('Copy failed.');}}
-  var ovrCount=Object.keys(data.overrides||{}).length+Object.keys(data.partyAcctOverrides||{}).length;
+  if(acctF)rows=rows.filter(function(r){return (r.overrideAccount||r.primaryAccount)===acctF;});
+  if(srch){var sl=srch.toLowerCase();rows=rows.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.primaryAccount||'').toLowerCase().indexOf(sl)>=0||(r.overrideAccount||'').toLowerCase().indexOf(sl)>=0;});}
+  function setInvOvr(key,acct,primaryAcct){var iO=Object.assign({},data.invoiceOverrides||{});if(!acct||acct===primaryAcct)delete iO[key];else iO[key]=acct;saveInvoiceOverrides(iO);props.onOverrideChange();}
+  function clearAll(){var n=Object.keys(data.invoiceOverrides||{}).length;if(!confirm('Clear all '+n+' invoice overrides?'))return;saveInvoiceOverrides({});props.onOverrideChange();}
+  function copyAsText(){var lines=['Date\tType\tParty\tCurrent Account\tOverride Account\tAmount'];rows.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+(r.primaryAccount||'')+'\t'+(r.overrideAccount||'')+'\t'+r.amount);});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+rows.length+' rows.');});}catch(e){alert('Copy failed.');}}
+  function fmtDate(d){if(!d||d.length<8)return d||'';return d.substring(6,8)+'-'+d.substring(4,6)+'-'+d.substring(0,4);}
+  var ovrCount=Object.keys(data.invoiceOverrides||{}).length;
   function sideTab(v,l){return e('span',{key:v,onClick:function(){setSideF(v);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,background:sideF===v?'var(--cyan)':'var(--bg3)',color:sideF===v?'#fff':'var(--text2)',border:'1px solid var(--border2)',borderRadius:'5px'}},l);}
   var availSale=(data.availableAccounts&&data.availableAccounts.sale)||[];
   var availPurch=(data.availableAccounts&&data.availableAccounts.purchase)||[];
+  // Group rows by sub-section: a thin subtotal header per (primary or override) account
+  var byAcct={};rows.forEach(function(r){var k=r.overrideAccount||r.primaryAccount||'(none)';if(!byAcct[k])byAcct[k]={k:k,rows:[],total:0};byAcct[k].rows.push(r);byAcct[k].total+=r.amount;});
+  var acctGroups=Object.keys(byAcct).sort(function(a,b){return Math.abs(byAcct[b].total)-Math.abs(byAcct[a].total);}).map(function(k){return byAcct[k];});
   return e('div',{style:{padding:'0'}},
     e('div',{style:{padding:'10px 24px',background:'var(--bg2)',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}},
       e('div',{style:{display:'flex',gap:'4px'}},sideTab('both','All'),sideTab('sale','Sales'),sideTab('purchase','Purchase')),
-      e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'10px'}},'THRESHOLD (lakhs)'),
-      e('input',{type:'number',value:thr,min:0,step:1,onChange:function(ev){setThr(parseFloat(ev.target.value)||0);},style:{width:'70px',padding:'5px 8px',border:'1px solid var(--border)',borderRadius:'5px',fontFamily:'var(--mono)',fontSize:'12px'}}),
-      e('input',{type:'text',value:srch,placeholder:'🔍 party / account / group...',onChange:function(ev){setSrch(ev.target.value);},style:{width:'260px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontFamily:'var(--sans)',fontSize:'12px'}}),
-      e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'auto'}},rows.length+' parties · '+ovrCount+' overrides'),
+      e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'10px'}},'≥ ₹ (lakhs)'),
+      e('input',{type:'number',value:thr,min:0,step:1,onChange:function(ev){setThr(parseFloat(ev.target.value)||0);},style:{width:'60px',padding:'5px 8px',border:'1px solid var(--border)',borderRadius:'5px',fontFamily:'var(--mono)',fontSize:'12px'}}),
+      e('select',{value:acctF,onChange:function(ev){setAcctF(ev.target.value);},style:{padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontFamily:'var(--mono)',fontSize:'11px',background:'var(--bg)',cursor:'pointer',maxWidth:'240px'}},
+        e('option',{value:''},'— all accounts —'),
+        availSale.concat(availPurch).map(function(a){return e('option',{key:a,value:a},a);})),
+      e('input',{type:'text',value:srch,placeholder:'🔍 party / account...',onChange:function(ev){setSrch(ev.target.value);},style:{width:'220px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontFamily:'var(--sans)',fontSize:'12px'}}),
+      e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',marginLeft:'auto'}},rows.length+' invoices · '+ovrCount+' overrides'),
       ovrCount>0&&e('button',{onClick:clearAll,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--red)',padding:'5px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'✕ Clear'),
       e('button',{onClick:copyAsText,style:{background:'var(--cyan)',border:'none',color:'#fff',padding:'5px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'📋 Copy')),
-    e('div',{style:{display:'grid',gridTemplateColumns:'minmax(190px,1.3fr) 65px minmax(220px,1.7fr) minmax(240px,1.7fr) 120px',background:'var(--bg3)',padding:'8px 0',borderBottom:'2px solid var(--border)',position:'sticky',top:0,zIndex:5}},
-      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'PARTY'),
+    e('div',{style:{display:'grid',gridTemplateColumns:'90px 90px minmax(180px,1.4fr) minmax(220px,1.7fr) 110px',background:'var(--bg3)',padding:'8px 0',borderBottom:'2px solid var(--border)',position:'sticky',top:0,zIndex:5}},
+      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'DATE'),
       e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'SIDE'),
-      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'GROUP CHAIN'),
+      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'PARTY'),
       e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px'}},'PRIMARY ACCOUNT (click to remap)'),
-      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px',textAlign:'right'}},'TOTAL')),
+      e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',letterSpacing:'1px',textAlign:'right'}},'AMOUNT')),
     rows.length===0?
-      e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No parties above ₹'+thr+' lakhs'+(sideF!=='both'?' on '+sideF+' side':'')+(srch?' matching "'+srch+'"':'')+'.')
-      :rows.map(function(r,i){
-        var sideColor=r.side==='sale'?'var(--cyan)':'var(--amber)';
-        var pool=r.side==='sale'?availSale:availPurch;
-        var selVal=r.overrideAccount||r.primaryAccount||'';
-        return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'minmax(190px,1.3fr) 65px minmax(220px,1.7fr) minmax(240px,1.7fr) 120px',borderBottom:'1px solid var(--border)',background:r.acctOverridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
-          e('div',{style:{padding:'8px 14px',fontSize:'12px',fontWeight:500,color:'var(--text)'}},r.ledger,r.acctOverridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(remapped)')),
-          e('div',{style:{padding:'8px 14px',fontSize:'10px',fontWeight:700,color:sideColor,fontFamily:'var(--mono)',textTransform:'uppercase'}},r.side),
-          e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},r.chain),
-          e('div',{style:{padding:'6px 12px'}},
-            e('select',{value:selVal,onChange:function(ev){var v=ev.target.value;setAcctOverride(r.ledger,v===(r.primaryAccount||'')?'':v);},style:{width:'100%',padding:'5px 8px',fontSize:'11px',fontFamily:'var(--mono)',border:'1px solid '+(r.acctOverridden?'#d97706':'var(--border)'),borderRadius:'4px',background:r.acctOverridden?'#fef3c7':'var(--bg)',cursor:'pointer'}},
-              pool.map(function(a){return e('option',{key:a,value:a},a);}),
-              r.primaryAccount&&pool.indexOf(r.primaryAccount)<0&&e('option',{key:'__cur',value:r.primaryAccount},r.primaryAccount+' (current)'))),
-          e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.total>=0?'var(--text)':'var(--red)'}},fmt(r.total)));
+      e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No invoices above ₹'+thr+' lakhs'+(sideF!=='both'?' on '+sideF+' side':'')+(acctF?' in '+acctF:'')+(srch?' matching "'+srch+'"':'')+'.')
+      :acctGroups.map(function(g,gi){
+        return [
+          e('div',{key:'h'+gi,style:{padding:'6px 16px',background:'var(--bg2)',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',position:'sticky',top:0}},
+            e('span',{style:{fontSize:'11px',fontWeight:700,color:'var(--text2)',fontFamily:'var(--mono)'}},g.k+'  ('+g.rows.length+')'),
+            e('span',{className:'num',style:{fontSize:'12px',fontWeight:600,color:g.total>=0?'var(--text)':'var(--red)'}},fmt(g.total))),
+          g.rows.map(function(r,i){
+            var sideColor=r.side==='sale'?'var(--cyan)':'var(--amber)';
+            var pool=r.side==='sale'?availSale:availPurch;
+            var selVal=r.overrideAccount||r.primaryAccount||'';
+            return e('div',{key:'r'+gi+'_'+i,style:{display:'grid',gridTemplateColumns:'90px 90px minmax(180px,1.4fr) minmax(220px,1.7fr) 110px',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':((gi+i)%2===0?'transparent':'var(--bg2)')}},
+              e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(r.date)),
+              e('div',{style:{padding:'8px 14px',fontSize:'10px',fontWeight:700,color:sideColor,fontFamily:'var(--mono)',textTransform:'uppercase'}},r.type),
+              e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(remapped)')),
+              e('div',{style:{padding:'6px 12px'}},
+                e('select',{value:selVal,onChange:function(ev){setInvOvr(r.key,ev.target.value,r.primaryAccount);},style:{width:'100%',padding:'5px 8px',fontSize:'11px',fontFamily:'var(--mono)',border:'1px solid '+(r.overridden?'#d97706':'var(--border)'),borderRadius:'4px',background:r.overridden?'#fef3c7':'var(--bg)',cursor:'pointer'}},
+                  pool.map(function(a){return e('option',{key:a,value:a},a);}),
+                  r.primaryAccount&&pool.indexOf(r.primaryAccount)<0&&e('option',{key:'__cur',value:r.primaryAccount},r.primaryAccount+' (current)'))),
+              e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)));
+          })
+        ];
       }));
 }
 function App(){var s=useState(null),d=s[0],setD=s[1];return d?e(Dash,{data:d,setData:setD,onReset:function(){setD(null);}}):e(Upload,{onData:setD});}
