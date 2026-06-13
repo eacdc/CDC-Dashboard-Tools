@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.10.1 (13-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.10.2 (13-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.10.1';var APP_BUILD='13-Jun-2026';
+var APP_VERSION='v1.10.2';var APP_BUILD='13-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -48,6 +48,9 @@ function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7
 
 function buildProjection(vouchers,xd,ib,recBills,payBills,asOfDate){
 var today=asOfDate||new Date();var todayYMD=toYMD(today);
+// Diagnostic: expose first 3 Sales/Debit-Note vouchers so we can see what fields are available
+// to extract an invoice number from. Open DevTools → window.__vchSample
+try{var __sm=[];for(var __vi=0;__vi<vouchers.length&&__sm.length<3;__vi++){var __v=vouchers[__vi];if(__v.type==='Sales'||__v.type==='Export Sale'||__v.type==='Debit Note')__sm.push(__v);}window.__vchSample=__sm;if(__sm.length>0)console.log('%c[Voucher Sample]','color:#0891b2;font-weight:bold','First Sales/DN voucher KEYS:',Object.keys(__sm[0]),'· FULL OBJECT:',__sm[0]);}catch(e){}
 var SALE={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1};var PURCH={'Purchase':1};
 var RCV={'Bank Receipt':1,'Receipt':1};var PAY={'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Payment':1};
 var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
