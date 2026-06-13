@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.10.2 (13-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.10.3 (13-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.10.2';var APP_BUILD='13-Jun-2026';
+var APP_VERSION='v1.10.3';var APP_BUILD='13-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -72,7 +72,7 @@ var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
-if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||''});}
+if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||''});}
 if(PURCH[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a});}
 if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a});}
 if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a});}
@@ -85,7 +85,7 @@ if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cP
 // Credit Notes: Dr debtor (positive) = cancels invoice → treat as receipt for debtor
 if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
 // Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
-if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p]),ref:v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'DN'});}}}
+if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p]),ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'DN'});}}}
 // Indirect expenses: only skip Purchase vouchers (those flow through creditor cycle, double count).
 // For each IE ledger leg, also skip if the LEDGER name matches non-cash patterns (depreciation,
 // provision, amortization, write-off, bad debt). Net result: salary, electricity, bank charges,
