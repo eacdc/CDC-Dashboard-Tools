@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.10 (08-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.10.1 (13-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.10';var APP_BUILD='08-Jun-2026';
+var APP_VERSION='v1.10.1';var APP_BUILD='13-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -69,7 +69,7 @@ var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
-if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a});}
+if(SALE[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||''});}
 if(PURCH[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a});}
 if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a});}
 if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a});}
@@ -82,7 +82,7 @@ if(vt==='Debit Note')for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cP
 // Credit Notes: Dr debtor (positive) = cancels invoice → treat as receipt for debtor
 if(vt==='Credit Notes'||vt==='Credit Note'){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
 // Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
-if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}}}
+if(vt==='Debit Note'){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p]),ref:v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'DN'});}}}
 // Indirect expenses: only skip Purchase vouchers (those flow through creditor cycle, double count).
 // For each IE ledger leg, also skip if the LEDGER name matches non-cash patterns (depreciation,
 // provision, amortization, write-off, bad debt). Net result: salary, electricity, bank charges,
@@ -104,7 +104,7 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   for(var i=0;i<openBills.length;i++){var b=openBills[i];
     if(b.isAdvance){evs.push({d:b.date,a:b.amount,t:'r',ref:b.refNo||'ADV'});}// Advance = pre-payment
     else{evs.push({d:b.date,a:b.amount,t:'i',ref:b.refNo||'OB'});}}
-  for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];evs.push({d:inv.date,a:inv.amt,t:'i',ref:'INV'});}
+  for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];evs.push({d:inv.date,a:inv.amt,t:'i',ref:inv.ref||'INV'});}
   for(var i=0;i<(yearRcts||[]).length;i++){var r=yearRcts[i];evs.push({d:r.date,a:r.amt,t:'r',ref:'RCT'});}
   evs.sort(function(a,b){return a.d<b.d?-1:a.d>b.d?1:(a.t==='i'?-1:1);});
 
@@ -632,8 +632,15 @@ for(var p in allBills){var pd=allBills[p];if(!pd||!pd.unpaid)continue;
     bySp[sp].tot+=bl.amt;bySp[sp].billCnt++;bySp[sp].buckets[bk]+=bl.amt;}
 }
 var spRows=Object.keys(bySp).map(function(k){var v=bySp[k];var custArr=Object.keys(v.custs).map(function(ck){return v.custs[ck];});v.custArr=custArr;v.custCnt=custArr.length;return v;});
-// Search filter
-if(sr){var srl=sr.toLowerCase();spRows=spRows.filter(function(s){if(s.sp.toLowerCase().indexOf(srl)>=0)return true;return s.custArr.some(function(c){return c.party.toLowerCase().indexOf(srl)>=0;});});}
+// Search filter — narrow customers too, and recompute salesperson totals from filtered list.
+if(sr){var srl=sr.toLowerCase();spRows=spRows.map(function(s){
+  if(s.sp.toLowerCase().indexOf(srl)>=0)return s;// salesperson name matches → keep everything
+  var fc=s.custArr.filter(function(c){return c.party.toLowerCase().indexOf(srl)>=0;});
+  if(fc.length===0)return null;
+  var ns={sp:s.sp,custArr:fc,custCnt:fc.length,billCnt:0,tot:0,buckets:[0,0,0,0,0]};
+  fc.forEach(function(c){ns.tot+=c.tot;ns.billCnt+=c.bills.length;for(var k=0;k<5;k++)ns.buckets[k]+=c.buckets[k];});
+  return ns;
+}).filter(function(s){return s!==null;});}
 // Sort
 var sortFnsRec={tot_desc:function(a,b){return b.tot-a.tot;},tot_asc:function(a,b){return a.tot-b.tot;},sp_asc:function(a,b){return a.sp.localeCompare(b.sp);},sp_desc:function(a,b){return b.sp.localeCompare(a.sp);},cust_desc:function(a,b){return b.custCnt-a.custCnt;},bill_desc:function(a,b){return b.billCnt-a.billCnt;}};
 spRows.sort(sortFnsRec[recSort]||sortFnsRec.tot_desc);
@@ -670,14 +677,14 @@ e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--a
 spRows.length===0?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No receivables above \u20B95,000 found.')
 :spRows.map(function(s,si){
   var rows=[e('div',{key:'sp'+si,onClick:function(){var ne=Object.assign({},recExp);if(ne[s.sp])delete ne[s.sp];else ne[s.sp]=true;setRecExp(ne);},style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},recExp[s.sp]?'\u25BC':'\u25B6'),s.sp),
+    e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},(recExp[s.sp]||sr)?'\u25BC':'\u25B6'),s.sp),
     e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.custCnt),
     e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.billCnt),
     [0,1,2,3,4].map(function(__bi){return e('div',{key:'b'+__bi,style:{padding:'8px 8px',fontSize:'11px',color:s.buckets[__bi]>0?(recAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},s.buckets[__bi]>0?fmt(s.buckets[__bi]):'-');}),
     e('div',{style:{padding:'8px 10px',fontSize:'12px',color:'var(--amber)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:700}},fmt(s.tot)))];
-  if(recExp[s.sp]){var custs=s.custArr.slice().sort(function(a,b){return b.tot-a.tot;});
+  if(recExp[s.sp]||sr){var custs=s.custArr.slice().sort(function(a,b){return b.tot-a.tot;});
     custs.forEach(function(c,ci){rows.push(e('div',{key:'sp'+si+'c'+ci,onClick:function(){setRecModal({party:c.party,grp:c.grp,sp:s.sp,effDays:c.effDays,bills:c.bills});},style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'1px solid var(--border)',cursor:'pointer'}},
-      e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textDecoration:'underline dotted var(--border2)'}},c.party+e('span',{style:{color:'var(--text3)',marginLeft:'8px',fontSize:'9px'}},'\u00B7 '+c.grp+' \u00B7 '+c.effDays+'d')),
+      e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textDecoration:'underline dotted var(--border2)'}},c.party,e('span',{style:{color:'var(--text3)',marginLeft:'8px',fontSize:'9px'}},'\u00B7 '+c.grp+' \u00B7 '+c.effDays+'d')),
       e('div',{style:{padding:'7px 6px',fontSize:'10px',color:'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},'\u2014'),
       e('div',{style:{padding:'7px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},c.bills.length),
       [0,1,2,3,4].map(function(__bi){return e('div',{key:'cb'+__bi,style:{padding:'7px 8px',fontSize:'10px',color:c.buckets[__bi]>0?(recAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},c.buckets[__bi]>0?fmt(c.buckets[__bi]):'-');}),
