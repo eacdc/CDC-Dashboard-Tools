@@ -1,0 +1,5 @@
+node_modules/
+server/.env
+tally_export/
+*.log
+browser_test.png

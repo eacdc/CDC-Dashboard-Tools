@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.10.3 (13-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.11.0 (16-Jul-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.10.3';var APP_BUILD='13-Jun-2026';
+var APP_VERSION='v1.11.0';var APP_BUILD='16-Jul-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -380,24 +380,49 @@ function loadCachedBills(slot){try{if(!window.localStorage)return null;var raw=l
 function saveCachedBills(slot,file){try{if(!window.localStorage)return;file.text().then(function(txt){try{localStorage.setItem(billsKey(slot),JSON.stringify({name:file.name,content:txt,savedAt:new Date().toISOString()}));}catch(e){console.warn('Bills cache write failed (storage full?)',e);}});}catch(e){}}
 function clearCachedBills(){try{if(!window.localStorage)return;for(var i=0;i<BILLS_SLOTS.length;i++)localStorage.removeItem(billsKey(BILLS_SLOTS[i]));}catch(e){}}
 
+// ---- shared build path (file-upload AND MongoDB-fetch) ----
+function hierFromObjP(j){j=j||{};var g=j.groups||{},l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
+function buildProjFromObjs(khObj,kvArr,ahObj,avArr,rb,pb,asOf){var kx=hierFromObjP(khObj),ax=hierFromObjP(ahObj),xd=mergeH(kx,ax),ib=findIB(xd);var vs=(kvArr||[]).concat(avArr||[]);return {proj:buildProjection(vs,xd,ib,rb||[],pb||[],asOf),vs:vs,xd:xd,ib:ib,rb:rb||[],pb:pb||[]};}
+function fyStartISOp(dt){var y=dt.getFullYear(),m=dt.getMonth()+1;var fy=m>=4?y:y-1;return fy+'-04-01';}
+function isoToYmdP(s){return (s||'').replace(/-/g,'');}
+function fetchProjMongo(apiBase,from,to){var base=(apiBase||'').replace(/\/+$/,'');return fetch(base+'/api/dataset?from='+from+'&to='+to+'&branch=all').then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();});}
+
 function Upload(pr){var f={},st={};var flds=['khF','kvF','ahF','avF','kbrF','kbpF','abpF'];for(var i=0;i<flds.length;i++){var initial=BILLS_SLOTS.indexOf(flds[i])>=0?loadCachedBills(flds[i]):null;var s=useState(initial);f[flds[i]]=s[0];st[flds[i]]=s[1];}
 // Wrap bills setters to also persist to localStorage on upload.
 (function(){function wrap(slot){var orig=st[slot];st[slot]=function(file){if(file&&!file.isCached)saveCachedBills(slot,file);orig(file);};}for(var i=0;i<BILLS_SLOTS.length;i++)wrap(BILLS_SLOTS[i]);})();
 var sE=useState(null),err=sE[0],sEr=sE[1];var sL=useState(false),ld=sL[0],sLd=sL[1];var sS=useState(''),status=sS[0],sSt=sS[1];
 var sAsOf=useState(new Date().toISOString().slice(0,10)),asOfDate=sAsOf[0],setAsOfDate=sAsOf[1];
+var sMode=useState('mongo'),mode=sMode[0],setMode=sMode[1];var sApi=useState(''),apiBase=sApi[0],setApiBase=sApi[1];
 function go(){sEr(null);sLd(true);sSt('Reading...');var ps=[f.khF.text(),f.kvF.text(),f.ahF.text(),f.avF.text(),f.kbrF.text(),f.kbpF.text()];if(f.abpF)ps.push(f.abpF.text());
-Promise.all(ps).then(function(r){sSt('Processing...');setTimeout(function(){try{var kx=parseHierarchy(r[0]),ax=parseHierarchy(r[2]),xd=mergeH(kx,ax),ib=findIB(xd);
-var kV=JSON.parse(r[1]),aV=JSON.parse(r[3]),vs=kV.concat(aV);sSt(vs.length+' vouchers. Parsing bills...');
+Promise.all(ps).then(function(r){sSt('Processing...');setTimeout(function(){try{
 var rb=parseBillsCSV(r[4]),pb=parseBillsCSV(r[5]);if(r[6])pb=pb.concat(parseBillsCSV(r[6]));
-sSt(rb.length+' receivable, '+pb.length+' payable bills.');
-setTimeout(function(){try{var asOf=new Date(asOfDate+'T00:00:00');
-pr.onData({proj:buildProjection(vs,xd,ib,rb,pb,asOf),vs:vs,xd:xd,ib:ib,rb:rb,pb:pb});}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);
-}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);}).catch(function(ex){sEr(ex.message);sLd(false);});}
+var asOf=new Date(asOfDate+'T00:00:00');
+var built=buildProjFromObjs(JSON.parse(r[0]),JSON.parse(r[1]),JSON.parse(r[2]),JSON.parse(r[3]),rb,pb,asOf);
+sSt(built.vs.length+' vouchers, '+rb.length+' rec / '+pb.length+' pay bills.');
+pr.onData(built);}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},50);}).catch(function(ex){sEr(ex.message);sLd(false);});}
+// MongoDB mode: hierarchy + vouchers come from the pipeline API (FY-start of the as-of date
+// through the as-of date, so FIFO history is complete). Bills CSVs stay manual/cached.
+function goMongo(){sEr(null);sLd(true);sSt('Fetching from MongoDB...');
+var asOf=new Date(asOfDate+'T00:00:00');var to=isoToYmdP(asOfDate),from=isoToYmdP(fyStartISOp(asOf));
+var bp=[f.kbrF?f.kbrF.text():Promise.resolve(''),f.kbpF?f.kbpF.text():Promise.resolve(''),f.abpF?f.abpF.text():Promise.resolve('')];
+Promise.all(bp).then(function(bt){var rb=bt[0]?parseBillsCSV(bt[0]):[],pb=bt[1]?parseBillsCSV(bt[1]):[];if(bt[2])pb=pb.concat(parseBillsCSV(bt[2]));
+fetchProjMongo(apiBase,from,to).then(function(d){var b=d.branches||{},kol=b.kol||{},ahm=b.ahm||{};var kv=(kol.vouchers||[]).length,av=(ahm.vouchers||[]).length;
+if(kv+av===0){sEr('No vouchers in that range. Load data via the pipeline first.');sLd(false);return;}
+sSt('Building ('+(kv+av)+' vouchers, '+rb.length+' rec / '+pb.length+' pay bills)...');
+setTimeout(function(){try{var built=buildProjFromObjs(kol.hierarchy,kol.vouchers,ahm.hierarchy,ahm.vouchers,rb,pb,asOf);pr.onData(built);}catch(ex){sEr(ex.message+'\n'+ex.stack);sLd(false);}},30);
+}).catch(function(ex){sEr('Fetch failed: '+ex.message);sLd(false);});});}
 var ok=f.khF&&f.kvF&&f.ahF&&f.avF&&f.kbrF&&f.kbpF&&!ld;
+var okMongo=!ld;
+function modeTab(v,l){return e('span',{key:v,onClick:function(){setMode(v);sEr(null);},style:{flex:1,textAlign:'center',padding:'7px 10px',cursor:'pointer',fontSize:'12px',fontFamily:'var(--mono)',fontWeight:600,background:mode===v?'var(--cyan)':'var(--bg3)',color:mode===v?'#fff':'var(--text2)'}},l);}
 return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px'}},
 e('div',{style:{width:'620px',padding:'24px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
 e('div',{style:{textAlign:'center',marginBottom:'12px'}},e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'var(--mono)',marginBottom:'4px'}},'Cash Intelligence v2'),e('h1',{style:{fontSize:'20px',fontWeight:700,margin:0}},'Projected Cashflow'),e('p',{style:{color:'#64748b',fontSize:'11px',marginTop:'4px'}},'Bill-wise outstanding \u00B7 FIFO avg days \u00B7 360d cutoff \u00B7 3mo forward'),e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'var(--mono)',color:'#047857',letterSpacing:'1px'}},APP_VERSION+' \u00B7 Last updated '+APP_BUILD)),
-e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
+e('div',{style:{display:'flex',borderRadius:'8px',overflow:'hidden',border:'1px solid var(--border2)',marginBottom:'10px'}},modeTab('mongo','\uD83D\uDDC4 MongoDB (auto)'),modeTab('upload','\uD83D\uDCC1 Upload files')),
+mode==='mongo'&&e('div',{style:{marginBottom:'8px'}},
+e('div',{style:{fontSize:'10px',color:'var(--text2)',marginBottom:'8px',lineHeight:1.5}},'Hierarchy & vouchers are pulled from the pipeline database (1 Apr of the as-of FY through the AS-OF date below). Bills CSVs stay manual (cached across sessions).'),
+e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'3px'}},'API BASE URL (blank = this server)'),
+e('input',{type:'text',value:apiBase,placeholder:'e.g. https://cdc-api.onrender.com',onChange:function(ev){setApiBase(ev.target.value);},style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'12px',fontFamily:'var(--mono)'}})),
+mode==='upload'&&e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--cyan)',fontFamily:'var(--mono)'}},'KOLKATA'),e(FB,{label:'Hierarchy JSON',hint:'kol_hierarchy.json',accept:'.json',file:f.khF,onFile:st.khF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'kol_vouchers.json',accept:'.json',file:f.kvF,onFile:st.kvF,icon:'\uD83D\uDCCA'})),
 e('div',null,e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--purple)',fontFamily:'var(--mono)'}},'AHMEDABAD'),e(FB,{label:'Hierarchy JSON',hint:'ahm_hierarchy.json',accept:'.json',file:f.ahF,onFile:st.ahF,icon:'\uD83D\uDCCB'}),e(FB,{label:'Vouchers JSON',hint:'ahm_vouchers.json',accept:'.json',file:f.avF,onFile:st.avF,icon:'\uD83D\uDCCA'}))),
 e('div',{style:{marginTop:'6px',display:'flex',alignItems:'center',justifyContent:'space-between'}},e('div',{style:{fontSize:'9px',fontWeight:600,color:'var(--amber)',fontFamily:'var(--mono)'}},'BILL-WISE OUTSTANDING'),e('span',{onClick:function(){clearCachedBills();for(var i=0;i<BILLS_SLOTS.length;i++)st[BILLS_SLOTS[i]](null);},style:{fontSize:'8px',color:'var(--text3)',fontFamily:'var(--mono)',cursor:'pointer',textDecoration:'underline'}},'clear cached')),
@@ -410,7 +435,9 @@ e('input',{type:'date',value:asOfDate,onChange:function(v){setAsOfDate(v.target.
 e('span',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Vouchers up to this date \u00B7 Projection starts from here')),
 err&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',marginTop:'6px',fontSize:'10px',fontFamily:'var(--mono)',whiteSpace:'pre-wrap',maxHeight:'120px',overflow:'auto'}},err),
 ld&&status&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#ecfeff',border:'1px solid #a5f3fc',color:'#0891b2',marginTop:'6px',fontSize:'10px',fontFamily:'var(--mono)'}},status),
-e('button',{onClick:go,disabled:!ok,style:{width:'100%',marginTop:'10px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ok?'pointer':'not-allowed',background:ok?'#0891b2':'#f1f5f9',color:ok?'#fff':'#94a3b8'}},ld?'Analyzing...':'Generate Projected Cashflow')));}
+mode==='mongo'
+?e('button',{onClick:goMongo,disabled:!okMongo,style:{width:'100%',marginTop:'10px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:okMongo?'pointer':'not-allowed',background:okMongo?'#0891b2':'#f1f5f9',color:okMongo?'#fff':'#94a3b8'}},ld?'Fetching...':'Fetch from MongoDB + Analyze')
+:e('button',{onClick:go,disabled:!ok,style:{width:'100%',marginTop:'10px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ok?'pointer':'not-allowed',background:ok?'#0891b2':'#f1f5f9',color:ok?'#fff':'#94a3b8'}},ld?'Analyzing...':'Generate Projected Cashflow')));}
 
 function Dash(pr){var data=pr.data.proj||pr.data,rawVs=pr.data.vs,rawXd=pr.data.xd,rawIb=pr.data.ib,rawRb=pr.data.rb,mc=3;
 var pva=null;// PVA computed below after state init
