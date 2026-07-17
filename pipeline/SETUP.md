@@ -76,11 +76,9 @@ Open the dashboard (`/consolidated/` or `/projected/`), keep the default
 
 ## Notes for this testing copy
 
-- **Branches:** `run_daily.ps1` currently loads **Kolkata only** (company
-  `CDC PRINTERS 2025-26`). Pointing both `kol` and `ahm` at the *same* company
-  would load identical data twice and make the consolidated view double-count, so
-  Ahmedabad is left commented out until you give me its exact Tally company name —
-  then uncomment the `ahm` line in `run_daily.ps1`.
+- **Branches:** `run_daily.ps1` loads both:
+  - `kol` -> company `CDC PRINTERS 2025-26`
+  - `ahm` -> company `CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26`
 - **Company name must match Tally exactly** (including any year suffix) or the
   gateway returns empty with no error (see `Tally_Extraction_Documentation.md` §5.3).
 - **Idempotent:** re-running any date is safe — vouchers upsert on GUID.

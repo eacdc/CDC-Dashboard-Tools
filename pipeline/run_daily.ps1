@@ -35,10 +35,10 @@ New-Item -ItemType Directory -Force -Path $outDir,$logDir | Out-Null
 $log = Join-Path $logDir ("run_" + (Get-Date).ToString('yyyyMMdd_HHmmss') + ".log")
 function Say($m){ $line = "[{0}] {1}" -f (Get-Date).ToString('HH:mm:ss'), $m; Write-Host $line; Add-Content -Path $log -Value $line }
 
-# Branch -> Tally company name. Add Ahmedabad once its exact company name is known.
+# Branch -> Tally company name (must match Tally EXACTLY, including punctuation/spacing).
 $branches = @(
     @{ Branch = 'kol'; Company = 'CDC PRINTERS 2025-26' }
-    # @{ Branch = 'ahm'; Company = 'CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26' }   # <-- fill in exact name
+    @{ Branch = 'ahm'; Company = 'CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26' }
 )
 
 $to   = (Get-Date)
