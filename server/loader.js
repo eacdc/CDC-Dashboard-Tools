@@ -34,6 +34,22 @@ async function main() {
   const payload = { branch, from: dates[0] || null, to: dates[dates.length - 1] || null, master, vouchers };
   console.log(`Loaded ${vouchers.length} vouchers, ${Object.keys(master.ledgers || {}).length} ledgers for "${branch}" (${payload.from}..${payload.to})`);
 
+  // Double-entry health check: every voucher's ledgers+party_ledgers should sum to ~0.
+  // A large imbalance means postings were dropped in extraction (e.g. sales/purchase
+  // lines nested under inventory accounting allocations).
+  const sum = (o) => Object.values(o || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+  let off = 0, maxImb = 0;
+  for (const v of vouchers) {
+    const bal = sum(v.ledgers) + sum(v.party_ledgers);
+    if (Math.abs(bal) > 1) { off++; maxImb = Math.max(maxImb, Math.abs(bal)); }
+  }
+  const pct = vouchers.length ? ((off / vouchers.length) * 100).toFixed(1) : '0';
+  if (off > 0) {
+    console.log(`WARNING: ${off}/${vouchers.length} vouchers (${pct}%) do not balance (max off by ${maxImb.toFixed(2)}). Extraction may be dropping postings.`);
+  } else {
+    console.log(`balance check: all ${vouchers.length} vouchers balance to ~0 (double-entry intact).`);
+  }
+
   if (url) {
     // Push through the HTTP API.
     const res = await fetch(`${url.replace(/\/$/, '')}/ingest`, {

@@ -60,6 +60,27 @@ function Post-Tally([string]$body) {
                     -replace "&(?!(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)","&amp;"
     return $s
 }
+# Recursively gather every (ledger, amount) posting in a voucher. This must catch
+# BOTH top-level *LEDGERENTRIES.LIST AND *ACCOUNTINGALLOCATIONS.LIST: for a
+# sales/purchase voucher WITH stock items, the revenue/purchase ledger lives
+# nested under ALLINVENTORYENTRIES.LIST > ACCOUNTINGALLOCATIONS.LIST, not at the
+# top level. Reading only top-level entries silently drops the sales/purchase
+# amount (keeping just tax + party) and understates revenue/COGS.
+function Collect-Postings($node, $list) {
+    foreach ($c in $node.ChildNodes) {
+        if ($c.NodeType -ne [System.Xml.XmlNodeType]::Element) { continue }
+        $nm = $c.Name
+        if (($nm -like "*LEDGERENTRIES.LIST") -or ($nm -like "*ACCOUNTINGALLOCATIONS.LIST")) {
+            $ln = xval $c.LEDGERNAME
+            if ($ln) {
+                $amt = ToAmount (xval $c.AMOUNT)   # raw Tally sign: -ve = Dr, +ve = Cr
+                [void]$list.Add([PSCustomObject]@{ Ledger = $ln; Amount = $amt })
+                continue   # leaf posting - don't descend into its bill/cost allocations
+            }
+        }
+        if ($c.HasChildNodes) { Collect-Postings $c $list }
+    }
+}
 
 # ======================================================================
 # STEP 1 - MASTERS (ledgers + groups)
@@ -216,29 +237,27 @@ for ($d = $start; $d -le $end; $d = $d.AddDays(1)) {
         if (-not $guid) { $guid = xval $v.VOUCHERKEY }
         if (-not $guid) { $guid = xval $v.ALTERID }
 
-        # accumulate ledger lines into the two buckets, summing repeats of the same ledger
+        # Collect ALL postings (top-level ledger entries + inventory accounting
+        # allocations), then split into the two buckets, summing repeats.
+        $postings = New-Object System.Collections.ArrayList
+        Collect-Postings $v $postings
         $ledObj   = [ordered]@{}
         $partyObj = [ordered]@{}
-        foreach ($le in $v.ChildNodes) {
-            if ($le.Name -like "*LEDGERENTRIES.LIST") {
-                $ln = xval $le.LEDGERNAME; if (-not $ln) { continue }
-                $amt = ToAmount (xval $le.AMOUNT)     # raw Tally sign: -ve = Dr, +ve = Cr
-                if ($isPartyLedger[$ln]) {
-                    if ($partyObj.Contains($ln)) { $partyObj[$ln] = [math]::Round($partyObj[$ln] + $amt, 2) }
-                    else { $partyObj[$ln] = $amt }
-                } else {
-                    if ($ledObj.Contains($ln)) { $ledObj[$ln] = [math]::Round($ledObj[$ln] + $amt, 2) }
-                    else { $ledObj[$ln] = $amt }
-                }
-
-                if ($EmitCsv) {
-                    $isPos = ((xval $le.ISDEEMEDPOSITIVE) -eq "Yes")
-                    [void]$csvLines.Add([PSCustomObject][ordered]@{
-                        'Date'=$date;'Voucher Type'=$vtype;'Voucher No'=$vnum;'Ledger'=$ln;
-                        'Group'=$ledgerToGroup[$ln];'Amount (signed)'=$amt;
-                        'Dr/Cr'= if ($isPos){"Dr"}else{"Cr"}
-                    })
-                }
+        foreach ($p in $postings) {
+            $ln = $p.Ledger; $amt = $p.Amount
+            if ($isPartyLedger[$ln]) {
+                if ($partyObj.Contains($ln)) { $partyObj[$ln] = [math]::Round($partyObj[$ln] + $amt, 2) }
+                else { $partyObj[$ln] = $amt }
+            } else {
+                if ($ledObj.Contains($ln)) { $ledObj[$ln] = [math]::Round($ledObj[$ln] + $amt, 2) }
+                else { $ledObj[$ln] = $amt }
+            }
+            if ($EmitCsv) {
+                [void]$csvLines.Add([PSCustomObject][ordered]@{
+                    'Date'=$date;'Voucher Type'=$vtype;'Voucher No'=$vnum;'Ledger'=$ln;
+                    'Group'=$ledgerToGroup[$ln];'Amount (signed)'=$amt;
+                    'Dr/Cr'= if ($amt -lt 0){"Dr"}else{"Cr"}
+                })
             }
         }
 
