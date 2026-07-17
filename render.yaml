@@ -1,0 +1,19 @@
+# Render Blueprint for the CDC pipeline API (serves the dashboards too).
+# The existing static dashboards can stay as-is; this adds ONE web service that
+# exposes /ingest + /api/dataset and also serves /consolidated, /projected, /dashboard.
+services:
+  - type: web
+    name: cdc-dashboard-api
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: MONGODB_URI
+        sync: false          # set in the Render dashboard (secret)
+      - key: MONGODB_DB
+        value: cdc
+      - key: INGEST_TOKEN
+        sync: false          # set in the Render dashboard (secret)

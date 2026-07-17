@@ -1,0 +1,7 @@
+node_modules/
+server/.env
+tally_export/
+pipeline/tally_export/
+pipeline/logs/
+*.log
+browser_test.png

@@ -1,6 +1,43 @@
 # CDC Dashboard Tools — CHANGELOG
 
-## v1.7 — June 2026 (current)
+## v2.0 (pipeline) — July 2026 — Tally → MongoDB automation (testing copy)
+
+Branch `claude/cdc-dashboard-automation-it2ecc`. Adds an automated data pipeline so
+the Consolidated and Projected dashboards no longer need manual 4-file uploads.
+Existing upload flow is untouched and stays as a fallback.
+
+### Pipeline (`pipeline/TallyToJson.ps1`)
+- JSON sibling of `TallyCSV.ps1`: same Tally HTTP-XML gateway calls, but emits the
+  **two dashboard-native JSON files** (`<branch>_Master.json` hierarchy,
+  `<branch>_Transactions.json` vouchers) instead of 7 CSVs.
+- Ledger/party split derived from the group hierarchy — a line is `party_ledgers`
+  if its ancestry hits Sundry Debtor/Creditor, Bank, Cash, Bank OD or Branch;
+  else `ledgers`. Verified to reproduce the reference `amd` export at **99.977%**
+  (the 5 diffs are ambiguous bank-as-party edge lines that change no total).
+- Raw Tally signs and `yyyyMMdd` dates preserved. Captures voucher GUID for
+  idempotent loads. Optional `-IngestUrl` POST; otherwise writes files for the
+  offline loader (Tally RDP box may have no internet).
+
+### API (`server/`, Node + Express + MongoDB)
+- `POST /ingest` (idempotent upsert on branch+guid), `GET /api/dataset?from&to&branch`,
+  `GET /api/meta`, `/health`. Serves the static dashboards too — one Render service.
+- `server/loader.js` pushes the .ps1's JSON files to Atlas from any machine (offline case).
+- Content-hash fallback key prevents two distinct same-`(date,type,no)` vouchers
+  (a real quirk found in the sample: two Purchase #1954) from colliding.
+
+### Dashboards
+- Consolidated (**v1.13.0**) and Projected (**v1.11.0**) gain a **"MongoDB (auto)"**
+  source toggle with a **date-range picker (default: 1 Apr current FY → today)**.
+  Both feed the *same* `processData` / `buildProjection` — no logic forked.
+- Verified end-to-end in a real browser against the `amd` sample: consolidated P&L
+  (₹51.06 Cr rev) + cashflow, and projected cashflow both render from the API.
+
+### Deploy
+- `render.yaml` blueprint. Secrets (`MONGODB_URI`, `INGEST_TOKEN`) via env, never committed.
+
+---
+
+## v1.7 — June 2026
 
 ### Projected Cashflow — IE projection landed at ~2.5 Cr/mo
 

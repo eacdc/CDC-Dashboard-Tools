@@ -1,0 +1,80 @@
+// Shared ingest logic: upsert a master snapshot + bulk-upsert vouchers for one branch.
+// Used by both the HTTP /ingest route (server.js) and the file loader (loader.js),
+// so the write path is identical however the data arrives.
+const crypto = require('crypto');
+const { getDb } = require('./db');
+
+const VALID_BRANCHES = new Set(['kol', 'ahm']);
+
+// Stable hash of a voucher's monetary lines. Used only when no Tally GUID is
+// present, to keep the fallback key from collapsing two distinct vouchers that
+// happen to share (date, type, no) - which real Tally data does (e.g. two
+// different Purchase #1954 on the same day). Same content -> same key -> still
+// idempotent across re-runs.
+function contentHash(v) {
+  const norm = (o) => Object.keys(o || {}).sort().map((k) => `${k}=${o[k]}`).join(',');
+  return crypto.createHash('sha1').update(`${norm(v.ledgers)}|${norm(v.party_ledgers)}`).digest('hex').slice(0, 10);
+}
+
+// Keep only the dashboard-relevant voucher fields (+ guid for keying). Guards against
+// arbitrary extra keys sneaking into the store.
+function cleanVoucher(v) {
+  return {
+    date: String(v.date || ''),
+    party: v.party || '',
+    no: v.no != null ? String(v.no) : '',
+    type: v.type || '',
+    ledgers: v.ledgers && typeof v.ledgers === 'object' ? v.ledgers : {},
+    party_ledgers: v.party_ledgers && typeof v.party_ledgers === 'object' ? v.party_ledgers : {},
+  };
+}
+
+function voucherKey(branch, v) {
+  if (v.guid) return `${branch}:${v.guid}`;
+  return `${branch}:${v.date}:${v.type}:${v.no}:${contentHash(v)}`;
+}
+
+// payload = { branch, from, to, master:{ledgers,groups}, vouchers:[...] }
+async function ingest(payload) {
+  const branch = String(payload.branch || '').toLowerCase();
+  if (!VALID_BRANCHES.has(branch)) {
+    throw Object.assign(new Error(`invalid branch "${payload.branch}" (expected kol|ahm)`), { status: 400 });
+  }
+  const db = await getDb();
+  const result = { branch, masterUpserted: false, vouchers: 0, dateRange: [payload.from || null, payload.to || null] };
+
+  // 1) Master snapshot (latest wins per branch).
+  if (payload.master && payload.master.ledgers && payload.master.groups) {
+    await db.collection('masters').updateOne(
+      { branch },
+      { $set: { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    result.masterUpserted = true;
+  }
+
+  // 2) Vouchers (idempotent upsert on branch+guid, so re-running a day is safe).
+  const vouchers = Array.isArray(payload.vouchers) ? payload.vouchers : [];
+  if (vouchers.length) {
+    const ops = vouchers.map((raw) => {
+      const v = cleanVoucher(raw);
+      const _id = voucherKey(branch, raw);
+      return {
+        updateOne: {
+          filter: { _id },
+          update: { $set: { _id, branch, guid: raw.guid || _id, ...v, updatedAt: new Date() } },
+          upsert: true,
+        },
+      };
+    });
+    // Chunk to keep bulk payloads reasonable.
+    const CHUNK = 1000;
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const r = await db.collection('vouchers').bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });
+      result.vouchers += (r.upsertedCount || 0) + (r.modifiedCount || 0) + (r.matchedCount || 0);
+    }
+  }
+  return result;
+}
+
+module.exports = { ingest, VALID_BRANCHES, cleanVoucher, voucherKey };
