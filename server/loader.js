@@ -45,7 +45,12 @@ async function main() {
   } else {
     // Write directly to Mongo.
     const { ingest } = require('./ingest');
-    const { close } = require('./db');
+    const { getDb, close } = require('./db');
+    if (process.argv.includes('--reset')) {
+      const db = await getDb();
+      const r = await db.collection('vouchers').deleteMany({ branch });
+      console.log(`--reset: cleared ${r.deletedCount} existing "${branch}" vouchers`);
+    }
     const result = await ingest(payload);
     console.log('Ingested:', JSON.stringify(result));
     await close();

@@ -206,8 +206,15 @@ for ($d = $start; $d -le $end; $d = $d.AddDays(1)) {
         $vnum  = xval $v.VOUCHERNUMBER
         $party = xval $v.PARTYLEDGERNAME
         if (-not $party) { $party = xval $v.PARTYNAME }
+        # Stable unique id for idempotent upsert. Prefer Tally's real internal ids
+        # (GUID / MASTERID / VOUCHERKEY). Do NOT synthesize "type-no-date" -- voucher
+        # numbers repeat (duplicate Purchase #s etc.), so that collides and drops
+        # vouchers. If none is present, leave it empty and the loader keys on
+        # date+type+no+content-hash so distinct vouchers are never merged.
         $guid  = xval $v.GUID
-        if (-not $guid) { $guid = "$vtype-$vnum-$date" }   # fallback stable key for idempotent upsert
+        if (-not $guid) { $guid = xval $v.MASTERID }
+        if (-not $guid) { $guid = xval $v.VOUCHERKEY }
+        if (-not $guid) { $guid = xval $v.ALTERID }
 
         # accumulate ledger lines into the two buckets, summing repeats of the same ledger
         $ledObj   = [ordered]@{}
