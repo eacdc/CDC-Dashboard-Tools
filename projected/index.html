@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Projected Cashflow v1.11 (14-Jun-2026)</title>
+<title>CDC Projected Cashflow v1.11.1 (14-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -20,7 +20,7 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.11';var APP_BUILD='14-Jun-2026';
+var APP_VERSION='v1.11.1';var APP_BUILD='14-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -51,6 +51,9 @@ var today=asOfDate||new Date();var todayYMD=toYMD(today);
 // Diagnostic: expose first 3 Sales/Debit-Note vouchers so we can see what fields are available
 // to extract an invoice number from. Open DevTools → window.__vchSample
 try{var __sm=[];for(var __vi=0;__vi<vouchers.length&&__sm.length<3;__vi++){var __v=vouchers[__vi];if(__v.type==='Sales'||__v.type==='Export Sale'||__v.type==='Debit Note')__sm.push(__v);}window.__vchSample=__sm;if(__sm.length>0)console.log('%c[Voucher Sample]','color:#0891b2;font-weight:bold','First Sales/DN voucher KEYS:',Object.keys(__sm[0]),'· FULL OBJECT:',__sm[0]);}catch(e){}
+// Diagnostic: count every distinct voucher type, and separately count types where a Sundry
+// Creditor party appears (candidates for purchase invoices). Open DevTools → window.__vchTypes
+try{var __tc={},__ct={},__cSample={};for(var __ti=0;__ti<vouchers.length;__ti++){var __tv=vouchers[__ti];__tc[__tv.type]=(__tc[__tv.type]||0)+1;var __hasCr=false;for(var __pp in (__tv.party_ledgers||{})){if(chainHas(__pp,xd,['sundry creditors'])){__hasCr=true;break;}}if(__hasCr){__ct[__tv.type]=(__ct[__tv.type]||0)+1;if(!__cSample[__tv.type])__cSample[__tv.type]=__tv;}}window.__vchTypes={allTypes:__tc,typesWithCreditorParty:__ct,creditorSampleByType:__cSample};console.log('%c[Voucher Types]','color:#be185d;font-weight:bold','ALL types:',__tc,'· types with Sundry-Creditor party:',__ct);}catch(e){}
 var SALE={'Sales':1,'Export Sale':1,'Sales - Duty Draw Back':1};var PURCH={'Purchase':1};
 var RCV={'Bank Receipt':1,'Receipt':1};var PAY={'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Payment':1};
 var LKW=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
