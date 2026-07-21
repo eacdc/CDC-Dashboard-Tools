@@ -23,7 +23,10 @@
 param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
-    [string]$TallyUrl  = "http://localhost:9001"
+    [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
+    [string]$TallyUrl  = "http://localhost:9001",
+    [string]$IngestUrl   = $env:CDC_INGEST_URL,     # falls back to the env var
+    [string]$IngestToken = $env:CDC_INGEST_TOKEN
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,16 +51,15 @@ $FromDate = $from.ToString('yyyyMMdd')
 $ToDate   = $to.ToString('yyyyMMdd')
 
 # Decide push path once.
-$ingestUrl   = $env:CDC_INGEST_URL
-$ingestToken = $env:CDC_INGEST_TOKEN
+$ingestUrl   = $IngestUrl
+$ingestToken = $IngestToken
 $mongoUri    = $env:MONGODB_URI
 $hasNode     = [bool](Get-Command node -ErrorAction SilentlyContinue)
 $mode = if ($ingestUrl) { 'api' } elseif ($hasNode -and $mongoUri) { 'loader' } else { 'files' }
 
-# Incremental (ALTERID) sync scans the whole current FY each run so backdated
-# entries/edits/deletions anywhere in the FY are caught -- needs the API.
-$fyStart = if ($to.Month -ge 4) { "{0}0401" -f $to.Year } else { "{0}0401" -f ($to.Year - 1) }
-if ($Incremental -and -not $ingestUrl) { Say "Incremental requires CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
+# Incremental (ALTERID) sync scans from -SyncFromDate each run so backdated
+# entries/edits/deletions anywhere in that window are caught -- needs the API.
+if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
 
 Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}" -f $FromDate, $ToDate, $mode, [bool]$Incremental)
 
@@ -66,7 +68,7 @@ foreach ($b in $branches) {
     try {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `
-                -Incremental -FromDate $fyStart -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
+                -Incremental -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
