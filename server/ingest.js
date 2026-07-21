@@ -77,4 +77,96 @@ async function ingest(payload) {
   return result;
 }
 
-module.exports = { ingest, VALID_BRANCHES, cleanVoucher, voucherKey };
+// ---- ALTERID-based true-incremental sync ---------------------------------
+// Tally stamps every voucher with a monotonic ALTERID that bumps on ANY create
+// or edit, regardless of the voucher's date. So a lightweight metadata scan
+// (guid + date + alterId for every voucher) tells us exactly what changed since
+// last sync -- including backdated entries and edits -- and, by comparing the
+// current guid set against what's in Mongo, what was deleted.
+
+// Pure diff: given the full metadata list and the last synced alterId, return
+// the dates that need a full re-pull, the complete current guid set (for
+// deletion reconcile), and the new high-water alterId.
+function diffMeta(meta, lastAlterId) {
+  const last = Number(lastAlterId) || 0;
+  const changedDates = new Set();
+  const currentGuids = [];
+  let maxAlter = last;
+  for (const m of meta || []) {
+    const a = Number(m.alterId) || 0;
+    if (m.guid) currentGuids.push(String(m.guid));
+    if (a > maxAlter) maxAlter = a;
+    if (a > last && m.date) changedDates.add(String(m.date));
+  }
+  return { changedDates: Array.from(changedDates).sort(), currentGuids, newMaxAlterId: maxAlter };
+}
+
+async function getSyncState(branch) {
+  branch = String(branch || '').toLowerCase();
+  const db = await getDb();
+  const s = await db.collection('sync_state').findOne({ branch });
+  return { branch, lastAlterId: s ? Number(s.lastAlterId) || 0 : 0, updatedAt: s ? s.updatedAt : null };
+}
+
+// payload = { branch, lastAlterId, changedDates:[...], vouchers:[...for those dates...],
+//             master?, currentGuids:[...all current...], reconcile?:bool }
+async function syncIncremental(payload) {
+  const branch = String(payload.branch || '').toLowerCase();
+  if (!VALID_BRANCHES.has(branch)) {
+    throw Object.assign(new Error(`invalid branch "${payload.branch}" (expected kol|ahm)`), { status: 400 });
+  }
+  const db = await getDb();
+  const result = { branch, masterUpserted: false, replacedDates: 0, upserted: 0, deletedByDate: 0, deletedMissing: 0, lastAlterId: null };
+
+  if (payload.master && payload.master.ledgers && payload.master.groups) {
+    await db.collection('masters').updateOne(
+      { branch },
+      { $set: { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    result.masterUpserted = true;
+  }
+
+  // 1) Replace every changed date wholesale: delete then insert the fresh pull.
+  //    This captures edits, backdated new entries, and same-date deletions.
+  const changedDates = Array.isArray(payload.changedDates) ? payload.changedDates.map(String) : [];
+  if (changedDates.length) {
+    const del = await db.collection('vouchers').deleteMany({ branch, date: { $in: changedDates } });
+    result.deletedByDate = del.deletedCount;
+    result.replacedDates = changedDates.length;
+  }
+  const vouchers = Array.isArray(payload.vouchers) ? payload.vouchers : [];
+  if (vouchers.length) {
+    const ops = vouchers.map((raw) => {
+      const v = cleanVoucher(raw);
+      const _id = voucherKey(branch, raw);
+      return { updateOne: { filter: { _id }, update: { $set: { _id, branch, guid: raw.guid || _id, ...v, updatedAt: new Date() } }, upsert: true } };
+    });
+    const CHUNK = 1000;
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const r = await db.collection('vouchers').bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });
+      result.upserted += (r.upsertedCount || 0) + (r.modifiedCount || 0) + (r.matchedCount || 0);
+    }
+  }
+
+  // 2) Deletion reconcile: drop any Mongo voucher whose guid is no longer in
+  //    Tally's current set. Guarded so a missing/empty list can never wipe data.
+  if (payload.reconcile && Array.isArray(payload.currentGuids) && payload.currentGuids.length) {
+    const keep = payload.currentGuids.map(String);
+    const del2 = await db.collection('vouchers').deleteMany({ branch, guid: { $nin: keep } });
+    result.deletedMissing = del2.deletedCount;
+  }
+
+  // 3) Advance the high-water mark.
+  if (payload.lastAlterId != null) {
+    await db.collection('sync_state').updateOne(
+      { branch },
+      { $set: { branch, lastAlterId: Number(payload.lastAlterId), updatedAt: new Date() } },
+      { upsert: true }
+    );
+    result.lastAlterId = Number(payload.lastAlterId);
+  }
+  return result;
+}
+
+module.exports = { ingest, VALID_BRANCHES, cleanVoucher, voucherKey, diffMeta, getSyncState, syncIncremental };

@@ -37,7 +37,9 @@ param(
     [string]$OutDir      = "$env:USERPROFILE\Desktop\tally_export",
     [string]$IngestUrl   = "",           # e.g. https://cdc-api.onrender.com  (empty = write files only)
     [string]$IngestToken = "",           # shared secret; sent as x-ingest-token header
-    [switch]$EmitCsv                     # also write the original 7 CSVs (off by default)
+    [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
+    [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
+    [switch]$DryRun                      # incremental: print the plan, don't pull detail or post
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,6 +82,133 @@ function Collect-Postings($node, $list) {
         }
         if ($c.HasChildNodes) { Collect-Postings $c $list }
     }
+}
+# Turn one XML <VOUCHER> node into the dashboard-shaped object (reads $isPartyLedger
+# at call time). Returns $null for a dateless node.
+function ConvertTo-VoucherObject($v) {
+    $date = xval $v.DATE; if (-not $date) { return $null }
+    $vtype = xval $v.VOUCHERTYPENAME
+    $vnum  = xval $v.VOUCHERNUMBER
+    $party = xval $v.PARTYLEDGERNAME
+    if (-not $party) { $party = xval $v.PARTYNAME }
+    $guid  = xval $v.GUID
+    if (-not $guid) { $guid = xval $v.MASTERID }
+    if (-not $guid) { $guid = xval $v.VOUCHERKEY }
+    if (-not $guid) { $guid = xval $v.ALTERID }
+    $postings = New-Object System.Collections.ArrayList
+    Collect-Postings $v $postings
+    $ledObj = [ordered]@{}; $partyObj = [ordered]@{}
+    foreach ($p in $postings) {
+        $ln = $p.Ledger; $amt = $p.Amount
+        if ($isPartyLedger[$ln]) {
+            if ($partyObj.Contains($ln)) { $partyObj[$ln] = [math]::Round($partyObj[$ln] + $amt, 2) } else { $partyObj[$ln] = $amt }
+        } else {
+            if ($ledObj.Contains($ln)) { $ledObj[$ln] = [math]::Round($ledObj[$ln] + $amt, 2) } else { $ledObj[$ln] = $amt }
+        }
+    }
+    return [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; guid=$guid }
+}
+# Pull one day's Day Book, return an ArrayList of voucher objects.
+function Get-DayVouchers([string]$ymd) {
+    $payload = @"
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+  <BODY><EXPORTDATA><REQUESTDESC>
+    <REPORTNAME>Day Book</REPORTNAME>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVCURRENTDATE>$ymd</SVCURRENTDATE>
+      <SVFROMDATE>$ymd</SVFROMDATE>
+      <SVTODATE>$ymd</SVTODATE>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+  </REQUESTDESC></EXPORTDATA></BODY>
+</ENVELOPE>
+"@
+    $out = New-Object System.Collections.ArrayList
+    try { $raw = Post-Tally $payload } catch { Write-Warning ("  {0} : request failed - {1}" -f $ymd, $_.Exception.Message); return $out }
+    [xml]$xml = $raw
+    foreach ($v in $xml.SelectNodes("//VOUCHER")) { $o = ConvertTo-VoucherObject $v; if ($o) { [void]$out.Add($o) } }
+    return $out
+}
+# Lightweight metadata scan: every voucher's guid + date + alterId over a range.
+# One request, a few fields - the basis for ALTERID incremental sync.
+function Get-VoucherMeta([string]$fromYmd, [string]$toYmd) {
+    $payload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>VchMeta</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVFROMDATE>$fromYmd</SVFROMDATE>
+      <SVTODATE>$toYmd</SVTODATE>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="VchMeta" ISMODIFY="No">
+        <TYPE>Voucher</TYPE>
+        <FETCH>GUID, MASTERID, DATE, ALTERID</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+    $out = New-Object System.Collections.ArrayList
+    [xml]$xml = Post-Tally $payload
+    foreach ($v in $xml.SelectNodes("//VOUCHER")) {
+        $g = xval $v.GUID; if (-not $g) { $g = xval $v.MASTERID }
+        $dt = xval $v.DATE
+        if ($dt -and $dt.Length -ne 8) { try { $dt = ([datetime]$dt).ToString('yyyyMMdd') } catch {} }
+        $al = 0; [int]::TryParse((xval $v.ALTERID), [ref]$al) | Out-Null
+        if ($g -and $dt) { [void]$out.Add([PSCustomObject]@{ guid=$g; date=$dt; alterId=$al }) }
+    }
+    return $out
+}
+# Full incremental cycle: ask the API how far we've synced, scan metadata, pull
+# only changed dates in full, post back (replace-by-date + deletion reconcile).
+function Invoke-Incremental {
+    if (-not $IngestUrl) { throw "Incremental needs -IngestUrl. Offline: use a full pull + loader.js --reset." }
+    $base = $IngestUrl.TrimEnd('/')
+    $lastAlter = 0
+    try {
+        $st = Invoke-WebRequest -Uri ("{0}/api/sync-state?branch={1}" -f $base, $Branch) -UseBasicParsing
+        $lastAlter = [int]((($st.Content) | ConvertFrom-Json).lastAlterId)
+    } catch { Write-Warning ("  sync-state fetch failed, assuming 0: {0}" -f $_.Exception.Message) }
+    Write-Host ("Incremental sync (branch {0}) - lastAlterId={1}" -f $Branch, $lastAlter)
+
+    $meta = Get-VoucherMeta $FromDate $ToDate
+    Write-Host ("  metadata scan: {0} vouchers" -f $meta.Count)
+    $changed = @{}; $currentGuids = New-Object System.Collections.ArrayList; $maxAlter = $lastAlter
+    foreach ($m in $meta) {
+        [void]$currentGuids.Add($m.guid)
+        if ($m.alterId -gt $maxAlter) { $maxAlter = $m.alterId }
+        if ($m.alterId -gt $lastAlter) { $changed[$m.date] = $true }
+    }
+    $changedDates = @($changed.Keys | Sort-Object)
+    Write-Host ("  changed dates: {0}  newMaxAlterId: {1}" -f $changedDates.Count, $maxAlter)
+    if ($DryRun) { Write-Host ("  [DryRun] would re-pull: {0}" -f ($changedDates -join ', ')); return }
+
+    $vouchers = New-Object System.Collections.ArrayList
+    foreach ($cd in $changedDates) {
+        $dv = Get-DayVouchers $cd
+        foreach ($o in $dv) { [void]$vouchers.Add($o) }
+        Write-Host ("    {0}: {1} vouchers" -f $cd, $dv.Count)
+        Start-Sleep -Milliseconds 150
+    }
+    $payload = [ordered]@{
+        branch       = $Branch
+        lastAlterId  = $maxAlter
+        changedDates = $changedDates
+        vouchers     = $vouchers.ToArray()
+        master       = $masterObj
+        currentGuids = $currentGuids.ToArray()
+        reconcile    = $true
+    }
+    $body = $payload | ConvertTo-Json -Depth 8 -Compress
+    $headers = @{ 'Content-Type' = 'application/json' }
+    if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
+    $resp = Invoke-WebRequest -Uri ("{0}/sync" -f $base) -Method Post -Body $body -Headers $headers -UseBasicParsing
+    Write-Host ("  sync posted: {0}" -f $resp.Content)
 }
 
 # ======================================================================
@@ -184,102 +313,33 @@ foreach ($gn in ($groupToParent.Keys | Sort-Object)) {
 $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups }
 
 # ======================================================================
-# STEP 2 - DAY BOOK  ->  transactions in dashboard shape
+# INCREMENTAL MODE - short-circuits the full pull below.
+# ======================================================================
+if ($Incremental) {
+    Invoke-Incremental
+    Write-Host "Incremental run complete."
+    return
+}
+
+# ======================================================================
+# STEP 2 - DAY BOOK  ->  transactions in dashboard shape (full range)
 # ======================================================================
 Write-Host "Pulling day book..."
 
 $txnsOut  = New-Object System.Collections.ArrayList
 $csvDay   = New-Object System.Collections.ArrayList   # only used if -EmitCsv
-$csvLines = New-Object System.Collections.ArrayList
 
 $start = [datetime]::ParseExact($FromDate,'yyyyMMdd',$null)
 $end   = [datetime]::ParseExact($ToDate,  'yyyyMMdd',$null)
 
 for ($d = $start; $d -le $end; $d = $d.AddDays(1)) {
     $ymd = $d.ToString('yyyyMMdd')
-
-    $dayPayload = @"
-<ENVELOPE>
-  <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
-  <BODY><EXPORTDATA><REQUESTDESC>
-    <REPORTNAME>Day Book</REPORTNAME>
-    <STATICVARIABLES>
-      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
-      <SVCURRENTDATE>$ymd</SVCURRENTDATE>
-      <SVFROMDATE>$ymd</SVFROMDATE>
-      <SVTODATE>$ymd</SVTODATE>
-      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
-    </STATICVARIABLES>
-  </REQUESTDESC></EXPORTDATA></BODY>
-</ENVELOPE>
-"@
-    try   { $raw = Post-Tally $dayPayload }
-    catch { Write-Warning ("  {0} : request failed - {1}" -f $ymd, $_.Exception.Message); continue }
-
-    [xml]$xml = $raw
-    $dayCount = 0
-
-    foreach ($v in $xml.SelectNodes("//VOUCHER")) {
-        $date = xval $v.DATE; if (-not $date) { continue }
-        $dayCount++
-
-        $vtype = xval $v.VOUCHERTYPENAME
-        $vnum  = xval $v.VOUCHERNUMBER
-        $party = xval $v.PARTYLEDGERNAME
-        if (-not $party) { $party = xval $v.PARTYNAME }
-        # Stable unique id for idempotent upsert. Prefer Tally's real internal ids
-        # (GUID / MASTERID / VOUCHERKEY). Do NOT synthesize "type-no-date" -- voucher
-        # numbers repeat (duplicate Purchase #s etc.), so that collides and drops
-        # vouchers. If none is present, leave it empty and the loader keys on
-        # date+type+no+content-hash so distinct vouchers are never merged.
-        $guid  = xval $v.GUID
-        if (-not $guid) { $guid = xval $v.MASTERID }
-        if (-not $guid) { $guid = xval $v.VOUCHERKEY }
-        if (-not $guid) { $guid = xval $v.ALTERID }
-
-        # Collect ALL postings (top-level ledger entries + inventory accounting
-        # allocations), then split into the two buckets, summing repeats.
-        $postings = New-Object System.Collections.ArrayList
-        Collect-Postings $v $postings
-        $ledObj   = [ordered]@{}
-        $partyObj = [ordered]@{}
-        foreach ($p in $postings) {
-            $ln = $p.Ledger; $amt = $p.Amount
-            if ($isPartyLedger[$ln]) {
-                if ($partyObj.Contains($ln)) { $partyObj[$ln] = [math]::Round($partyObj[$ln] + $amt, 2) }
-                else { $partyObj[$ln] = $amt }
-            } else {
-                if ($ledObj.Contains($ln)) { $ledObj[$ln] = [math]::Round($ledObj[$ln] + $amt, 2) }
-                else { $ledObj[$ln] = $amt }
-            }
-            if ($EmitCsv) {
-                [void]$csvLines.Add([PSCustomObject][ordered]@{
-                    'Date'=$date;'Voucher Type'=$vtype;'Voucher No'=$vnum;'Ledger'=$ln;
-                    'Group'=$ledgerToGroup[$ln];'Amount (signed)'=$amt;
-                    'Dr/Cr'= if ($amt -lt 0){"Dr"}else{"Cr"}
-                })
-            }
-        }
-
-        $vObj = [ordered]@{
-            date          = $date       # keep yyyyMMdd - the dashboards slice this string
-            party         = $party
-            no            = $vnum
-            type          = $vtype
-            ledgers       = $ledObj
-            party_ledgers = $partyObj
-            guid          = $guid       # extra key for idempotent Mongo upsert; dashboards ignore it
-        }
-        [void]$txnsOut.Add($vObj)
-
-        if ($EmitCsv) {
-            [void]$csvDay.Add([PSCustomObject][ordered]@{
-                'Date'=$date;'Vch Type'=$vtype;'Vch No.'=$vnum;'Party'=$party
-            })
-        }
+    $dayV = Get-DayVouchers $ymd
+    foreach ($o in $dayV) {
+        [void]$txnsOut.Add($o)
+        if ($EmitCsv) { [void]$csvDay.Add([PSCustomObject][ordered]@{ 'Date'=$o.date;'Vch Type'=$o.type;'Vch No.'=$o.no;'Party'=$o.party }) }
     }
-
-    Write-Host ("  {0} : {1} vouchers" -f $ymd, $dayCount)
+    Write-Host ("  {0} : {1} vouchers" -f $ymd, $dayV.Count)
     Start-Sleep -Milliseconds 200
 }
 
@@ -311,9 +371,8 @@ Write-Host ("Wrote {0}" -f $txnsPath)
 
 if ($EmitCsv -and $csvDay.Count -gt 0) {
     $stamp = if ($FromDate -eq $ToDate) { $FromDate } else { "${FromDate}_to_${ToDate}" }
-    $csvDay   | Export-Csv (Join-Path $OutDir "DayBook_$stamp.csv")       -NoTypeInformation -Encoding UTF8
-    $csvLines | Export-Csv (Join-Path $OutDir "LedgerEntries_$stamp.csv") -NoTypeInformation -Encoding UTF8
-    Write-Host "Also wrote CSVs (DayBook / LedgerEntries)."
+    $csvDay | Export-Csv (Join-Path $OutDir "DayBook_$stamp.csv") -NoTypeInformation -Encoding UTF8
+    Write-Host "Also wrote DayBook CSV."
 }
 
 # ======================================================================

@@ -21,7 +21,8 @@
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -TrailingDays 7
 #>
 param(
-    [int]$TrailingDays = 1,                         # 1 = today only; 7 = re-pull last week (catches edits)
+    [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
+    [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
     [string]$TallyUrl  = "http://localhost:9001"
 )
 
@@ -53,12 +54,23 @@ $mongoUri    = $env:MONGODB_URI
 $hasNode     = [bool](Get-Command node -ErrorAction SilentlyContinue)
 $mode = if ($ingestUrl) { 'api' } elseif ($hasNode -and $mongoUri) { 'loader' } else { 'files' }
 
-Say ("run_daily start  range {0}..{1}  mode={2}" -f $FromDate, $ToDate, $mode)
+# Incremental (ALTERID) sync scans the whole current FY each run so backdated
+# entries/edits/deletions anywhere in the FY are caught -- needs the API.
+$fyStart = if ($to.Month -ge 4) { "{0}0401" -f $to.Year } else { "{0}0401" -f ($to.Year - 1) }
+if ($Incremental -and -not $ingestUrl) { Say "Incremental requires CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
+
+Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}" -f $FromDate, $ToDate, $mode, [bool]$Incremental)
 
 foreach ($b in $branches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
     try {
-        if ($mode -eq 'api') {
+        if ($Incremental) {
+            & powershell -ExecutionPolicy Bypass -File $extract `
+                -Incremental -FromDate $fyStart -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
+                -TallyUrl $TallyUrl -OutDir $outDir `
+                -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
+        }
+        elseif ($mode -eq 'api') {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -FromDate $FromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
                 -TallyUrl $TallyUrl -OutDir $outDir `

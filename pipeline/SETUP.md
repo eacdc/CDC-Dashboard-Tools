@@ -74,6 +74,41 @@ Open the dashboard (`/consolidated/` or `/projected/`), keep the default
 
 ---
 
+## Incremental sync (ALTERID) — catches backdated entries, edits & deletions
+
+Tally stamps every voucher with an `ALTERID` that increments on **any** create or
+edit, regardless of the voucher's date. The incremental mode uses this to sync
+only what actually changed since last run — including **backdated** entries/edits
+anywhere in the FY — and reconciles **deletions**.
+
+How a run works:
+1. `GET /api/sync-state?branch=X` → the last `ALTERID` we processed.
+2. One lightweight metadata scan of the whole FY (`guid + date + alterId` per voucher).
+3. Dates containing any voucher with `alterId >` last → **re-pulled in full** and replaced.
+4. Any voucher whose `guid` is no longer in Tally → **deleted** from Mongo.
+5. High-water `ALTERID` saved back.
+
+Requires the API (`-IngestUrl`). Run it daily instead of the full pull:
+
+```powershell
+# both branches, incremental
+powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -Incremental
+```
+Or one branch directly (dry-run first to see the plan without writing):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Incremental -DryRun `
+  -FromDate 20260401 -Branch ahm -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26" `
+  -IngestUrl "https://YOUR-API" -IngestToken "SECRET"
+```
+The `/sync` response reports `replacedDates`, `deletedByDate`, `deletedMissing`
+(reconciled deletions) and the new `lastAlterId`.
+
+> First incremental run (no state yet) treats everything as changed = a full sync;
+> subsequent runs are tiny. The metadata scan is one request even on a full FY.
+> **Note:** the Tally metadata-collection request is new — validate one live run
+> with `-DryRun` before trusting the nightly job (the `ALTERID`/`GUID` fetch field
+> names can vary by TallyPrime build).
+
 ## Notes for this testing copy
 
 - **Branches:** `run_daily.ps1` loads both:

@@ -6,7 +6,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { getDb, close } = require('./db');
-const { ingest } = require('./ingest');
+const { ingest, getSyncState, syncIncremental } = require('./ingest');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -46,6 +46,24 @@ app.post('/ingest', async (req, res) => {
   } catch (e) {
     res.status(e.status || 500).json({ ok: false, error: e.message });
   }
+});
+
+// ---- incremental sync (ALTERID) --------------------------------------------
+// The extractor asks how far we've synced, pulls only what changed, and posts back.
+app.get('/api/sync-state', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase();
+    if (!['kol', 'ahm'].includes(branch)) return res.status(400).json({ error: 'branch must be kol|ahm' });
+    res.json(await getSyncState(branch));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/sync', async (req, res) => {
+  if (INGEST_TOKEN && req.get('x-ingest-token') !== INGEST_TOKEN) {
+    return res.status(401).json({ error: 'bad or missing x-ingest-token' });
+  }
+  try {
+    res.json({ ok: true, ...(await syncIncremental(req.body || {})) });
+  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
 });
 
 // ---- query: dataset by date range ------------------------------------------

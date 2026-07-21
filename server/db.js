@@ -21,6 +21,7 @@ function getDb() {
       await db.collection('vouchers').createIndex({ branch: 1, date: 1 });
       await db.collection('vouchers').createIndex({ branch: 1, guid: 1 }, { unique: true });
       await db.collection('masters').createIndex({ branch: 1 }, { unique: true });
+      await db.collection('sync_state').createIndex({ branch: 1 }, { unique: true });
       console.log(`Mongo connected: db="${DB_NAME}"`);
       return db;
     });
