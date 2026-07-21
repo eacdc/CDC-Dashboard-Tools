@@ -107,9 +107,11 @@ app.get('/api/meta', async (_req, res) => {
 app.use('/consolidated', express.static(path.join(REPO_ROOT, 'consolidated')));
 app.use('/projected', express.static(path.join(REPO_ROOT, 'projected')));
 app.use('/dashboard', express.static(path.join(REPO_ROOT, 'dashboard')));
+app.use('/portal', express.static(path.join(REPO_ROOT, 'portal')));
 app.get('/', (_req, res) => {
   res.type('html').send(
     '<h2>CDC Dashboard API</h2><ul>' +
+    '<li><a href="/portal/">/portal/</a> (unified: P&amp;L / Cashflow / Projection)</li>' +
     '<li><a href="/consolidated/">/consolidated/</a></li>' +
     '<li><a href="/projected/">/projected/</a></li>' +
     '<li><a href="/dashboard/">/dashboard/</a></li>' +
