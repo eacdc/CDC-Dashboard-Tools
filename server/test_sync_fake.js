@@ -51,42 +51,47 @@ const assert = (c, m) => { if (!c) { console.error('FAIL:', m); fails++; } else 
 const V = (guid, date, amt) => ({ guid, date, type: 'Purchase', no: guid, ledgers: { Exp: amt }, party_ledgers: { Party: -amt } });
 
 (async () => {
-  // Seed: A,B on D1 ; C on D2  (full load)
-  const D1 = '20260610', D2 = '20260620';
-  await ingest({ branch: 'ahm', master: { ledgers: {}, groups: {} }, vouchers: [V('gA', D1, 100), V('gB', D1, 200), V('gC', D2, 300)] });
+  // Seed: old Z on 20250401 (prior FY), A/B on D1, C/D on D2.
+  const OLD = '20250401', D1 = '20260610', D2 = '20260620';
+  await ingest({ branch: 'ahm', master: { ledgers: {}, groups: {} }, vouchers: [V('gZ', OLD, 50), V('gA', D1, 100), V('gB', D1, 200), V('gC', D2, 300), V('gD', D2, 400)] });
   await fakeDb.collection('sync_state').updateOne({ branch: 'ahm' }, { $set: { branch: 'ahm', lastAlterId: 3 } }, { upsert: true });
-  assert((await fakeDb.collection('vouchers').countDocuments({ branch: 'ahm' })) === 3, 'seed = 3 vouchers');
+  assert((await fakeDb.collection('vouchers').countDocuments({ branch: 'ahm' })) === 5, 'seed = 5 vouchers');
 
-  // Tally now: B edited (alter 5), E backdated-added on D1 (alter 6), C deleted.
+  // Tally's current period only covers 2026-27, so the scan returns D1/D2 vouchers
+  // (NOT the prior-FY gZ). Changes: B edited (alter 5), E backdated-added on D1
+  // (alter 6), C deleted. D unchanged (alter 2). gZ not scanned at all.
   const meta = [
     { guid: 'gA', date: D1, alterId: 1 },
     { guid: 'gB', date: D1, alterId: 5 },
     { guid: 'gE', date: D1, alterId: 6 },
-    // gC absent -> deleted
+    { guid: 'gD', date: D2, alterId: 2 },
+    // gC absent -> deleted ; gZ (prior FY) not returned by the clamped scan
   ];
   const { changedDates, currentGuids, newMaxAlterId } = diffMeta(meta, (await getSyncState('ahm')).lastAlterId);
   console.log('diff:', JSON.stringify({ changedDates, currentGuids, newMaxAlterId }));
   assert(changedDates.length === 1 && changedDates[0] === D1, 'only D1 flagged changed');
   assert(newMaxAlterId === 6, 'new high-water alterId = 6');
-  assert(currentGuids.join(',') === 'gA,gB,gE', 'current guid set excludes deleted gC');
+  const scanFrom = meta.reduce((a, m) => (m.date < a ? m.date : a), meta[0].date);
+  const scanTo = meta.reduce((a, m) => (m.date > a ? m.date : a), meta[0].date);
 
   // Extractor re-pulls D1 fresh: A unchanged, B edited to 250, E new.
   const freshD1 = [V('gA', D1, 100), V('gB', D1, 250), V('gE', D1, 500)];
-  const r = await syncIncremental({ branch: 'ahm', changedDates, vouchers: freshD1, currentGuids, reconcile: true, lastAlterId: newMaxAlterId });
+  const r = await syncIncremental({ branch: 'ahm', changedDates, vouchers: freshD1, currentGuids, scanFrom, scanTo, reconcile: true, lastAlterId: newMaxAlterId });
   console.log('sync result:', JSON.stringify(r));
 
   const all = await fakeDb.collection('vouchers').find({ branch: 'ahm' }).toArray();
   const byGuid = Object.fromEntries(all.map((d) => [d.guid, d]));
-  assert(all.length === 3, 'after sync = 3 vouchers (A, B_edited, E)');
-  assert(!byGuid.gC, 'deleted voucher gC removed (deletion reconcile)');
+  assert(!byGuid.gC, 'deleted voucher gC removed (deletion reconcile, in-window)');
   assert(byGuid.gE, 'backdated new voucher gE captured');
   assert(byGuid.gB && byGuid.gB.ledgers.Exp === 250, 'edited voucher gB now reflects new amount 250');
-  assert((await fakeDb.collection('vouchers').countDocuments({ branch: 'ahm', date: D2 })) === 0, 'D2 empty after C deleted');
+  assert(byGuid.gD, 'unchanged same-date voucher gD preserved');
+  assert(byGuid.gZ, 'SAFETY: prior-FY gZ (outside scan window) NOT deleted despite absent from scan');
+  assert(all.length === 5, 'after sync = 5 (Z, A, B_edited, E, D)');
   assert((await getSyncState('ahm')).lastAlterId === 6, 'sync_state advanced to 6');
 
   // Idempotency: same sync again changes nothing.
-  await syncIncremental({ branch: 'ahm', changedDates, vouchers: freshD1, currentGuids, reconcile: true, lastAlterId: newMaxAlterId });
-  assert((await fakeDb.collection('vouchers').countDocuments({ branch: 'ahm' })) === 3, 're-running same sync is idempotent');
+  await syncIncremental({ branch: 'ahm', changedDates, vouchers: freshD1, currentGuids, scanFrom, scanTo, reconcile: true, lastAlterId: newMaxAlterId });
+  assert((await fakeDb.collection('vouchers').countDocuments({ branch: 'ahm' })) === 5, 're-running same sync is idempotent');
 
   // No-change run: empty meta diff -> nothing flagged.
   const d2 = diffMeta(meta, 6);

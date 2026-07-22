@@ -179,10 +179,13 @@ function Invoke-Incremental {
     $meta = Get-VoucherMeta $FromDate $ToDate
     Write-Host ("  metadata scan: {0} vouchers" -f $meta.Count)
     $changed = @{}; $currentGuids = New-Object System.Collections.ArrayList; $maxAlter = $lastAlter
+    $scanFrom = $null; $scanTo = $null
     foreach ($m in $meta) {
         [void]$currentGuids.Add($m.guid)
         if ($m.alterId -gt $maxAlter) { $maxAlter = $m.alterId }
         if ($m.alterId -gt $lastAlter) { $changed[$m.date] = $true }
+        if ($null -eq $scanFrom -or $m.date -lt $scanFrom) { $scanFrom = $m.date }
+        if ($null -eq $scanTo   -or $m.date -gt $scanTo)   { $scanTo   = $m.date }
     }
     $changedDates = @($changed.Keys | Sort-Object)
     Write-Host ("  changed dates: {0}  newMaxAlterId: {1}" -f $changedDates.Count, $maxAlter)
@@ -202,6 +205,8 @@ function Invoke-Incremental {
         vouchers     = $vouchers.ToArray()
         master       = $masterObj
         currentGuids = $currentGuids.ToArray()
+        scanFrom     = $scanFrom
+        scanTo       = $scanTo
         reconcile    = $true
     }
     $body = $payload | ConvertTo-Json -Depth 8 -Compress

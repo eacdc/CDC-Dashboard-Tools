@@ -150,10 +150,15 @@ async function syncIncremental(payload) {
   }
 
   // 2) Deletion reconcile: drop any Mongo voucher whose guid is no longer in
-  //    Tally's current set. Guarded so a missing/empty list can never wipe data.
+  //    Tally's current set. Guarded so a missing/empty list can never wipe data,
+  //    and SCOPED to the date window the scan actually observed -- so if Tally's
+  //    active period ever narrows (e.g. back to the current FY only), we never
+  //    delete history that simply wasn't in this scan.
   if (payload.reconcile && Array.isArray(payload.currentGuids) && payload.currentGuids.length) {
     const keep = payload.currentGuids.map(String);
-    const del2 = await db.collection('vouchers').deleteMany({ branch, guid: { $nin: keep } });
+    const q = { branch, guid: { $nin: keep } };
+    if (payload.scanFrom && payload.scanTo) q.date = { $gte: String(payload.scanFrom), $lte: String(payload.scanTo) };
+    const del2 = await db.collection('vouchers').deleteMany(q);
     result.deletedMissing = del2.deletedCount;
   }
 
