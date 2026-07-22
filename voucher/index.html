@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CDC Voucher / Invoice</title>
+<style>
+  :root{
+    --ink:#111; --line:#333; --soft:#666; --bg:#f4f5f7; --box:#fff;
+    --accent:#0f4c81;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",Arial,Helvetica,sans-serif;font-size:13px;}
+  /* ---- toolbar (never printed) ---- */
+  .toolbar{position:sticky;top:0;z-index:10;background:#1f2937;color:#e5e7eb;
+    padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    box-shadow:0 1px 4px rgba(0,0,0,.3);}
+  .toolbar h1{font-size:14px;margin:0 12px 0 0;font-weight:600;letter-spacing:.3px;}
+  .toolbar input,.toolbar select{background:#374151;border:1px solid #4b5563;color:#f9fafb;
+    padding:6px 8px;border-radius:5px;font-size:12.5px;}
+  .toolbar input{width:210px;}
+  .toolbar button{background:var(--accent);border:0;color:#fff;padding:7px 14px;border-radius:5px;
+    font-size:12.5px;cursor:pointer;font-weight:600;}
+  .toolbar button.ghost{background:#374151;}
+  .toolbar button:hover{filter:brightness(1.1);}
+  .toolbar .spacer{flex:1;}
+  .toolbar .msg{font-size:12px;color:#fbbf24;}
+  .toolbar a{color:#93c5fd;text-decoration:none;font-size:12px;}
+  .demo-links{font-size:12px;color:#9ca3af;}
+  .demo-links a{margin-right:10px;}
+
+  /* ---- A4 sheet ---- */
+  .wrap{display:flex;justify-content:center;padding:22px 12px 60px;}
+  .sheet{background:var(--box);width:210mm;min-height:297mm;padding:12mm 11mm;
+    box-shadow:0 2px 14px rgba(0,0,0,.18);border:1px solid #ddd;}
+  .b{border:1px solid var(--line);}
+  .center{text-align:center;} .right{text-align:right;} .bold{font-weight:700;}
+  .doc-title{text-align:center;font-size:17px;font-weight:700;letter-spacing:1px;
+    text-transform:uppercase;margin-bottom:2px;}
+  .einv{text-align:center;font-size:11px;color:var(--soft);margin-bottom:6px;}
+  .co{border:1px solid var(--line);padding:8px 10px;}
+  .co .name{font-size:15px;font-weight:700;color:var(--accent);}
+  .co .addr{font-size:11.5px;line-height:1.45;color:#222;margin-top:2px;}
+  .co .reg{font-size:11px;color:#333;margin-top:3px;}
+  table{border-collapse:collapse;width:100%;}
+  td,th{border:1px solid var(--line);padding:4px 7px;vertical-align:top;font-size:11.5px;}
+  th{background:#f0f2f5;font-weight:600;text-align:center;}
+  .meta td{font-size:11.5px;}
+  .lbl{color:var(--soft);font-size:10px;text-transform:uppercase;letter-spacing:.3px;display:block;}
+  .val{font-weight:600;}
+  .party .lbl{margin-bottom:2px;}
+  .party .pname{font-weight:700;font-size:12.5px;}
+  .party .paddr{line-height:1.45;font-size:11.5px;color:#222;}
+  .items th{font-size:10.5px;}
+  .items td{font-size:11px;}
+  .items .desc{white-space:pre-line;}
+  .items .subhead{font-size:10px;color:var(--soft);}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .tot-row td{font-weight:700;background:#f7f8fa;}
+  .words{padding:6px 8px;font-size:11.5px;}
+  .words .lbl{display:inline;text-transform:none;color:var(--soft);}
+  .decl{font-size:10.5px;color:#333;line-height:1.4;}
+  .sign{height:64px;text-align:right;font-size:11.5px;}
+  .mt6{margin-top:6px;} .mt8{margin-top:8px;} .mt10{margin-top:10px;}
+  .flex{display:flex;} .flex>div{flex:1;}
+  .empty{padding:40px;text-align:center;color:#999;}
+  @media print{
+    @page{size:A4 portrait;margin:8mm;}
+    html,body{background:#fff;}
+    .toolbar{display:none !important;}
+    .wrap{padding:0;}
+    .sheet{box-shadow:none;border:0;width:auto;min-height:auto;padding:0;}
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>CDC Voucher</h1>
+    <select id="branch" title="Branch">
+      <option value="ahm">Ahmedabad</option>
+      <option value="kol">Kolkata</option>
+    </select>
+    <input id="id" placeholder="voucher guid / id" />
+    <input id="no" placeholder="or voucher no." style="width:130px" />
+    <button id="load">Load</button>
+    <button id="print" class="ghost">Download PDF</button>
+    <span class="msg" id="msg"></span>
+    <span class="spacer"></span>
+    <span class="demo-links">samples:
+      <a href="?demo=invoice">Tax Invoice</a>
+      <a href="?demo=journal">Journal Voucher</a>
+    </span>
+  </div>
+
+  <div class="wrap"><div class="sheet" id="sheet">
+    <div class="empty">Load a voucher (branch + id/no) or open a <a href="?demo=invoice">sample</a>.</div>
+  </div></div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ helpers */
+var COMPANY = {
+  ahm: { name:"CDC PRINTERS PVT LTD", lines:[
+    "45 Radhanath Choudhury Road","Kolkata 700015, West Bengal",
+    "Phone no. : 2329 8856","GSTIN : 19AABCC2946B1ZZ",
+    "CIN: U22121WB1998PTC088263","E-Mail : cdc@cdcprinters.com"],
+    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B" },
+  kol: { name:"CDC PRINTERS PVT LTD", lines:[
+    "45 Radhanath Choudhury Road","Kolkata 700015, West Bengal",
+    "Phone no. : 2329 8856","GSTIN : 19AABCC2946B1ZZ",
+    "CIN: U22121WB1998PTC088263","E-Mail : cdc@cdcprinters.com"],
+    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B" }
+};
+var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+function fmtDate(ymd){ // 20260715 -> "15 Jul 26"
+  var s=String(ymd||"");
+  if(/^\d{8}$/.test(s)) return (+s.slice(6,8))+" "+MONTHS[(+s.slice(4,6))-1]+" "+s.slice(2,4);
+  return s;
+}
+function fmtIN(n){ // Indian grouping, 2 dp, blank for 0
+  n=Number(n)||0; if(n===0) return "";
+  var neg=n<0; n=Math.abs(n);
+  var s=n.toFixed(2), p=s.split("."), x=p[0];
+  var last3=x.slice(-3), rest=x.slice(0,-3);
+  if(rest) last3=","+last3;
+  rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,",");
+  var out=rest+last3+"."+p[1];
+  return neg?"-"+out:out;
+}
+function fmtQty(n){n=Number(n)||0; if(n===0)return""; return (n%1===0?n.toFixed(0):n.toFixed(2));}
+
+/* number -> Indian words (Rupees). e.g. 162604 -> "One Lakh Sixty Two Thousand Six Hundred Four" */
+var ONES=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve",
+  "Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+var TENS=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+function twoDigit(n){ if(n<20) return ONES[n];
+  return TENS[Math.floor(n/10)]+(n%10?" "+ONES[n%10]:""); }
+function threeDigit(n){ var h=Math.floor(n/100), r=n%100, out="";
+  if(h) out=ONES[h]+" Hundred"+(r?" ":""); if(r) out+=twoDigit(r); return out; }
+function inWords(num){
+  num=Math.floor(Math.abs(Number(num)||0));
+  if(num===0) return "Zero";
+  var crore=Math.floor(num/10000000); num%=10000000;
+  var lakh=Math.floor(num/100000);   num%=100000;
+  var thou=Math.floor(num/1000);     num%=1000;
+  var hund=num;
+  var parts=[];
+  if(crore) parts.push(threeDigit(crore)+" Crore");
+  if(lakh)  parts.push(twoDigit(lakh)+" Lakh");
+  if(thou)  parts.push(twoDigit(thou)+" Thousand");
+  if(hund)  parts.push(threeDigit(hund));
+  return parts.join(" ").replace(/\s+/g," ").trim();
+}
+function rupeeWords(amt){
+  amt=Number(amt)||0;
+  var r=Math.floor(amt), p=Math.round((amt-r)*100);
+  var s="Rupee "+inWords(r);
+  if(p) s+=" and "+twoDigit(p)+" Paise";
+  return s+" Only";
+}
+
+/* ---------------------------------------------------------- tax computation */
+function findLeg(ledgers,re){var t=0; for(var k in ledgers){ if(re.test(k)) t+=Math.abs(Number(ledgers[k])||0);} return t;}
+function computeTax(v){
+  var d=v.details||{}, items=d.items||[];
+  var sub=0; items.forEach(function(it){sub+=Number(it.amount)||0;});
+  var led=v.ledgers||{};
+  var cgst=findLeg(led,/c ?gst/i), sgst=findLeg(led,/s ?gst|state.*tax/i),
+      igst=findLeg(led,/i ?gst|integ/i), round=0;
+  for(var k in led){ if(/round/i.test(k)) round+=Number(led[k])||0; }
+  // invoice total: dominant party leg if present, else sub+taxes+round
+  var pl=v.party_ledgers||{}, ptot=0;
+  for(var pk in pl){ if(Math.abs(pl[pk])>Math.abs(ptot)) ptot=pl[pk]; }
+  var total=ptot?Math.abs(ptot):(sub+cgst+sgst+igst+round);
+  // HSN-wise breakup: group items by hsn, allocate tax proportional to taxable share
+  var byHsn={}, order=[];
+  items.forEach(function(it){
+    var h=(it.hsn||"").replace(/\s*GST.*/i,"").trim()||"-";
+    if(!byHsn[h]){byHsn[h]={hsn:h,taxable:0};order.push(h);}
+    byHsn[h].taxable+=Number(it.amount)||0;
+  });
+  var rows=order.map(function(h){
+    var r=byHsn[h], share=sub?r.taxable/sub:0;
+    r.cgst=+(cgst*share).toFixed(2); r.sgst=+(sgst*share).toFixed(2); r.igst=+(igst*share).toFixed(2);
+    r.tax=+(r.cgst+r.sgst+r.igst).toFixed(2);
+    return r;
+  });
+  return {sub:sub,cgst:cgst,sgst:sgst,igst:igst,round:round,total:total,rows:rows};
+}
+
+/* ---------------------------------------------------------------- renderers */
+function renderInvoice(v){
+  var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{}, t=computeTax(v);
+  var items=d.items||[]; var totQty=0; items.forEach(function(it){totQty+=Number(it.qty)||0;});
+  var einv = d.irn ? '<div class="einv">e-Invoice &nbsp; IRN : '+esc(d.irn)+
+       (d.ackNo?' &nbsp; Ack No. : '+esc(d.ackNo):'')+(d.ackDate?' &nbsp; Ack Date : '+esc(d.ackDate):'')+'</div>' : '';
+
+  function metaCell(label,val){return '<td><span class="lbl">'+label+'</span><span class="val">'+esc(val||'-')+'</span></td>';}
+  var meta='<table class="meta mt6"><tr>'+
+      metaCell('Invoice No.', v.no)+ metaCell('Dated', fmtDate(v.date))+
+      metaCell('Delivery Note', d.deliveryNote)+ metaCell('Mode/Terms of Payment', d.termsOfPayment)+
+    '</tr><tr>'+
+      metaCell("Supplier's Ref.", d.reference)+ metaCell("Buyer's Order No.", d.buyersOrderNo)+
+      metaCell('Dated', d.buyersOrderDate?fmtDate(d.buyersOrderDate):d.buyersOrderDate)+ metaCell('e-Way Bill No.', d.ewayBillNo)+
+    '</tr><tr>'+
+      metaCell('Despatched through', d.despatchedThrough)+ metaCell('Destination', d.destination)+
+      metaCell('Motor Vehicle No.', d.vehicleNo)+ metaCell('Terms of Delivery', d.termsOfDelivery)+
+    '</tr></table>';
+
+  function partyBox(title,name,addr,gstin,state){
+    return '<div class="b party" style="padding:7px 9px">'+
+      '<span class="lbl">'+title+'</span>'+
+      '<div class="pname">'+esc(name||'-')+'</div>'+
+      '<div class="paddr">'+(addr||[]).map(esc).join('<br>')+'</div>'+
+      (gstin?'<div class="mt6"><span class="lbl">GSTIN/UIN</span>'+esc(gstin)+'</div>':'')+
+      (state?'<div><span class="lbl">State</span>'+esc(state)+'</div>':'')+'</div>';
+  }
+  var buyer = partyBox('Buyer (Bill to)', d.partyMailName||d.partyName||v.party,
+      d.partyAddress, d.partyGstin, d.partyState);
+  var consignee = partyBox('Consignee (Ship to)', d.consigneeName||d.partyMailName||v.party,
+      (d.consigneeAddr&&d.consigneeAddr.length?d.consigneeAddr:d.partyAddress),
+      d.consigneeGstin||d.partyGstin, d.consigneeState||d.partyState);
+  var pos = d.placeOfSupply?'<div class="b mt6" style="padding:5px 9px"><span class="lbl">Place of Supply</span><span class="val">'+esc(d.placeOfSupply)+'</span></div>':'';
+
+  var rows=items.map(function(it){
+    var sub=it.hsn?'<div class="subhead">HSN/SAC: '+esc(it.hsn)+'</div>':'';
+    return '<tr>'+
+      '<td class="center">'+esc(it.slNo||'')+'</td>'+
+      '<td class="desc">'+esc(it.description||'')+sub+'</td>'+
+      '<td class="center">'+esc((it.hsn||'').replace(/\s*GST.*/i,'').trim())+'</td>'+
+      '<td class="num">'+esc(fmtQty(it.qty))+(it.unit?' '+esc(it.unit):'')+'</td>'+
+      '<td class="num">'+esc(it.rate||'')+'</td>'+
+      '<td class="center">'+esc(it.unit||'')+'</td>'+
+      '<td class="num">'+(it.disc?esc(it.disc):'')+'</td>'+
+      '<td class="num">'+fmtIN(it.amount)+'</td></tr>';
+  }).join('');
+  var taxRows='';
+  if(t.cgst) taxRows+='<tr><td colspan="7" class="right">CGST</td><td class="num">'+fmtIN(t.cgst)+'</td></tr>';
+  if(t.sgst) taxRows+='<tr><td colspan="7" class="right">SGST</td><td class="num">'+fmtIN(t.sgst)+'</td></tr>';
+  if(t.igst) taxRows+='<tr><td colspan="7" class="right">IGST</td><td class="num">'+fmtIN(t.igst)+'</td></tr>';
+  if(t.round) taxRows+='<tr><td colspan="7" class="right">Round Off</td><td class="num">'+fmtIN(t.round)+'</td></tr>';
+
+  var itemsTbl='<table class="items mt6"><thead><tr>'+
+    '<th style="width:26px">Sr</th><th>Description of Goods/Services</th><th style="width:70px">HSN/SAC</th>'+
+    '<th style="width:78px">Quantity</th><th style="width:64px">Rate</th><th style="width:44px">per</th>'+
+    '<th style="width:44px">Disc%</th><th style="width:88px">Amount</th></tr></thead><tbody>'+
+    rows+
+    '<tr class="tot-row"><td colspan="7" class="right">Sub Total</td><td class="num">'+fmtIN(t.sub)+'</td></tr>'+
+    taxRows+
+    '<tr class="tot-row"><td colspan="3" class="right">Total</td><td class="num">'+esc(fmtQty(totQty))+'</td>'+
+    '<td colspan="3"></td><td class="num">'+fmtIN(t.total)+'</td></tr>'+
+    '</tbody></table>';
+
+  var amtWords='<div class="b words mt6"><span class="lbl">Amount Chargeable (in words)</span> '+
+    '<span class="bold">'+esc(rupeeWords(t.total))+'</span></div>';
+
+  var hsnRows=t.rows.map(function(r){
+    return '<tr><td>'+esc(r.hsn)+'</td><td class="num">'+fmtIN(r.taxable)+'</td>'+
+      '<td class="num">'+(r.cgst?fmtIN(r.cgst):'')+'</td><td class="num">'+(r.sgst?fmtIN(r.sgst):'')+'</td>'+
+      '<td class="num">'+(r.igst?fmtIN(r.igst):'')+'</td><td class="num">'+fmtIN(r.tax)+'</td></tr>';
+  }).join('');
+  var hsnTbl = t.rows.length? '<table class="mt6"><thead><tr><th>HSN/SAC</th><th>Taxable Value</th>'+
+    '<th>CGST</th><th>SGST</th><th>IGST</th><th>Total Tax</th></tr></thead><tbody>'+hsnRows+
+    '<tr class="tot-row"><td class="right">Total</td><td class="num">'+fmtIN(t.sub)+'</td>'+
+    '<td class="num">'+(t.cgst?fmtIN(t.cgst):'')+'</td><td class="num">'+(t.sgst?fmtIN(t.sgst):'')+'</td>'+
+    '<td class="num">'+(t.igst?fmtIN(t.igst):'')+'</td><td class="num">'+fmtIN(t.cgst+t.sgst+t.igst)+'</td></tr>'+
+    '</tbody></table>'+
+    '<div class="b words mt6"><span class="lbl">Tax Amount (in words)</span> <span class="bold">'+
+      esc(rupeeWords(t.cgst+t.sgst+t.igst))+'</span></div>' : '';
+
+  var footer='<div class="flex mt8">'+
+    '<div class="b" style="padding:8px 9px">'+
+      '<div class="decl"><span class="lbl">Declaration</span>'+
+      'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>'+
+      '<div class="mt6"><span class="lbl">Company’s GST No.</span>'+esc(co.gstin)+
+      ' &nbsp; <span class="lbl" style="display:inline">PAN</span> '+esc(co.pan)+'</div>'+
+    '</div>'+
+    '<div class="b" style="padding:8px 9px;max-width:230px">'+
+      '<div class="right bold">for '+esc(co.name)+'</div>'+
+      '<div class="sign"></div>'+
+      '<div class="right lbl" style="display:block">Authorised Signatory</div>'+
+    '</div></div>';
+
+  return '<div class="doc-title">Tax Invoice</div>'+einv+
+    companyHeader(co)+ meta+
+    '<div class="flex mt6" style="gap:6px">'+consignee+buyer+'</div>'+ pos+
+    itemsTbl+ amtWords+ hsnTbl+ footer;
+}
+
+function renderJournal(v){
+  var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{};
+  // Build Dr/Cr particulars from ledgers + party_ledgers (raw Tally sign: -ve=Dr, +ve=Cr).
+  var lines=[], totDr=0, totCr=0;
+  function push(name,amt){ amt=Number(amt)||0; if(amt===0) return;
+    if(amt<0){ lines.push({name:name,dr:-amt,cr:0}); totDr+=-amt; }
+    else{ lines.push({name:name,dr:0,cr:amt}); totCr+=amt; } }
+  var all=Object.assign({},v.party_ledgers||{},v.ledgers||{});
+  // preserve insertion order: party first (usually the debit/credit head), then ledgers
+  Object.keys(v.ledgers||{}).forEach(function(k){push(k,v.ledgers[k]);});
+  Object.keys(v.party_ledgers||{}).forEach(function(k){push(k,v.party_ledgers[k]);});
+  // Dr entries first then Cr, matching a Tally journal print
+  lines.sort(function(a,b){ return (b.dr>0?1:0)-(a.dr>0?1:0); });
+  var body=lines.map(function(l){
+    return '<tr><td>'+esc(l.name)+'</td><td class="num">'+fmtIN(l.dr)+'</td><td class="num">'+fmtIN(l.cr)+'</td></tr>';
+  }).join('');
+  var tbl='<table class="mt8"><thead><tr><th style="text-align:left">Particulars</th>'+
+    '<th style="width:120px">Debit</th><th style="width:120px">Credit</th></tr></thead><tbody>'+
+    body+
+    '<tr class="tot-row"><td class="right">Total</td><td class="num">'+fmtIN(totDr)+'</td><td class="num">'+fmtIN(totCr)+'</td></tr>'+
+    '</tbody></table>';
+  var narr = d.narration ? '<div class="b words mt8"><span class="lbl">On Account of / Narration</span> '+
+      esc(d.narration)+'</div>' : '';
+  var head='<table class="meta mt6"><tr>'+
+    '<td><span class="lbl">Voucher Type</span><span class="val">'+esc(v.type||'Journal')+'</span></td>'+
+    '<td><span class="lbl">No.</span><span class="val">'+esc(v.no||'-')+'</span></td>'+
+    '<td><span class="lbl">Dated</span><span class="val">'+esc(fmtDate(v.date))+'</span></td></tr></table>';
+  var footer='<div class="flex mt10"><div></div>'+
+    '<div class="b" style="padding:8px 9px;max-width:230px">'+
+      '<div class="right bold">for '+esc(co.name)+'</div><div class="sign"></div>'+
+      '<div class="right lbl" style="display:block">Authorised Signatory</div></div></div>';
+  return '<div class="doc-title">'+esc(v.type||'Journal Voucher')+'</div>'+
+    companyHeader(co)+ head+ tbl+ narr+ footer;
+}
+
+function companyHeader(co){
+  return '<div class="co">'+
+    '<div class="name">'+esc(co.name)+'</div>'+
+    '<div class="addr">'+co.lines.map(esc).join('<br>')+'</div></div>';
+}
+
+function isInvoice(v){
+  var d=v.details||{};
+  if(d.items&&d.items.length) return true;
+  return /sale|purchase|invoice|debit note|credit note/i.test(v.type||"");
+}
+function render(v){
+  var html = isInvoice(v)? renderInvoice(v): renderJournal(v);
+  document.getElementById("sheet").innerHTML = html;
+  document.title = (v.no?("#"+v.no+" "):"")+(isInvoice(v)?"Tax Invoice":"Journal")+" - CDC";
+}
+
+/* ------------------------------------------------------------- data loading */
+function setMsg(s){document.getElementById("msg").textContent=s||"";}
+function loadFromApi(){
+  var branch=document.getElementById("branch").value;
+  var id=document.getElementById("id").value.trim();
+  var no=document.getElementById("no").value.trim();
+  if(!id&&!no){ setMsg("enter an id or voucher no."); return; }
+  var q="?branch="+encodeURIComponent(branch)+(id?"&id="+encodeURIComponent(id):"&no="+encodeURIComponent(no));
+  setMsg("loading...");
+  fetch("/api/voucher"+q).then(function(r){
+    if(!r.ok) return r.json().then(function(j){throw new Error(j.error||("HTTP "+r.status));});
+    return r.json();
+  }).then(function(v){ v.branch=v.branch||branch; setMsg(""); render(v); })
+    .catch(function(e){ setMsg(e.message); });
+}
+
+/* ------------------------------------------------------------------- demos */
+var DEMO_INVOICE={
+  branch:"kol", type:"Sales", no:"CDC/2662/26-27", date:"20260715",
+  party:"Aakriti Art Gallery Pvt Ltd",
+  ledgers:{"Sale - Printing":137800,"Output CGST":12402,"Output SGST":12402},
+  party_ledgers:{"Aakriti Art Gallery Pvt Ltd":-162604},
+  details:{
+    irn:"639b10aa578562519e6f438e0618cf5ddf5744ff103c3e8c8db4357b440986b7",
+    ackNo:"182623151669776", ackDate:"15 Jul 26",
+    reference:"J04201", termsOfPayment:"60 Days",
+    deliveryNote:"2678", ewayBillNo:"811714091343", vehicleNo:"WB03D6774",
+    buyersOrderNo:"Qtn. No. 6645.2, Qtn. No. 6720.1", buyersOrderDate:"20260713",
+    destination:"Kolkata-700017", placeOfSupply:"West Bengal",
+    partyName:"Aakriti Art Gallery Pvt Ltd", partyMailName:"Aakriti Art Gallery Pvt Ltd",
+    partyGstin:"19AAICA7555R1ZQ", partyState:"West Bengal, Code: 19",
+    partyAddress:["Orbit Enclave, 1st Floor","12/3A, Hungerford Street","Kolkata - 700 017.","Pincode : 700017"],
+    consigneeName:"Aakriti Art Gallery Pvt Ltd", consigneeGstin:"19AAICA7555R1ZQ",
+    consigneeState:"West Bengal, Code: 19",
+    consigneeAddr:["Orbit Enclave, 1st Floor","12/3A, Hungerford Street","Kolkata - 700 017.","Pincode : 700017"],
+    items:[
+      {slNo:1,description:"Magazine Art Insights (OFFSET PRINT)\nBatch: Primary Batch",hsn:"49119990 GST 18%",qty:"200",unit:"Pcs",rate:"655",disc:"",amount:131000},
+      {slNo:2,description:"Letterhead (DIGITAL PRINT)\nBatch: Primary Batch",hsn:"48201020 GST 18%",qty:"200",unit:"Pcs",rate:"34",disc:"",amount:6800}
+    ]
+  }
+};
+var DEMO_JOURNAL={
+  branch:"kol", type:"Journal", no:"443", date:"20260630",
+  party:"Employees - Salary",
+  ledgers:{
+    "Employees - Salary":-3344694,           // Dr
+    "Employees Cont. to PF":270323,          // Cr
+    "Employees Cont. to ESI":5458,
+    "Employees Cont. to Prof. Tax":13290,
+    "TDS Payable - Section 392 (192B)":150000,
+    "Labour Welfare Fund Exp.":132,
+    "Salary Payable":2854491
+  },
+  party_ledgers:{
+    "Staff Advance - Raju Shaw":10000,
+    "Staff Advance - Netai Sardar":6000,
+    "Staff Advance - Anil Chouhan":5000,
+    "Staff Advance - Kaushik Bargi":30000
+  },
+  details:{ narration:"For The Month of June 2026 - Tangra I" }
+};
+
+/* ------------------------------------------------------------------- wiring */
+document.getElementById("load").addEventListener("click",loadFromApi);
+document.getElementById("print").addEventListener("click",function(){window.print();});
+document.getElementById("no").addEventListener("keydown",function(e){if(e.key==="Enter")loadFromApi();});
+document.getElementById("id").addEventListener("keydown",function(e){if(e.key==="Enter")loadFromApi();});
+
+(function init(){
+  var p=new URLSearchParams(location.search);
+  var demo=p.get("demo");
+  if(demo==="invoice"){ render(DEMO_INVOICE); return; }
+  if(demo==="journal"){ render(DEMO_JOURNAL); return; }
+  var branch=p.get("branch"), id=p.get("id"), no=p.get("no");
+  if(branch) document.getElementById("branch").value=branch;
+  if(id) document.getElementById("id").value=id;
+  if(no) document.getElementById("no").value=no;
+  if(branch&&(id||no)) loadFromApi();
+})();
+</script>
+</body>
+</html>

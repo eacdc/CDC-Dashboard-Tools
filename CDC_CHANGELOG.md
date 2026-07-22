@@ -1,5 +1,48 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.1 (pipeline) — July 2026 — Full voucher detail + printable invoice/journal PDF
+
+Branch `claude/voucher-details-completeness-ne9ejq`. Captures the *whole* voucher
+(not just ledger amounts) and adds a Tally-style printable view with a **Download
+PDF** button, so a single voucher can be reprinted exactly like the Tally invoice /
+journal it came from. Fully backward compatible — the dashboards' data path is
+unchanged.
+
+### Extractor (`pipeline/TallyToJson.ps1`)
+- `ConvertTo-VoucherObject` now also harvests a **`details`** object from the Day
+  Book XML (which already contained it): party GSTIN + mailing name + multi-line
+  address + state + place of supply; consignee block; invoice metadata (supplier's
+  ref, buyer's order no/date, delivery note, despatch info, destination, **e-way
+  bill no**, vehicle no, terms of payment/delivery, IRN/Ack); **narration**; and
+  **line items** (`ALLINVENTORYENTRIES.LIST`) with stock item, **HSN/SAC**, qty +
+  unit, rate, discount, amount.
+- Inventory + narration read from confident tags; header metadata is best-effort
+  (Tally's tag names vary by version) and degrades to `""`/`[]` when absent — a
+  bare journal simply carries empty extras. JSON depth bumped so nested items
+  serialize.
+
+### API (`server/`)
+- `ingest.js`: `cleanVoucher` now persists `details` via a new `cleanDetails`
+  whitelist (scalars + address lines + item fields), so a rogue payload can't bloat
+  the store. Vouchers with nothing extra store no `details` key.
+- `GET /api/voucher?branch=&id=<guid>` (or `&no=&type=&date=`) — one voucher with
+  full `details`. `GET /api/dataset` now **excludes** `details` (dashboards stay lean).
+- New `server/test_voucher_details.js` (`npm run test:voucher`): details round-trip,
+  sanitizer, dataset stripping, and the `/api/voucher` id/no/404 paths — all green.
+
+### Printable voucher (`voucher/index.html`, served at `/voucher/`)
+- Renders a stored voucher as a **Tax Invoice** (header, e-invoice IRN/Ack, meta
+  grid, consignee/buyer blocks, HSN line-item table, HSN-wise tax summary, amount in
+  words, declaration + signatory) or a **Journal Voucher** (Dr/Cr particulars +
+  narration). **Download PDF** = browser print-to-PDF (no external libs → CSP-safe,
+  A4, pixel-accurate).
+- HSN-wise CGST/SGST/IGST is computed client-side from line items + GST ledger legs
+  (Tally's export has no per-HSN breakup). Verified against the two reference PDFs
+  (Journal #443 and invoice CDC/2662/26-27) — totals and per-HSN tax reproduce exactly.
+- Bundled samples for demo without a DB: `/voucher/?demo=invoice`, `/voucher/?demo=journal`.
+
+---
+
 ## v2.0 (pipeline) — July 2026 — Tally → MongoDB automation (testing copy)
 
 Branch `claude/cdc-dashboard-automation-it2ecc`. Adds an automated data pipeline so

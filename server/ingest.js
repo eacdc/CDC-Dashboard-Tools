@@ -16,10 +16,50 @@ function contentHash(v) {
   return crypto.createHash('sha1').update(`${norm(v.ledgers)}|${norm(v.party_ledgers)}`).digest('hex').slice(0, 10);
 }
 
+// Whitelist of scalar detail fields carried through to Mongo for the printable
+// voucher/invoice view. Anything outside this list (and `items`, handled below)
+// is dropped so a rogue payload can't bloat the store.
+const DETAIL_SCALARS = [
+  'narration', 'reference', 'refDate',
+  'partyGstin', 'partyName', 'partyMailName', 'partyState', 'placeOfSupply',
+  'consigneeName', 'consigneeGstin', 'consigneeState',
+  'deliveryNote', 'deliveryNoteDate', 'despatchDocNo', 'despatchedThrough',
+  'destination', 'ewayBillNo', 'vehicleNo', 'termsOfPayment', 'termsOfDelivery',
+  'buyersOrderNo', 'buyersOrderDate', 'irn', 'ackNo', 'ackDate',
+];
+const ITEM_FIELDS = ['slNo', 'description', 'hsn', 'qty', 'unit', 'rate', 'disc', 'amount'];
+
+// Normalise the extractor's `details` object into a compact, known shape. Returns
+// undefined when there's nothing worth storing (bare vouchers stay lean).
+function cleanDetails(d) {
+  if (!d || typeof d !== 'object') return undefined;
+  const out = {};
+  for (const k of DETAIL_SCALARS) {
+    if (d[k] != null && d[k] !== '') out[k] = String(d[k]);
+  }
+  const addrLines = (a) => (Array.isArray(a) ? a.map((x) => String(x)).filter(Boolean).slice(0, 10) : []);
+  const pa = addrLines(d.partyAddress);
+  const ca = addrLines(d.consigneeAddr || d.consigneeAddress);
+  if (pa.length) out.partyAddress = pa;
+  if (ca.length) out.consigneeAddr = ca;
+  if (Array.isArray(d.items) && d.items.length) {
+    out.items = d.items.map((it) => {
+      const row = {};
+      for (const f of ITEM_FIELDS) {
+        if (it[f] == null) continue;
+        row[f] = f === 'amount' ? Number(it[f]) || 0 : String(it[f]);
+      }
+      return row;
+    });
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Keep only the dashboard-relevant voucher fields (+ guid for keying). Guards against
-// arbitrary extra keys sneaking into the store.
+// arbitrary extra keys sneaking into the store. `details` (invoice/inventory extras)
+// is optional and only stored when present.
 function cleanVoucher(v) {
-  return {
+  const out = {
     date: String(v.date || ''),
     party: v.party || '',
     no: v.no != null ? String(v.no) : '',
@@ -27,6 +67,9 @@ function cleanVoucher(v) {
     ledgers: v.ledgers && typeof v.ledgers === 'object' ? v.ledgers : {},
     party_ledgers: v.party_ledgers && typeof v.party_ledgers === 'object' ? v.party_ledgers : {},
   };
+  const details = cleanDetails(v.details);
+  if (details) out.details = details;
+  return out;
 }
 
 function voucherKey(branch, v) {
@@ -174,4 +217,4 @@ async function syncIncremental(payload) {
   return result;
 }
 
-module.exports = { ingest, VALID_BRANCHES, cleanVoucher, voucherKey, diffMeta, getSyncState, syncIncremental };
+module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, voucherKey, diffMeta, getSyncState, syncIncremental };

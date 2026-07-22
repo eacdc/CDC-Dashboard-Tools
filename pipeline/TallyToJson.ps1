@@ -83,6 +83,105 @@ function Collect-Postings($node, $list) {
         if ($c.HasChildNodes) { Collect-Postings $c $list }
     }
 }
+# ---- full voucher detail (for the printable invoice / journal PDF) -----------
+# Tally's Day Book XML export already returns the complete voucher tree - the
+# dashboards only ever consumed the ledger amounts. This block harvests the rest
+# (party GSTIN/address, invoice metadata, e-way bill, narration, and the stock
+# item lines with HSN/qty/rate/amount) into a "details" object so the portal can
+# reprint a voucher exactly like Tally does. Every field degrades to "" / [] when
+# the node is absent, so a bare journal voucher just carries empty extras.
+# First non-empty of several candidate child tags (Tally spells fields several ways).
+function xfirst($node, [string[]]$names) {
+    foreach ($n in $names) {
+        $c = $node.SelectSingleNode($n)
+        if ($c) { $t = xval $c; if ($t) { return $t } }
+    }
+    return ""
+}
+# Collect the text of every child element under the first matching *.LIST wrapper
+# (used for multi-line address blocks). Returns a string array.
+function xaddress($node, [string[]]$listNames) {
+    $lines = New-Object System.Collections.ArrayList
+    foreach ($ln in $listNames) {
+        foreach ($wrap in $node.SelectNodes($ln)) {
+            foreach ($child in $wrap.ChildNodes) {
+                if ($child.NodeType -eq [System.Xml.XmlNodeType]::Element) {
+                    $t = xval $child
+                    if ($t) { [void]$lines.Add($t) }
+                }
+            }
+        }
+        if ($lines.Count -gt 0) { break }
+    }
+    return $lines.ToArray()
+}
+# Pull the stock-item lines. Each ALLINVENTORYENTRIES.LIST is one invoice row.
+function Get-InventoryItems($v) {
+    $items = New-Object System.Collections.ArrayList
+    $i = 0
+    foreach ($inv in $v.SelectNodes(".//ALLINVENTORYENTRIES.LIST")) {
+        $name = xfirst $inv @("STOCKITEMNAME","STOCKITEM")
+        $amt  = ToAmount (xfirst $inv @("AMOUNT"))
+        # Skip empty wrappers (some vouchers carry a trailing blank entry).
+        if (-not $name -and $amt -eq 0) { continue }
+        $i++
+        $hsn  = xfirst $inv @("GSTHSNNAME","HSNMASTERNAME","HSNCODE","HSN")
+        $rate = xfirst $inv @("RATE")                 # e.g. "655.00/Pcs"
+        $qtyRaw = xfirst $inv @("BILLEDQTY","ACTUALQTY")   # e.g. "200 Pcs" or "200.0 Kgs"
+        # Split a Tally quantity like "200.0 Pcs" into number + unit (best effort).
+        $qtyNum = ""; $qtyUnit = ""
+        if ($qtyRaw) {
+            $m = [regex]::Match($qtyRaw, "^\s*(-?[0-9.,]+)\s*(.*)$")
+            if ($m.Success) { $qtyNum = $m.Groups[1].Value; $qtyUnit = $m.Groups[2].Value.Trim() } else { $qtyNum = $qtyRaw }
+        }
+        $disc = xfirst $inv @("DISCOUNT")
+        [void]$items.Add([ordered]@{
+            slNo = $i; description = $name; hsn = $hsn;
+            qty = $qtyNum; unit = $qtyUnit; rate = $rate;
+            disc = $disc; amount = $amt
+        })
+    }
+    return $items.ToArray()
+}
+# Everything except the ledger amounts. Best-effort on the metadata tags (Tally
+# names them inconsistently across versions); guaranteed on inventory + narration.
+function Get-VoucherDetails($v) {
+    return [ordered]@{
+        narration      = xfirst $v @("NARRATION")
+        reference      = xfirst $v @("REFERENCE","BASICORDERREF")
+        refDate        = xfirst $v @("REFERENCEDATE")
+        # party / buyer
+        partyGstin     = xfirst $v @("PARTYGSTIN","CONSIGNEEGSTIN")
+        partyName      = xfirst $v @("PARTYNAME","PARTYLEDGERNAME","PARTYMAILINGNAME","BASICBUYERNAME")
+        partyMailName  = xfirst $v @("PARTYMAILINGNAME","BASICBUYERNAME")
+        partyAddress   = xaddress $v @("BASICBUYERADDRESS.LIST","LEDGERMAILINGADDRESS.LIST")
+        partyState     = xfirst $v @("PARTYSTATENAME","STATENAME","CONSIGNEESTATENAME")
+        placeOfSupply  = xfirst $v @("PLACEOFSUPPLY")
+        # consignee (ship-to)
+        consigneeName  = xfirst $v @("CONSIGNEEMAILINGNAME","BASICBUYERNAME")
+        consigneeGstin = xfirst $v @("CONSIGNEEGSTIN","PARTYGSTIN")
+        consigneeAddr  = xaddress $v @("ADDRESS.LIST","CONSIGNEEADDRESS.LIST")
+        consigneeState = xfirst $v @("CONSIGNEESTATENAME","STATENAME")
+        # dispatch / logistics
+        deliveryNote     = xfirst $v @("BASICSHIPDELIVERYNOTE","DELIVERYNOTENO","BASICSHIPDOCUMENTNO")
+        deliveryNoteDate = xfirst $v @("DELIVERYNOTEDATE")
+        despatchDocNo    = xfirst $v @("BASICSHIPDOCUMENTNO")
+        despatchedThrough= xfirst $v @("BASICSHIPPEDBY")
+        destination      = xfirst $v @("BASICFINALDESTINATION","DESTINATION")
+        ewayBillNo       = xfirst $v @("EWAYBILLNUMBER","EWAYBILLNO")
+        vehicleNo        = xfirst $v @("BASICSHIPVESSELNO","VEHICLENUMBER","MOTORVEHICLENO")
+        termsOfPayment   = xfirst $v @("BASICDUEDATEOFPYMT","TERMSOFPAYMENT")
+        termsOfDelivery  = xfirst $v @("BASICORDERTERMS","TERMSOFDELIVERY")
+        buyersOrderNo    = xfirst $v @("BASICPURCHASEORDERNO","BASICORDERREF")
+        buyersOrderDate  = xfirst $v @("BASICORDERDATE")
+        # e-invoice
+        irn      = xfirst $v @("IRN","IRNNUM")
+        ackNo    = xfirst $v @("ACKNO","IRNACKNO")
+        ackDate  = xfirst $v @("ACKDATE","IRNACKDATE")
+        # line items
+        items    = Get-InventoryItems $v
+    }
+}
 # Turn one XML <VOUCHER> node into the dashboard-shaped object (reads $isPartyLedger
 # at call time). Returns $null for a dateless node.
 function ConvertTo-VoucherObject($v) {
@@ -106,7 +205,8 @@ function ConvertTo-VoucherObject($v) {
             if ($ledObj.Contains($ln)) { $ledObj[$ln] = [math]::Round($ledObj[$ln] + $amt, 2) } else { $ledObj[$ln] = $amt }
         }
     }
-    return [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; guid=$guid }
+    $details = Get-VoucherDetails $v
+    return [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; details=$details; guid=$guid }
 }
 # Pull one day's Day Book, return an ArrayList of voucher objects.
 function Get-DayVouchers([string]$ymd) {
@@ -209,7 +309,7 @@ function Invoke-Incremental {
         scanTo       = $scanTo
         reconcile    = $true
     }
-    $body = $payload | ConvertTo-Json -Depth 8 -Compress
+    $body = $payload | ConvertTo-Json -Depth 12 -Compress
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
     $resp = Invoke-WebRequest -Uri ("{0}/sync" -f $base) -Method Post -Body $body -Headers $headers -UseBasicParsing
@@ -369,7 +469,8 @@ $txnsPath   = Join-Path $OutDir ("{0}_Transactions.json" -f $Branch)
 
 # Transactions: build the array json. For 6k+ vouchers ConvertTo-Json is fine but
 # guard the empty-bucket case (PS 5.1 renders an empty [ordered]@{} as {} - good).
-[System.IO.File]::WriteAllText($txnsPath, (To-Json $txnsOut.ToArray() 6), (New-Object System.Text.UTF8Encoding($false)))
+# Depth 10: voucher -> details -> items[] -> item{} -> value needs the extra levels.
+[System.IO.File]::WriteAllText($txnsPath, (To-Json $txnsOut.ToArray() 10), (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host ("Wrote {0}" -f $masterPath)
 Write-Host ("Wrote {0}" -f $txnsPath)
@@ -392,7 +493,7 @@ if ($IngestUrl) {
         master  = $masterObj
         vouchers= $txnsOut.ToArray()
     }
-    $body = $payload | ConvertTo-Json -Depth 8 -Compress
+    $body = $payload | ConvertTo-Json -Depth 12 -Compress
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
     try {

@@ -83,7 +83,10 @@ app.get('/api/dataset', async (req, res) => {
       const master = await db.collection('masters').findOne({ branch }, { projection: { _id: 0, updatedAt: 0 } });
       const vouchers = await db.collection('vouchers')
         .find({ branch, date: { $gte: from, $lte: to } },
-              { projection: { _id: 0, branch: 0, guid: 0, updatedAt: 0 } })
+              // `details` is excluded here to keep the dashboard payload small — the
+              // dashboards only need the ledger amounts. Fetch the full voucher
+              // (with details) on demand via /api/voucher for the printable view.
+              { projection: { _id: 0, branch: 0, guid: 0, updatedAt: 0, details: 0 } })
         .sort({ date: 1 })
         .toArray();
       out.branches[branch] = {
@@ -92,6 +95,35 @@ app.get('/api/dataset', async (req, res) => {
       };
     }
     res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---- single voucher (full detail, for the printable invoice/journal PDF) ----
+// GET /api/voucher?branch=kol|ahm&id=<guid|_id>   OR   ?branch=&no=<vchNo>&type=<vchType>&date=<YYYYMMDD>
+// Returns the complete stored voucher including `details` (party GSTIN/address,
+// invoice metadata, e-way bill, narration, and stock-item lines).
+app.get('/api/voucher', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase();
+    if (!['kol', 'ahm'].includes(branch)) return res.status(400).json({ error: 'branch must be kol|ahm' });
+    const db = await getDb();
+    const proj = { projection: { branch: 0, updatedAt: 0 } };
+    let doc = null;
+    if (req.query.id) {
+      const id = String(req.query.id);
+      doc = await db.collection('vouchers').findOne({ branch, $or: [{ _id: id }, { guid: id }, { _id: `${branch}:${id}` }] }, proj);
+    } else if (req.query.no) {
+      const q = { branch, no: String(req.query.no) };
+      if (req.query.type) q.type = String(req.query.type);
+      if (isYmd(req.query.date)) q.date = String(req.query.date);
+      doc = await db.collection('vouchers').findOne(q, proj);
+    } else {
+      return res.status(400).json({ error: 'provide id, or no (+ optional type/date)' });
+    }
+    if (!doc) return res.status(404).json({ error: 'voucher not found' });
+    res.json(doc);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -126,6 +158,7 @@ app.use('/consolidated', express.static(path.join(REPO_ROOT, 'consolidated')));
 app.use('/projected', express.static(path.join(REPO_ROOT, 'projected')));
 app.use('/dashboard', express.static(path.join(REPO_ROOT, 'dashboard')));
 app.use('/portal', express.static(path.join(REPO_ROOT, 'portal')));
+app.use('/voucher', express.static(path.join(REPO_ROOT, 'voucher')));
 // Root opens the portal (the primary UI). The other pages stay reachable at
 // their own paths (/consolidated, /projected, /dashboard) and the API at /api/*.
 app.get('/', (_req, res) => res.redirect('/portal/'));
