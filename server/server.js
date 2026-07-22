@@ -138,6 +138,20 @@ app.get('/', (_req, res) => {
 });
 
 const server = app.listen(PORT, () => console.log(`CDC API listening on :${PORT}`));
+
+// ---- keep-alive (Render free tier sleeps after ~15 min idle) ----------------
+// Opt-in with KEEP_ALIVE=true. Pings our own PUBLIC url every 14 min so Render's
+// router sees inbound traffic and never idles the service. Uses Render's
+// auto-provided RENDER_EXTERNAL_URL; pinging localhost would NOT count.
+if (process.env.KEEP_ALIVE === 'true' || process.env.KEEP_ALIVE === '1') {
+  const selfUrl = (process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, '');
+  const EVERY = 14 * 60 * 1000;
+  setInterval(() => {
+    fetch(`${selfUrl}/health`).then((r) => console.log(`keep-alive ping ${r.status}`)).catch((e) => console.log('keep-alive failed:', e.message));
+  }, EVERY).unref();
+  console.log(`keep-alive on: pinging ${selfUrl}/health every 14 min`);
+}
+
 process.on('SIGTERM', async () => { await close(); server.close(); });
 process.on('SIGINT', async () => { await close(); server.close(); process.exit(0); });
 
