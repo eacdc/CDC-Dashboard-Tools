@@ -24,7 +24,7 @@ one service.
 
 ## Printable voucher / invoice
 
-`/voucher/` renders a stored voucher as a Tally-style **Tax Invoice** or **Journal Voucher** and offers a **Download PDF** button (browser print-to-PDF — no external libraries, so it works offline and inside the artifact CSP). Open it as:
+`/voucher/` renders a stored voucher as a Tally-style **Tax Invoice** or **Journal Voucher**. **Download PDF** generates a real `.pdf` file client-side (`html2canvas` + `jsPDF`, both vendored in `voucher/vendor/` — offline, no CDN); a separate **Print** button uses the browser's vector print path. Open it as:
 
 ```
 /voucher/?branch=kol&id=<guid>          # by GUID / _id

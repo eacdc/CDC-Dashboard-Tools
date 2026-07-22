@@ -40,6 +40,12 @@ unchanged.
   mode hides the button (no live API). Verified end-to-end in Chromium.
 
 ### Printable voucher (`voucher/index.html`, served at `/voucher/`)
+- **Download PDF** now produces a **real downloaded `.pdf` file** (no print dialog):
+  the sheet is rasterised with `html2canvas` and written to an A4 doc with `jsPDF`
+  (both vendored locally in `voucher/vendor/` — offline, no CDN). A separate **Print**
+  button keeps the vector-quality browser print path. The drill-down **📄 PDF** button
+  passes `?print=1`, which auto-downloads on load. Filenames like
+  `CDC_Invoice_CDC_2662_26-27_20260715.pdf`.
 - Renders a stored voucher as a **Tax Invoice** (header, e-invoice IRN/Ack, meta
   grid, consignee/buyer blocks, HSN line-item table, HSN-wise tax summary, amount in
   words, declaration + signatory) or a **Journal Voucher** (Dr/Cr particulars +

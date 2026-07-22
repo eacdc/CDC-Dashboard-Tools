@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>CDC Voucher / Invoice</title>
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
 <style>
   :root{
     --ink:#111; --line:#333; --soft:#666; --bg:#f4f5f7; --box:#fff;
@@ -84,7 +86,8 @@
     <input id="id" placeholder="voucher guid / id" />
     <input id="no" placeholder="or voucher no." style="width:130px" />
     <button id="load">Load</button>
-    <button id="print" class="ghost">Download PDF</button>
+    <button id="download">⬇ Download PDF</button>
+    <button id="print" class="ghost">🖨 Print</button>
     <span class="msg" id="msg"></span>
     <span class="spacer"></span>
     <span class="demo-links">samples:
@@ -336,14 +339,53 @@ function isInvoice(v){
   if(d.items&&d.items.length) return true;
   return /sale|purchase|invoice|debit note|credit note/i.test(v.type||"");
 }
+var CUR_V=null;
 function render(v){
+  CUR_V=v;
   var html = isInvoice(v)? renderInvoice(v): renderJournal(v);
   document.getElementById("sheet").innerHTML = html;
   document.title = (v.no?("#"+v.no+" "):"")+(isInvoice(v)?"Tax Invoice":"Journal")+" - CDC";
-  // ?print=1 -> open the browser's print / Save-as-PDF dialog automatically.
-  if(WANT_PRINT){ WANT_PRINT=false; setTimeout(function(){window.print();}, 350); }
+  // ?print=1 -> generate + download the PDF file automatically (no print dialog).
+  if(WANT_PRINT){ WANT_PRINT=false; setTimeout(downloadPdf, 400); }
 }
 var WANT_PRINT=false;
+
+// Build a real .pdf file from the rendered sheet and download it (no print dialog).
+// Rasterises the A4 sheet with html2canvas, then places it into a jsPDF A4 doc,
+// slicing across pages if the content is taller than one page.
+function pdfName(v){
+  var base=(v&&v.no?v.no:"voucher")+(v&&v.date?"_"+v.date:"");
+  return "CDC_"+(v&&isInvoice(v)?"Invoice":"Journal")+"_"+base.replace(/[^A-Za-z0-9_-]+/g,"_")+".pdf";
+}
+function downloadPdf(){
+  var sheet=document.getElementById("sheet");
+  if(!sheet||!window.html2canvas||!window.jspdf){ window.print(); return; } // safety fallback
+  setMsg("generating PDF...");
+  window.html2canvas(sheet,{scale:2,backgroundColor:"#ffffff",useCORS:true,logging:false}).then(function(canvas){
+    var jsPDF=window.jspdf.jsPDF;
+    var pdf=new jsPDF("p","mm","a4");
+    var pw=pdf.internal.pageSize.getWidth();    // 210
+    var ph=pdf.internal.pageSize.getHeight();   // 297
+    var fullImgH=canvas.height*pw/canvas.width; // mm if whole canvas scaled to page width
+    if(fullImgH<=ph){
+      pdf.addImage(canvas,"PNG",0,0,pw,fullImgH,undefined,"FAST");
+    }else{
+      var pageHpx=Math.floor(canvas.width*ph/pw); // canvas px that fill one A4 page
+      var y=0,first=true;
+      while(y<canvas.height){
+        var sliceH=Math.min(pageHpx,canvas.height-y);
+        var pc=document.createElement("canvas");
+        pc.width=canvas.width; pc.height=sliceH;
+        pc.getContext("2d").drawImage(canvas,0,y,canvas.width,sliceH,0,0,canvas.width,sliceH);
+        if(!first)pdf.addPage();
+        pdf.addImage(pc,"PNG",0,0,pw,sliceH*pw/canvas.width,undefined,"FAST");
+        first=false; y+=sliceH;
+      }
+    }
+    pdf.save(pdfName(CUR_V));
+    setMsg("");
+  }).catch(function(e){ setMsg("PDF failed: "+e.message+" (use Print instead)"); });
+}
 
 /* ------------------------------------------------------------- data loading */
 function setMsg(s){document.getElementById("msg").textContent=s||"";}
@@ -409,6 +451,7 @@ var DEMO_JOURNAL={
 
 /* ------------------------------------------------------------------- wiring */
 document.getElementById("load").addEventListener("click",loadFromApi);
+document.getElementById("download").addEventListener("click",downloadPdf);
 document.getElementById("print").addEventListener("click",function(){window.print();});
 document.getElementById("no").addEventListener("keydown",function(e){if(e.key==="Enter")loadFromApi();});
 document.getElementById("id").addEventListener("keydown",function(e){if(e.key==="Enter")loadFromApi();});
