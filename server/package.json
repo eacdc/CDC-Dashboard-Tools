@@ -9,6 +9,7 @@
     "init": "node init_db.js",
     "load": "node loader.js",
     "test:logic": "node test_e2e_fake.js",
+    "test:voucher": "node test_voucher_details.js",
     "test:sync": "node test_sync_fake.js",
     "test:db": "node test_e2e.js",
     "test:browser": "node test_browser.js && node test_browser_proj.js"

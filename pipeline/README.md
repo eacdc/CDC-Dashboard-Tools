@@ -12,7 +12,7 @@ range (default: current financial year to date).
         v
   pipeline/TallyToJson.ps1   -- pulls masters + day book, emits:
         |                        <branch>_Master.json        (hierarchy: {ledgers, groups})
-        |                        <branch>_Transactions.json  (vouchers: [{date,party,no,type,ledgers,party_ledgers}])
+        |                        <branch>_Transactions.json  (vouchers: [{date,party,no,type,ledgers,party_ledgers,details}])
         |
         |  (a) direct POST  ->  server /ingest  ->  MongoDB Atlas
         |  (b) no internet  ->  copy files off  ->  server/loader.js  ->  MongoDB Atlas
@@ -38,6 +38,26 @@ The one non-trivial conversion is splitting each voucher's ledger lines into
 everything else (P&L heads, taxes, fixed assets) goes to `ledgers`. Amounts keep
 Tally's raw sign (-ve = Dr, +ve = Cr), dates stay `yyyyMMdd` -- exactly what the
 dashboards expect.
+
+### Full voucher `details` (for reprinting an invoice/journal PDF)
+
+The dashboards only need the ledger amounts, but Tally's Day Book XML export
+already carries the *whole* voucher. `ConvertTo-VoucherObject` now also harvests a
+`details` object per voucher so the portal can reprint it exactly like Tally:
+
+- **Party / consignee**: GSTIN, mailing name, multi-line address, state, place of supply.
+- **Invoice metadata**: supplier's ref, buyer's order no/date, delivery note, despatch
+  info, destination, **e-way bill no**, vehicle no, terms of payment/delivery, IRN + Ack.
+- **Narration** (voucher free text).
+- **Line items** (`ALLINVENTORYENTRIES.LIST`): stock item, **HSN/SAC**, quantity + unit,
+  rate, discount, amount.
+
+Inventory + narration are read from tags we're confident about; the header
+metadata tags are best-effort (Tally names them inconsistently across versions)
+and each field degrades to `""`/`[]` when absent, so a bare journal just carries
+empty extras. The tax breakup (HSN-wise CGST/SGST/IGST) is **not** stored — it's
+recomputed from the line items + GST ledger legs when the voucher is printed. See
+`/voucher/` and `GET /api/voucher` (server README).
 
 ## Running it
 
