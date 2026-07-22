@@ -464,6 +464,18 @@ function AuditView(props){
 function DrillModal(props){
   var t=props.target;var data=props.data;var raw=data._raw;
   if(!raw)return null;
+  var DRILL_GRID='95px 100px minmax(200px,1fr) 84px 118px 96px';
+  // Build the printable-voucher link for a drill row. Only available when the
+  // data is API-backed (a live /voucher/ + /api/voucher exist on that origin)
+  // and we have branch + voucher no. to identify it.
+  function voucherLink(r){
+    if(!window.__cdcFromApi)return null;
+    if(!r.no||(r.branch!=='kol'&&r.branch!=='ahm'))return null;
+    var base=window.__cdcApiBase||'';
+    return base+'/voucher/?branch='+encodeURIComponent(r.branch)+
+      '&no='+encodeURIComponent(r.no)+'&type='+encodeURIComponent(r.type||'')+
+      '&date='+encodeURIComponent(r.date||'');
+  }
   var sS=useState(''),srch=sS[0],setSrch=sS[1];
   var sSort=useState('date_asc'),sortBy=sSort[0],setSortBy=sSort[1];
   var xd=raw.xd||data.xd;var lu=data.lu;if(!lu&&xd)lu=buildLookups(xd);
@@ -486,7 +498,7 @@ function DrillModal(props){
     for(var ln2 in (v.party_ledgers||{})){if(ln2===t.ledger){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
     if(foundIn){
       var dom=null,domAbs=0;for(var p in (v.party_ledgers||{})){var a=Math.abs(v.party_ledgers[p]);if(a>domAbs){domAbs=a;dom=p;}}
-      contributing.push({date:v.date,type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
+      contributing.push({date:v.date,no:v.no||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
     }
   }
   // Sort
@@ -522,20 +534,24 @@ function DrillModal(props){
           e('button',{onClick:copyAsText,style:{background:'var(--cyan)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'📋'),
           e('button',{onClick:props.onClose,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕'))),
       e('div',{style:{overflowY:'auto',flex:1}},
-        e('div',{style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
+        e('div',{style:{display:'grid',gridTemplateColumns:DRILL_GRID,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('DATE','date')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('TYPE','type')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('PARTY','party')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BRANCH'),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt())),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt()),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'center'}},'VOUCHER')),
         contributing.length===0?
           e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No transactions found.')
-          :contributing.map(function(r,i){return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
+          :contributing.map(function(r,i){var vl=voucherLink(r);return e('div',{key:i,style:{display:'grid',gridTemplateColumns:DRILL_GRID,alignItems:'center',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
             e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(r.date)),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},r.type),
             e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(via override)')),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase'}},r.branch||'—'),
-            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)));
+            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)),
+            e('div',{style:{padding:'6px 10px',textAlign:'center'}},
+              vl?e('a',{href:vl,target:'_blank',rel:'noopener',title:'View / download this voucher as a PDF',style:{display:'inline-block',textDecoration:'none',background:'var(--cyan)',color:'#fff',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'📄 PDF')
+                :e('span',{style:{fontSize:'10px',color:'var(--text3)'}},r.no?'—':'')));
           }))));
 }
 
@@ -1467,6 +1483,8 @@ function Portal(){
 
   function go(){
     setErr(null);setLd(true);
+    // File-upload mode: no live API, so the per-voucher PDF link is unavailable.
+    try{window.__cdcFromApi=false;}catch(e){}
     var need=['kolHier','ahmHier','kolVouch','ahmVouch'];
     for(var i=0;i<need.length;i++){if(!files[need[i]]){setErr('Please upload all four JSON files (Kol + Ahm hierarchy & vouchers).');setLd(false);return;}}
     var keys=['kolHier','ahmHier','kolVouch','ahmVouch','kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
@@ -1486,6 +1504,9 @@ function Portal(){
   function goMongo(){
     setErr(null);setLd(true);
     var base=(apiBase||'').replace(/\/+$/,'');
+    // Remember we're API-backed (and the base) so the drill-down can link each
+    // voucher to its printable invoice/journal at <base>/voucher/.
+    try{window.__cdcFromApi=true;window.__cdcApiBase=base;}catch(e){}
     var url=base+'/api/dataset?from='+ymdP(fromD)+'&to='+ymdP(toD)+'&branch=all';
     var bkeys=['kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
     var billProms=bkeys.map(function(k){if(files[k])return files[k].text();if(cachedTexts[k])return Promise.resolve(cachedTexts[k]);return Promise.resolve(null);});

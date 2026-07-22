@@ -30,6 +30,14 @@ unchanged.
 - New `server/test_voucher_details.js` (`npm run test:voucher`): details round-trip,
   sanitizer, dataset stripping, and the `/api/voucher` id/no/404 paths — all green.
 
+### Portal drill-down integration (`portal/index.html`)
+- The ledger drill-down modal (P&L / cashflow → voucher list) gains a **VOUCHER**
+  column with a **📄 PDF** button on every row, opening that voucher's printable
+  invoice/journal at `/voucher/?branch=&no=&type=&date=`. Shown only in MongoDB
+  (API) mode — where a live `/voucher/` + `/api/voucher` exist — and links to the
+  configured API base so it works against a remote deployment too. File-upload
+  mode hides the button (no live API). Verified end-to-end in Chromium.
+
 ### Printable voucher (`voucher/index.html`, served at `/voucher/`)
 - Renders a stored voucher as a **Tax Invoice** (header, e-invoice IRN/Ack, meta
   grid, consignee/buyer blocks, HSN line-item table, HSN-wise tax summary, amount in
