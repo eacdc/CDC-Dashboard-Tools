@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>CDC Consolidated Dashboard v1.13.0 (16-Jul-2026)</title>
+<title>CDC Consolidated Dashboard v1.12.1 (13-Jun-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -42,7 +42,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.13.0';var APP_BUILD='16-Jul-2026';
+var APP_VERSION='v1.12.1';var APP_BUILD='13-Jun-2026';
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 var PL_CATS={'Sales Accounts':'revenue','Direct Incomes':'revenue','Indirect Incomes':'revenue','Purchase Accounts':'purchase','Direct Expenses':'direct_expense','Indirect Expenses':'indirect_expense'};
@@ -50,43 +50,7 @@ var SKIP_ROOTS={'Capital Account':1,'Revenue Account':1};
 var CASH_VCH={'Bank Receipt':1,'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Receipt':1,'Payment':1,'Contra':1};
 var GRID_COL1=320;
 
-function hierFromObj(j){j=j||{};var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
-function parseHierarchy(text){return hierFromObj(JSON.parse(text));}
-// Shared build path used by BOTH the file-upload flow and the MongoDB-fetch flow.
-// Takes already-parsed hierarchy objects + voucher arrays for each branch.
-function buildConsolidated(khObj,kvArr,ahObj,avArr,stock){
-  var kxd=hierFromObj(khObj),axd=hierFromObj(ahObj);
-  var xd=mergeHierarchies(kxd,axd);
-  var ibLedgers=findIBLedgers(xd);var ibCount=Object.keys(ibLedgers).length;
-  var kVouchers=kvArr||[],aVouchers=avArr||[];
-  for(var i=0;i<kVouchers.length;i++)kVouchers[i]._branch='kol';
-  for(var j=0;j<aVouchers.length;j++)aVouchers[j]._branch='ahm';
-  var vouchers=kVouchers.concat(aVouchers);
-  var data=processData(vouchers,xd,stock,ibLedgers,12,0,'all');
-  data.branchStats={kol:kVouchers.length,ahm:aVouchers.length,ibElim:ibCount};
-  data._raw={vouchers:vouchers,xd:xd,stock:stock,ibLedgers:ibLedgers};
-  return data;
-}
-// Fetch hierarchy+vouchers for a date range from the API and build the dashboard.
-function fetchFromMongo(apiBase,from,to,onData,onErr,onStatus){
-  var base=(apiBase||'').replace(/\/+$/,'');
-  var url=base+'/api/dataset?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&branch=all';
-  onStatus&&onStatus('Fetching '+from+' -> '+to+' from MongoDB...');
-  fetch(url).then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();}).then(function(d){
-    var b=d.branches||{};var kol=b.kol||{},ahm=b.ahm||{};
-    var kv=(kol.vouchers||[]).length,av=(ahm.vouchers||[]).length;
-    if(kv+av===0)throw new Error('No vouchers in that range. Load data via the pipeline first, or widen the range.');
-    onStatus&&onStatus('Building ('+kv+' KOL + '+av+' AHM vouchers)...');
-    setTimeout(function(){try{
-      var data=buildConsolidated(kol.hierarchy,kol.vouchers,ahm.hierarchy,ahm.vouchers,null);
-      data.source={mode:'mongo',from:from,to:to,apiBase:base};
-      onData(data);
-    }catch(ex){onErr(ex.message);}},30);
-  }).catch(function(ex){onErr('Fetch failed: '+ex.message);});
-}
-// FY-start (1 Apr) for a JS Date, as yyyy-mm-dd for <input type=date>.
-function fyStartISO(dt){var y=dt.getFullYear(),m=dt.getMonth()+1;var fy=m>=4?y:y-1;return fy+'-04-01';}
-function isoToYmd(s){return (s||'').replace(/-/g,'');}
+function parseHierarchy(text){var j=JSON.parse(text);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
 
 function mergeHierarchies(h1,h2){
   var g={},l={};
@@ -317,32 +281,36 @@ function Upload(props){
   var s6=useState(null),err=s6[0],setErr=s6[1];
   var s7=useState(false),ld=s7[0],setLd=s7[1];
   var s8=useState(''),status=s8[0],setStatus=s8[1];
-  // Data source: 'upload' (manual JSONs) or 'mongo' (automated pipeline via API).
-  var sm=useState('mongo'),mode=sm[0],setMode=sm[1];
-  var sApi=useState(''),apiBase=sApi[0],setApiBase=sApi[1];   // '' = same origin as this page
-  var sFrom=useState(fyStartISO(new Date())),fromD=sFrom[0],setFromD=sFrom[1];
-  var sTo=useState(new Date().toISOString().slice(0,10)),toD=sTo[0],setToD=sTo[1];
 
   function go(){setErr(null);setLd(true);setStatus('Reading files...');
     var proms=[khFile.text(),kvFile.text(),ahFile.text(),avFile.text()];
     if(sFile)proms.push(sFile.text());
-    Promise.all(proms).then(function(r){setStatus('Building consolidated dashboard...');setTimeout(function(){try{
-      var stock=r[4]?parseStock(r[4]):null;
-      var data=buildConsolidated(JSON.parse(r[0]),JSON.parse(r[1]),JSON.parse(r[2]),JSON.parse(r[3]),stock);
-      data.source={mode:'upload'};
-      props.onData(data);
+    Promise.all(proms).then(function(r){setStatus('Merging hierarchies...');setTimeout(function(){try{
+      var kxd=parseHierarchy(r[0]);var axd=parseHierarchy(r[2]);
+      var xd=mergeHierarchies(kxd,axd);
+      var ibLedgers=findIBLedgers(xd);
+      var ibCount=Object.keys(ibLedgers).length;
+      setStatus('Parsing vouchers...');setTimeout(function(){try{
+        var kVouchers=JSON.parse(r[1]);var aVouchers=JSON.parse(r[3]);
+        // Tag each voucher with its source branch so we can filter to KOL-only / AHM-only later.
+        for(var __i=0;__i<kVouchers.length;__i++)kVouchers[__i]._branch='kol';
+        for(var __j=0;__j<aVouchers.length;__j++)aVouchers[__j]._branch='ahm';
+        var vouchers=kVouchers.concat(aVouchers);
+        var stock=r[4]?parseStock(r[4]):null;
+        setStatus(vouchers.length+' vouchers (KOL:'+kVouchers.length+' AHM:'+aVouchers.length+'), '+ibCount+' IB ledgers. Building...');
+        setTimeout(function(){try{
+          var data=processData(vouchers,xd,stock,ibLedgers,12,0,'all');
+          data.branchStats={kol:kVouchers.length,ahm:aVouchers.length,ibElim:ibCount};
+          // Keep raw inputs so Dash can re-run processData when the FY toggle changes
+          // without forcing the user to re-upload.
+          data._raw={vouchers:vouchers,xd:xd,stock:stock,ibLedgers:ibLedgers};
+          props.onData(data);
+        }catch(ex){setErr(ex.message);setLd(false);}},50);
+      }catch(ex){setErr(ex.message);setLd(false);}},50);
     }catch(ex){setErr(ex.message);setLd(false);}},50);
     }).catch(function(ex){setErr(ex.message);setLd(false);});
   }
-  function goMongo(){setErr(null);setLd(true);
-    fetchFromMongo(apiBase,isoToYmd(fromD),isoToYmd(toD),
-      function(data){props.onData(data);},
-      function(msg){setErr(msg);setLd(false);},
-      function(st){setStatus(st);});
-  }
   var canGo=khFile&&kvFile&&ahFile&&avFile&&!ld;
-  var canMongo=fromD&&toD&&!ld;
-  function modeTab(v,l){return e('span',{key:v,onClick:function(){setMode(v);setErr(null);},style:{flex:1,textAlign:'center',padding:'7px 10px',cursor:'pointer',fontSize:'12px',fontFamily:'var(--mono)',fontWeight:600,background:mode===v?'var(--cyan)':'var(--bg3)',color:mode===v?'#fff':'var(--text2)'}},l);}
   return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px'}},
     e('div',{style:{width:'580px',padding:'28px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
       e('div',{style:{textAlign:'center',marginBottom:'16px'}},
@@ -350,36 +318,20 @@ function Upload(props){
         e('h1',{style:{fontSize:'20px',fontWeight:700,margin:0,color:'#1e293b'}},'CDC Consolidated Dashboard'),
         e('p',{style:{color:'#64748b',fontSize:'11px',marginTop:'4px'}},'Kolkata + Ahmedabad \u2192 Combined P&L + Cashflow'),
         e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'var(--mono)',color:'#047857',letterSpacing:'1px'}},APP_VERSION+' \u00b7 Last updated '+APP_BUILD)),
-      // Source toggle: automated MongoDB pipeline vs manual file upload.
-      e('div',{style:{display:'flex',borderRadius:'8px',overflow:'hidden',border:'1px solid var(--border2)',marginBottom:'14px'}},
-        modeTab('mongo','\uD83D\uDDC4 MongoDB (auto)'),modeTab('upload','\uD83D\uDCC1 Upload files')),
-      mode==='mongo'&&e('div',null,
-        e('div',{style:{fontSize:'11px',color:'var(--text2)',marginBottom:'10px',lineHeight:1.5}},'Fetches Kolkata + Ahmedabad hierarchy & vouchers from the pipeline database for the selected range. Default is the current financial year to date.'),
-        e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}},
-          e('div',null,e('div',{style:{fontSize:'10px',fontWeight:600,color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'3px'}},'FROM'),
-            e('input',{type:'date',value:fromD,onChange:function(ev){setFromD(ev.target.value);},style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'13px',fontFamily:'var(--mono)'}})),
-          e('div',null,e('div',{style:{fontSize:'10px',fontWeight:600,color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'3px'}},'TO'),
-            e('input',{type:'date',value:toD,onChange:function(ev){setToD(ev.target.value);},style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'13px',fontFamily:'var(--mono)'}}))),
-        e('div',{style:{marginTop:'8px'}},
-          e('div',{style:{fontSize:'10px',fontWeight:600,color:'var(--text3)',fontFamily:'var(--mono)',marginBottom:'3px'}},'API BASE URL (blank = this server)'),
-          e('input',{type:'text',value:apiBase,placeholder:'e.g. https://cdc-api.onrender.com',onChange:function(ev){setApiBase(ev.target.value);},style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border)',borderRadius:'6px',fontSize:'12px',fontFamily:'var(--mono)'}}))),
-      mode==='upload'&&e('div',null,
-        e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}},
-          e('div',null,
-            e('div',{style:{fontSize:'11px',fontWeight:600,color:'var(--cyan)',marginBottom:'2px',fontFamily:'var(--mono)'}},'KOLKATA'),
-            e(FB,{label:'Kol Hierarchy',hint:'kol_hierarchy.json',accept:'.json',file:khFile,onFile:setKhFile,icon:'\uD83D\uDCCB'}),
-            e(FB,{label:'Kol Vouchers',hint:'kol_vouchers.json',accept:'.json',file:kvFile,onFile:setKvFile,icon:'\uD83D\uDCCA'})),
-          e('div',null,
-            e('div',{style:{fontSize:'11px',fontWeight:600,color:'var(--purple)',marginBottom:'2px',fontFamily:'var(--mono)'}},'AHMEDABAD'),
-            e(FB,{label:'Ahm Hierarchy',hint:'ahm_hierarchy.json',accept:'.json',file:ahFile,onFile:setAhFile,icon:'\uD83D\uDCCB'}),
-            e(FB,{label:'Ahm Vouchers',hint:'ahm_vouchers.json',accept:'.json',file:avFile,onFile:setAvFile,icon:'\uD83D\uDCCA'}))),
-        e(FB,{label:'Stock Template CSV (optional)',hint:'Monthly opening stock values',accept:'.csv',file:sFile,onFile:setSFile,icon:'\uD83D\uDCE6'}),
-        e('div',{style:{marginTop:'8px'}},e('button',{onClick:generateStockTemplate,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid var(--border2)',background:'var(--bg2)',color:'var(--text2)',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)'}},'\u2B07 Stock Template'))),
+      e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}},
+        e('div',null,
+          e('div',{style:{fontSize:'11px',fontWeight:600,color:'var(--cyan)',marginBottom:'2px',fontFamily:'var(--mono)'}},'KOLKATA'),
+          e(FB,{label:'Kol Hierarchy',hint:'kol_hierarchy.json',accept:'.json',file:khFile,onFile:setKhFile,icon:'\uD83D\uDCCB'}),
+          e(FB,{label:'Kol Vouchers',hint:'kol_vouchers.json',accept:'.json',file:kvFile,onFile:setKvFile,icon:'\uD83D\uDCCA'})),
+        e('div',null,
+          e('div',{style:{fontSize:'11px',fontWeight:600,color:'var(--purple)',marginBottom:'2px',fontFamily:'var(--mono)'}},'AHMEDABAD'),
+          e(FB,{label:'Ahm Hierarchy',hint:'ahm_hierarchy.json',accept:'.json',file:ahFile,onFile:setAhFile,icon:'\uD83D\uDCCB'}),
+          e(FB,{label:'Ahm Vouchers',hint:'ahm_vouchers.json',accept:'.json',file:avFile,onFile:setAvFile,icon:'\uD83D\uDCCA'}))),
+      e(FB,{label:'Stock Template CSV (optional)',hint:'Monthly opening stock values',accept:'.csv',file:sFile,onFile:setSFile,icon:'\uD83D\uDCE6'}),
+      e('div',{style:{marginTop:'8px'}},e('button',{onClick:generateStockTemplate,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid var(--border2)',background:'var(--bg2)',color:'var(--text2)',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)'}},'\u2B07 Stock Template')),
       err&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',marginTop:'8px',fontSize:'10px',fontFamily:'var(--mono)'}},err),
       ld&&status&&e('div',{style:{padding:'8px',borderRadius:'8px',background:'#ecfeff',border:'1px solid #a5f3fc',color:'#0891b2',marginTop:'8px',fontSize:'10px',fontFamily:'var(--mono)'}},status),
-      mode==='mongo'
-        ?e('button',{onClick:goMongo,disabled:!canMongo,style:{width:'100%',marginTop:'12px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:canMongo?'pointer':'not-allowed',background:canMongo?'#0891b2':'#f1f5f9',color:canMongo?'#fff':'#94a3b8'}},ld?'Fetching...':'Fetch from MongoDB')
-        :e('button',{onClick:go,disabled:!canGo,style:{width:'100%',marginTop:'12px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:canGo?'pointer':'not-allowed',background:canGo?'#0891b2':'#f1f5f9',color:canGo?'#fff':'#94a3b8'}},ld?'Processing...':'Generate Consolidated Dashboard')));
+      e('button',{onClick:go,disabled:!canGo,style:{width:'100%',marginTop:'12px',padding:'12px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:canGo?'pointer':'not-allowed',background:canGo?'#0891b2':'#f1f5f9',color:canGo?'#fff':'#94a3b8'}},ld?'Processing...':'Generate Consolidated Dashboard')));
 }
 
 function Dash(props){
