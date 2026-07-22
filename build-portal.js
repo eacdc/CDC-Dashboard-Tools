@@ -102,7 +102,7 @@ function Portal(){
   var sLd=useState(false),ld=sLd[0],setLd=sLd[1];
   var sMode=useState('mongo'),mode=sMode[0],setMode=sMode[1];
   var sApi=useState(''),apiBase=sApi[0],setApiBase=sApi[1];
-  var sFrom=useState(fyStartISOP(new Date())),fromD=sFrom[0],setFromD=sFrom[1];
+  var sFrom=useState('2025-04-01'),fromD=sFrom[0],setFromD=sFrom[1];// full history default; change here to switch back to current-FY-only
   var sTo=useState(new Date().toISOString().slice(0,10)),toD=sTo[0],setToD=sTo[1];
   function setF(k){return function(file){var nf=Object.assign({},files);nf[k]=file;setFiles(nf);};}
   // cached bills/stock text
