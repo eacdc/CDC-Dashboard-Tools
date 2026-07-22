@@ -464,7 +464,7 @@ function AuditView(props){
 function DrillModal(props){
   var t=props.target;var data=props.data;var raw=data._raw;
   if(!raw)return null;
-  var DRILL_GRID='95px 100px minmax(200px,1fr) 84px 118px 96px';
+  var DRILL_GRID='92px 96px minmax(180px,1fr) 78px 112px 132px';
   // Build the printable-voucher link for a drill row. Only available when the
   // data is API-backed (a live /voucher/ + /api/voucher exist on that origin)
   // and we have branch + voucher no. to identify it.
@@ -549,9 +549,11 @@ function DrillModal(props){
             e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(via override)')),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase'}},r.branch||'—'),
             e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)),
-            e('div',{style:{padding:'6px 10px',textAlign:'center'}},
-              vl?e('a',{href:vl,target:'_blank',rel:'noopener',title:'View / download this voucher as a PDF',style:{display:'inline-block',textDecoration:'none',background:'var(--cyan)',color:'#fff',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'📄 PDF')
-                :e('span',{style:{fontSize:'10px',color:'var(--text3)'}},r.no?'—':'')));
+            e('div',{style:{padding:'6px 8px',textAlign:'center',display:'flex',gap:'6px',justifyContent:'center'}},
+              vl?[
+                e('a',{key:'v',href:vl,target:'_blank',rel:'noopener',title:'Open this voucher on screen',style:{textDecoration:'none',background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'👁 View'),
+                e('a',{key:'p',href:vl+'&print=1',target:'_blank',rel:'noopener',title:'Open and download this voucher as a PDF',style:{textDecoration:'none',background:'var(--cyan)',color:'#fff',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'📄 PDF')
+              ]:e('span',{style:{fontSize:'10px',color:'var(--text3)'}},r.no?'—':'')));
           }))));
 }
 

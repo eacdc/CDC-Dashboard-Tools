@@ -32,8 +32,9 @@ unchanged.
 
 ### Portal drill-down integration (`portal/index.html`)
 - The ledger drill-down modal (P&L / cashflow → voucher list) gains a **VOUCHER**
-  column with a **📄 PDF** button on every row, opening that voucher's printable
-  invoice/journal at `/voucher/?branch=&no=&type=&date=`. Shown only in MongoDB
+  column with **👁 View** + **📄 PDF** buttons on every row. View opens the voucher
+  on screen at `/voucher/?branch=&no=&type=&date=`; PDF adds `&print=1`, which
+  auto-opens the browser's Save-as-PDF dialog. Shown only in MongoDB
   (API) mode — where a live `/voucher/` + `/api/voucher` exist — and links to the
   configured API base so it works against a remote deployment too. File-upload
   mode hides the button (no live API). Verified end-to-end in Chromium.

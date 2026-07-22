@@ -340,7 +340,10 @@ function render(v){
   var html = isInvoice(v)? renderInvoice(v): renderJournal(v);
   document.getElementById("sheet").innerHTML = html;
   document.title = (v.no?("#"+v.no+" "):"")+(isInvoice(v)?"Tax Invoice":"Journal")+" - CDC";
+  // ?print=1 -> open the browser's print / Save-as-PDF dialog automatically.
+  if(WANT_PRINT){ WANT_PRINT=false; setTimeout(function(){window.print();}, 350); }
 }
+var WANT_PRINT=false;
 
 /* ------------------------------------------------------------- data loading */
 function setMsg(s){document.getElementById("msg").textContent=s||"";}
@@ -412,6 +415,7 @@ document.getElementById("id").addEventListener("keydown",function(e){if(e.key===
 
 (function init(){
   var p=new URLSearchParams(location.search);
+  WANT_PRINT = p.get("print")==="1" || p.get("print")==="true";
   var demo=p.get("demo");
   if(demo==="invoice"){ render(DEMO_INVOICE); return; }
   if(demo==="journal"){ render(DEMO_JOURNAL); return; }
