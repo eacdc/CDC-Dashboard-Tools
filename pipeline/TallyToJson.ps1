@@ -71,8 +71,23 @@ function ToAmount($s) {
     [double]::TryParse($c,[ref]$n)|Out-Null; return [math]::Round($n,2)
 }
 function Post-Tally([string]$body) {
-    $r = Invoke-WebRequest -Uri $TallyUrl -Method Post -Body $body `
-         -ContentType "text/xml;charset=utf-8" -UseBasicParsing
+    # TallyPrime's HTTP gateway only answers while Tally is idle at the "Gateway of
+    # Tally" screen; a momentarily-open menu/dialog makes the request fail. Retry a
+    # few times so a brief blip doesn't abort the whole run.
+    $r = $null; $attempt = 0; $max = 5
+    while ($true) {
+        $attempt++
+        try {
+            $r = Invoke-WebRequest -Uri $TallyUrl -Method Post -Body $body `
+                 -ContentType "text/xml;charset=utf-8" -UseBasicParsing -TimeoutSec 180
+            break
+        } catch {
+            if ($attempt -ge $max) { throw }
+            $wait = 2 * $attempt
+            Write-Warning ("  Tally request failed (attempt {0}/{1}) - retrying in {2}s. Is Tally idle at 'Gateway of Tally'? [{3}]" -f $attempt, $max, $wait, $_.Exception.Message)
+            Start-Sleep -Seconds $wait
+        }
+    }
     $s = $r.Content -replace "[\x00-\x08\x0b\x0c\x0e-\x1f]","" `
                     -replace "&(?!(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)","&amp;"
     return $s
