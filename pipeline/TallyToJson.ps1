@@ -43,6 +43,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Windows PowerShell 5.1 defaults to TLS 1.0/1.1, but modern hosts (Render, Atlas
+# API, etc.) require TLS 1.2+. Without this, HTTPS calls fail with "Could not
+# create SSL/TLS secure channel" -- which makes the sync-state fetch fall back to
+# lastAlterId=0 (re-pulling EVERY date) and the final /sync POST silently fail.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+        [Net.ServicePointManager]::SecurityProtocol = `
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13
+    }
+} catch { Write-Warning ("Could not raise TLS to 1.2: {0}" -f $_.Exception.Message) }
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # ---- helpers (unchanged from the CSV extractor) ----
