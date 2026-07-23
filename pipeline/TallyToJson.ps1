@@ -39,8 +39,9 @@ param(
     [string]$IngestToken = "",           # shared secret; sent as x-ingest-token header
     [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
-    [switch]$DryRun                      # incremental: print the plan, don't pull detail or post
-)
+    [switch]$DryRun,                     # incremental: print the plan, don't pull detail or post
+    [int]$MinLedgers = 50                # safety floor: abort if the company returns fewer ledgers
+)                                        #   (means it isn't loaded in this Tally). Set 0 to disable.
 
 $ErrorActionPreference = "Stop"
 
@@ -389,6 +390,18 @@ foreach ($g in $gx.SelectNodes("//GROUP")) {
     $groupToParent[$name] = xval $g.PARENT
 }
 Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
+
+# ---- SAFETY: refuse to run if the company isn't really loaded -------------
+# A live CDC company has thousands of ledgers. If Tally returns only a handful,
+# the requested company is almost certainly NOT loaded in THIS Tally (wrong box,
+# wrong company name, or company closed). Continuing would push a near-empty
+# master and overwrite the good hierarchy in Mongo, breaking that branch's
+# dashboard. Abort loudly instead. Override with -MinLedgers 0 if you really do
+# have a tiny company.
+if ($ledgerToGroup.Count -lt $MinLedgers) {
+    Write-Warning ("Company '{0}' returned only {1} ledgers (< {2}). It is almost certainly NOT loaded in this Tally -- refusing to sync branch '{3}' so the good master/vouchers in Mongo are not overwritten with empty data. Load the correct company (or fix -Company / -Branch), or pass -MinLedgers 0 to override." -f $Company, $ledgerToGroup.Count, $MinLedgers, $Branch)
+    exit 2
+}
 
 # ---- party classification -------------------------------------------------
 # A ledger belongs in "party_ledgers" (vs "ledgers") when any group in its
