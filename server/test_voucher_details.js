@@ -120,6 +120,11 @@ function get(port, p) {
   assert(ds.length === 2, 'dataset returns both vouchers');
   assert(ds.every((v) => !('details' in v)), 'dataset strips details from every voucher');
   assert(ds.every((v) => v.ledgers !== undefined), 'dataset keeps ledger amounts');
+  // guid is retained so the drill-down can link each row to the exact voucher
+  // (Tally reuses voucher numbers across FYs — no+date alone is ambiguous).
+  assert(ds.every((v) => v.guid !== undefined), 'dataset keeps guid for the voucher link');
+  const jrnlDs = ds.find((v) => v.no === '443');
+  assert(jrnlDs && jrnlDs.guid === 'g-jrnl-1', 'dataset guid matches the stored voucher');
 
   // /api/voucher returns full detail.
   const one = (await get(port, '/api/voucher?branch=kol&no=CDC%2F2662%2F26-27')).body;

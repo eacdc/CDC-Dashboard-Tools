@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.3 (portal) — July 2026 — Drill-down View/PDF opens the correct voucher
+
+The drill-down's **View / PDF** buttons identified a voucher by `no + type + date`.
+Tally **reuses voucher numbers every financial year**, so a Journal shown for one
+date could open a *different* voucher carrying the same number from another year
+(e.g. clicking a June-2026 salary journal opened freight Journal #442 from Jul-2025).
+
+- `GET /api/dataset` now **keeps `guid`** on each voucher (still strips `_id`,
+  `branch`, `updatedAt`, `details`). It's the only unambiguous voucher id.
+- The drill-down row carries `guid`, and `voucherLink` now links by
+  `/voucher/?branch=&id=<guid>` when present, falling back to `no+type+date` only
+  when a guid is missing. Fixed in both `portal/index.html` and
+  `consolidated/index.html`.
+- Tests: `test_voucher_details.js` asserts the dataset keeps a matching `guid`;
+  `test_e2e_fake.js` updated (`guid` retained, other internal fields still stripped).
+
+---
+
 ## v2.2 (pipeline) — July 2026 — Invoice data-sync parity with the Tally print
 
 Branch `claude/invoice-data-sync-ep4ye1`. Closes the gap between the printed

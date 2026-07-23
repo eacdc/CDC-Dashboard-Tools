@@ -502,8 +502,13 @@ function DrillModal(props){
   // and we have branch + voucher no. to identify it.
   function voucherLink(r){
     if(!window.__cdcFromApi)return null;
-    if(!r.no||(r.branch!=='kol'&&r.branch!=='ahm'))return null;
+    if(r.branch!=='kol'&&r.branch!=='ahm')return null;
+    if(!r.guid&&!r.no)return null;
     var base=window.__cdcApiBase||'';
+    // Prefer the GUID: it is unique. Tally reuses voucher numbers every FY, so
+    // no+type+date can resolve to a different voucher (e.g. a Journal #442 from a
+    // prior year). Fall back to no+type+date only when the guid is unavailable.
+    if(r.guid)return base+'/voucher/?branch='+encodeURIComponent(r.branch)+'&id='+encodeURIComponent(r.guid);
     return base+'/voucher/?branch='+encodeURIComponent(r.branch)+
       '&no='+encodeURIComponent(r.no)+'&type='+encodeURIComponent(r.type||'')+
       '&date='+encodeURIComponent(r.date||'');
@@ -530,7 +535,7 @@ function DrillModal(props){
     for(var ln2 in (v.party_ledgers||{})){if(ln2===t.ledger){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
     if(foundIn){
       var dom=null,domAbs=0;for(var p in (v.party_ledgers||{})){var a=Math.abs(v.party_ledgers[p]);if(a>domAbs){domAbs=a;dom=p;}}
-      contributing.push({date:v.date,no:v.no||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
+      contributing.push({date:v.date,no:v.no||'',guid:v.guid||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
     }
   }
   // Sort

@@ -102,7 +102,8 @@ function get(port, p) {
   assert(full.vouchers.length === vouchers.length, 'all vouchers for full range');
   const s = full.vouchers[0];
   assert(s.date && s.type && s.ledgers !== undefined && s.party_ledgers !== undefined, 'voucher shape intact');
-  assert(s._id === undefined && s.guid === undefined && s.branch === undefined && s.updatedAt === undefined, 'internal fields stripped');
+  assert(s._id === undefined && s.branch === undefined && s.updatedAt === undefined, 'internal fields stripped');
+  assert(s.guid !== undefined, 'guid retained for the drill-down voucher link');
 
   const apr = (await get(port, '/api/dataset?from=20250401&to=20250430&branch=ahm')).body.branches.ahm.vouchers;
   console.log(`Apr-2025 only: ${apr.length}`);

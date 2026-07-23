@@ -86,7 +86,9 @@ app.get('/api/dataset', async (req, res) => {
               // `details` is excluded here to keep the dashboard payload small — the
               // dashboards only need the ledger amounts. Fetch the full voucher
               // (with details) on demand via /api/voucher for the printable view.
-              { projection: { _id: 0, branch: 0, guid: 0, updatedAt: 0, details: 0 } })
+              // `guid` IS kept: it's the only unambiguous voucher id (Tally reuses
+              // voucher numbers each FY), so the drill-down's View/PDF link uses it.
+              { projection: { _id: 0, branch: 0, updatedAt: 0, details: 0 } })
         .sort({ date: 1 })
         .toArray();
       out.branches[branch] = {
