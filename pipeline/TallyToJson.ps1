@@ -121,12 +121,32 @@ function Collect-Postings($node, $list) {
 # reprint a voucher exactly like Tally does. Every field degrades to "" / [] when
 # the node is absent, so a bare journal voucher just carries empty extras.
 # First non-empty of several candidate child tags (Tally spells fields several ways).
+# Tries a DIRECT child first (fast + unambiguous), then falls back to a DESCENDANT
+# anywhere in the voucher subtree. Many header fields (e-way bill, buyer's order,
+# delivery note) live nested inside *.LIST wrappers, so a direct-child-only lookup
+# silently returned "" for them -- that's why they were blank on the printed invoice.
 function xfirst($node, [string[]]$names) {
     foreach ($n in $names) {
         $c = $node.SelectSingleNode($n)
         if ($c) { $t = xval $c; if ($t) { return $t } }
     }
+    foreach ($n in $names) {
+        $c = $node.SelectSingleNode(".//$n")
+        if ($c) { $t = xval $c; if ($t) { return $t } }
+    }
     return ""
+}
+# Every non-empty descendant value across the candidate tags, in document order.
+# Duplicates are KEPT (two order rows can share a date -> "13 Jul 26, 13 Jul 26").
+function xall($node, [string[]]$names) {
+    $vals = New-Object System.Collections.ArrayList
+    foreach ($n in $names) {
+        foreach ($c in $node.SelectNodes(".//$n")) {
+            $t = xval $c
+            if ($t) { [void]$vals.Add($t) }
+        }
+    }
+    return $vals.ToArray()
 }
 # Collect the text of every child element under the first matching *.LIST wrapper
 # (used for multi-line address blocks). Returns a string array.
@@ -165,17 +185,43 @@ function Get-InventoryItems($v) {
             if ($m.Success) { $qtyNum = $m.Groups[1].Value; $qtyUnit = $m.Groups[2].Value.Trim() } else { $qtyNum = $qtyRaw }
         }
         $disc = xfirst $inv @("DISCOUNT")
+        # Build the full description block exactly like the Tally invoice prints it:
+        # stock item name, then any user description line(s), then the batch name.
+        # (These live nested under the inventory entry, hence xall's descendant scan.)
+        $descLines = New-Object System.Collections.ArrayList
+        if ($name) { [void]$descLines.Add($name) }
+        foreach ($u in (xall $inv @("BASICUSERDESCRIPTION","USERDESCRIPTION"))) { [void]$descLines.Add($u) }
+        $batch = xfirst $inv @("BATCHNAME")
+        if ($batch) { [void]$descLines.Add("Batch : " + $batch) }
+        $desc = ($descLines -join "`n")
         [void]$items.Add([ordered]@{
-            slNo = $i; description = $name; hsn = $hsn;
+            slNo = $i; description = $desc; hsn = $hsn;
             qty = $qtyNum; unit = $qtyUnit; rate = $rate;
             disc = $disc; amount = $amt
         })
     }
     return $items.ToArray()
 }
+# Buyer's order details are one row per referenced order, each in its own wrapper
+# (a sale can settle several quotations/orders). Pull them PAIRED so order No. N
+# lines up with order Date N, then join with ", " for the invoice's two columns.
+function Get-BuyerOrders($v) {
+    $nos = New-Object System.Collections.ArrayList
+    $dts = New-Object System.Collections.ArrayList
+    foreach ($wrap in @("INVOICEORDERLIST.LIST","BASICORDERDATES.LIST")) {
+        foreach ($ord in $v.SelectNodes(".//$wrap")) {
+            $on = xfirst $ord @("BASICPURCHASEORDERNO","BASICORDERREF")
+            $od = xfirst $ord @("BASICORDERDATE")
+            if ($on -or $od) { [void]$nos.Add($on); [void]$dts.Add($od) }
+        }
+        if ($nos.Count -gt 0) { break }
+    }
+    return @{ no = ($nos -join ", "); date = ($dts -join ", ") }
+}
 # Everything except the ledger amounts. Best-effort on the metadata tags (Tally
 # names them inconsistently across versions); guaranteed on inventory + narration.
 function Get-VoucherDetails($v) {
+    $orders = Get-BuyerOrders $v
     return [ordered]@{
         narration      = xfirst $v @("NARRATION")
         reference      = xfirst $v @("REFERENCE","BASICORDERREF")
@@ -187,6 +233,10 @@ function Get-VoucherDetails($v) {
         partyAddress   = xaddress $v @("BASICBUYERADDRESS.LIST","LEDGERMAILINGADDRESS.LIST")
         partyState     = xfirst $v @("PARTYSTATENAME","STATENAME","CONSIGNEESTATENAME")
         placeOfSupply  = xfirst $v @("PLACEOFSUPPLY")
+        # buyer contact (printed under the Bill-to block)
+        contactName    = xfirst $v @("BASICBUYERCONTACTPERSON","CONTACTPERSON","LEDGERCONTACT")
+        contactEmail   = xfirst $v @("CONSIGNEEEMAILID","EMAIL","LEDGEREMAIL","BASICBUYEREMAIL")
+        contactMobile  = xfirst $v @("CONSIGNEEMOBILENO","BASICBUYERMOBILENO","LEDGERMOBILE","PHONENUMBER","MOBILENO")
         # consignee (ship-to)
         consigneeName  = xfirst $v @("CONSIGNEEMAILINGNAME","BASICBUYERNAME")
         consigneeGstin = xfirst $v @("CONSIGNEEGSTIN","PARTYGSTIN")
@@ -202,8 +252,8 @@ function Get-VoucherDetails($v) {
         vehicleNo        = xfirst $v @("BASICSHIPVESSELNO","VEHICLENUMBER","MOTORVEHICLENO")
         termsOfPayment   = xfirst $v @("BASICDUEDATEOFPYMT","TERMSOFPAYMENT")
         termsOfDelivery  = xfirst $v @("BASICORDERTERMS","TERMSOFDELIVERY")
-        buyersOrderNo    = xfirst $v @("BASICPURCHASEORDERNO","BASICORDERREF")
-        buyersOrderDate  = xfirst $v @("BASICORDERDATE")
+        buyersOrderNo    = $orders.no
+        buyersOrderDate  = $orders.date
         # e-invoice
         irn      = xfirst $v @("IRN","IRNNUM")
         ackNo    = xfirst $v @("ACKNO","IRNACKNO")

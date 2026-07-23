@@ -70,9 +70,11 @@ function get(port, p) {
     party_ledgers: { 'Aakriti Art Gallery Pvt Ltd': -162604 },
     details: {
       partyGstin: '19AAICA7555R1ZQ', ewayBillNo: '811714091343', narration: '',
+      deliveryNote: '2678', buyersOrderNo: 'Qtn. No. 6645.2, Qtn. No. 6720.1', buyersOrderDate: '20260713, 20260713',
+      contactName: 'Vikram Bachawat', contactEmail: 'aakritiartgallery@yahoo.com', contactMobile: '9830411111',
       partyAddress: ['Orbit Enclave, 1st Floor', '12/3A, Hungerford Street', ''],
       badField: 'should be dropped',
-      items: [{ slNo: 1, description: 'Magazine', hsn: '49119990', qty: '200', unit: 'Pcs', rate: '655', amount: 131000, junk: 'x' }],
+      items: [{ slNo: 1, description: 'OTHER PRINTED MATERIALS HSN 49119990 GST 18%\nMagazine Art Insights\nBatch : Primary Batch', hsn: '49119990', qty: '200', unit: 'Pcs = 200.000 Kgs', rate: '655.00/Pcs', amount: 131000, junk: 'x' }],
     },
   };
   const journal = {
@@ -87,6 +89,12 @@ function get(port, p) {
   const storedInv = fakeDb.collection('vouchers').docs.find((d) => d.no === 'CDC/2662/26-27');
   const storedJrnl = fakeDb.collection('vouchers').docs.find((d) => d.no === '443');
   assert(storedInv.details && storedInv.details.partyGstin === '19AAICA7555R1ZQ', 'invoice details persisted');
+  assert(storedInv.details.deliveryNote === '2678', 'delivery note persisted');
+  assert(storedInv.details.buyersOrderNo === 'Qtn. No. 6645.2, Qtn. No. 6720.1', 'buyer order no persisted');
+  assert(storedInv.details.buyersOrderDate === '20260713, 20260713', 'buyer order date (paired) persisted');
+  assert(storedInv.details.contactName === 'Vikram Bachawat', 'buyer contact name persisted');
+  assert(storedInv.details.contactEmail === 'aakritiartgallery@yahoo.com', 'buyer contact email persisted');
+  assert(storedInv.details.contactMobile === '9830411111', 'buyer contact mobile persisted');
   assert(!('badField' in storedInv.details), 'unknown detail field dropped by sanitizer');
   assert(!('junk' in storedInv.details.items[0]), 'unknown item field dropped by sanitizer');
   assert(storedInv.details.partyAddress.length === 2, 'blank address lines filtered');

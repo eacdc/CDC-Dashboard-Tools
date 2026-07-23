@@ -123,6 +123,24 @@ function fmtDate(ymd){ // 20260715 -> "15 Jul 26"
   if(/^\d{8}$/.test(s)) return (+s.slice(6,8))+" "+MONTHS[(+s.slice(4,6))-1]+" "+s.slice(2,4);
   return s;
 }
+function fmtDates(s){ // "20260713, 20260713" -> "13 Jul 26, 13 Jul 26" (keeps count, incl. dups)
+  return String(s==null?"":s).split(",").map(function(x){return fmtDate(x.trim());})
+    .filter(function(x){return x!=="";}).join(", ");
+}
+// Tally exports a rate as "655.00/Pcs"; the invoice shows just the number ("655").
+function fmtRate(r){
+  var s=String(r==null?"":r); var m=s.match(/-?\d[\d,]*(\.\d+)?/); if(!m) return s;
+  var n=parseFloat(m[0].replace(/,/g,"")); if(isNaN(n)) return s;
+  return String(n); // "655.00/Pcs" -> "655", "12.50/Kg" -> "12.5"
+}
+// Tally quantity carries a dual unit as "Pcs = 200.000 Kgs". The "per" column and the
+// quantity's primary unit are the part before "="; the remainder is the alternate qty.
+function splitUnit(unitRaw){
+  var u=String(unitRaw==null?"":unitRaw);
+  var prim=u.split("=")[0].trim();
+  var alt=""; var m=u.match(/=\s*(.+)$/); if(m) alt=m[1].trim();
+  return {unit:prim, alt:alt};
+}
 function fmtIN(n){ // Indian grouping, 2 dp, blank for 0
   n=Number(n)||0; if(n===0) return "";
   var neg=n<0; n=Math.abs(n);
@@ -199,7 +217,7 @@ function renderInvoice(v){
   var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{}, t=computeTax(v);
   var items=d.items||[]; var totQty=0; items.forEach(function(it){totQty+=Number(it.qty)||0;});
   var einv = d.irn ? '<div class="einv">e-Invoice &nbsp; IRN : '+esc(d.irn)+
-       (d.ackNo?' &nbsp; Ack No. : '+esc(d.ackNo):'')+(d.ackDate?' &nbsp; Ack Date : '+esc(d.ackDate):'')+'</div>' : '';
+       (d.ackNo?' &nbsp; Ack No. : '+esc(d.ackNo):'')+(d.ackDate?' &nbsp; Ack Date : '+esc(fmtDate(d.ackDate)):'')+'</div>' : '';
 
   function metaCell(label,val){return '<td><span class="lbl">'+label+'</span><span class="val">'+esc(val||'-')+'</span></td>';}
   var meta='<table class="meta mt6"><tr>'+
@@ -207,36 +225,44 @@ function renderInvoice(v){
       metaCell('Delivery Note', d.deliveryNote)+ metaCell('Mode/Terms of Payment', d.termsOfPayment)+
     '</tr><tr>'+
       metaCell("Supplier's Ref.", d.reference)+ metaCell("Buyer's Order No.", d.buyersOrderNo)+
-      metaCell('Dated', d.buyersOrderDate?fmtDate(d.buyersOrderDate):d.buyersOrderDate)+ metaCell('e-Way Bill No.', d.ewayBillNo)+
+      metaCell('Dated', d.buyersOrderDate?fmtDates(d.buyersOrderDate):d.buyersOrderDate)+ metaCell('e-Way Bill No.', d.ewayBillNo)+
     '</tr><tr>'+
       metaCell('Despatched through', d.despatchedThrough)+ metaCell('Destination', d.destination)+
       metaCell('Motor Vehicle No.', d.vehicleNo)+ metaCell('Terms of Delivery', d.termsOfDelivery)+
     '</tr></table>';
 
-  function partyBox(title,name,addr,gstin,state){
+  function partyBox(title,name,addr,gstin,state,contact){
+    var c=contact||{};
+    var cLines=
+      (c.name?'<div><span class="lbl">Contact Name</span>'+esc(c.name)+'</div>':'')+
+      (c.email?'<div><span class="lbl">Email</span>'+esc(c.email)+'</div>':'')+
+      (c.mobile?'<div><span class="lbl">Mobile no.</span>'+esc(c.mobile)+'</div>':'');
     return '<div class="b party" style="padding:7px 9px">'+
       '<span class="lbl">'+title+'</span>'+
       '<div class="pname">'+esc(name||'-')+'</div>'+
       '<div class="paddr">'+(addr||[]).map(esc).join('<br>')+'</div>'+
       (gstin?'<div class="mt6"><span class="lbl">GSTIN/UIN</span>'+esc(gstin)+'</div>':'')+
-      (state?'<div><span class="lbl">State</span>'+esc(state)+'</div>':'')+'</div>';
+      (state?'<div><span class="lbl">State</span>'+esc(state)+'</div>':'')+
+      (cLines?'<div class="mt6">'+cLines+'</div>':'')+'</div>';
   }
+  var contact={name:d.contactName, email:d.contactEmail, mobile:d.contactMobile};
   var buyer = partyBox('Buyer (Bill to)', d.partyMailName||d.partyName||v.party,
-      d.partyAddress, d.partyGstin, d.partyState);
+      d.partyAddress, d.partyGstin, d.partyState, contact);
   var consignee = partyBox('Consignee (Ship to)', d.consigneeName||d.partyMailName||v.party,
       (d.consigneeAddr&&d.consigneeAddr.length?d.consigneeAddr:d.partyAddress),
       d.consigneeGstin||d.partyGstin, d.consigneeState||d.partyState);
   var pos = d.placeOfSupply?'<div class="b mt6" style="padding:5px 9px"><span class="lbl">Place of Supply</span><span class="val">'+esc(d.placeOfSupply)+'</span></div>':'';
 
   var rows=items.map(function(it){
-    var sub=it.hsn?'<div class="subhead">HSN/SAC: '+esc(it.hsn)+'</div>':'';
+    var u=splitUnit(it.unit);
+    var qtyCell=esc(fmtQty(it.qty))+(u.unit?' '+esc(u.unit):'')+(u.alt?' ('+esc(u.alt)+')':'');
     return '<tr>'+
       '<td class="center">'+esc(it.slNo||'')+'</td>'+
-      '<td class="desc">'+esc(it.description||'')+sub+'</td>'+
+      '<td class="desc">'+esc(it.description||'')+'</td>'+
       '<td class="center">'+esc((it.hsn||'').replace(/\s*GST.*/i,'').trim())+'</td>'+
-      '<td class="num">'+esc(fmtQty(it.qty))+(it.unit?' '+esc(it.unit):'')+'</td>'+
-      '<td class="num">'+esc(it.rate||'')+'</td>'+
-      '<td class="center">'+esc(it.unit||'')+'</td>'+
+      '<td class="num">'+qtyCell+'</td>'+
+      '<td class="num">'+esc(fmtRate(it.rate))+'</td>'+
+      '<td class="center">'+esc(u.unit||it.unit||'')+'</td>'+
       '<td class="num">'+(it.disc?esc(it.disc):'')+'</td>'+
       '<td class="num">'+fmtIN(it.amount)+'</td></tr>';
   }).join('');
@@ -410,21 +436,24 @@ var DEMO_INVOICE={
   ledgers:{"Sale - Printing":137800,"Output CGST":12402,"Output SGST":12402},
   party_ledgers:{"Aakriti Art Gallery Pvt Ltd":-162604},
   details:{
+    // Values are stored exactly as Tally exports them; the renderer formats/normalises
+    // (raw date -> "15 Jul 26", "655.00/Pcs" -> "655", "Pcs = 200.000 Kgs" -> "Pcs").
     irn:"639b10aa578562519e6f438e0618cf5ddf5744ff103c3e8c8db4357b440986b7",
-    ackNo:"182623151669776", ackDate:"15 Jul 26",
+    ackNo:"182623151669776", ackDate:"20260715",
     reference:"J04201", termsOfPayment:"60 Days",
-    deliveryNote:"2678", ewayBillNo:"811714091343", vehicleNo:"WB03D6774",
-    buyersOrderNo:"Qtn. No. 6645.2, Qtn. No. 6720.1", buyersOrderDate:"20260713",
+    deliveryNote:"2678", deliveryNoteDate:"20260715", ewayBillNo:"811714091343", vehicleNo:"WB03D6774",
+    buyersOrderNo:"Qtn. No. 6645.2, Qtn. No. 6720.1", buyersOrderDate:"20260713, 20260713",
     destination:"Kolkata-700017", placeOfSupply:"West Bengal",
     partyName:"Aakriti Art Gallery Pvt Ltd", partyMailName:"Aakriti Art Gallery Pvt Ltd",
     partyGstin:"19AAICA7555R1ZQ", partyState:"West Bengal, Code: 19",
     partyAddress:["Orbit Enclave, 1st Floor","12/3A, Hungerford Street","Kolkata - 700 017.","Pincode : 700017"],
+    contactName:"Vikram Bachawat", contactEmail:"aakritiartgallery@yahoo.com", contactMobile:"9830411111",
     consigneeName:"Aakriti Art Gallery Pvt Ltd", consigneeGstin:"19AAICA7555R1ZQ",
     consigneeState:"West Bengal, Code: 19",
     consigneeAddr:["Orbit Enclave, 1st Floor","12/3A, Hungerford Street","Kolkata - 700 017.","Pincode : 700017"],
     items:[
-      {slNo:1,description:"Magazine Art Insights (OFFSET PRINT)\nBatch: Primary Batch",hsn:"49119990 GST 18%",qty:"200",unit:"Pcs",rate:"655",disc:"",amount:131000},
-      {slNo:2,description:"Letterhead (DIGITAL PRINT)\nBatch: Primary Batch",hsn:"48201020 GST 18%",qty:"200",unit:"Pcs",rate:"34",disc:"",amount:6800}
+      {slNo:1,description:"OTHER PRINTED MATERIALS HSN 49119990 GST 18%\nMagazine Art Insights\nOFFSET PRINT\nBatch : Primary Batch",hsn:"49119990 GST 18%",qty:"200",unit:"Pcs = 200.000 Kgs",rate:"655.00/Pcs",disc:"",amount:131000},
+      {slNo:2,description:"LETTER HEAD HSN 48201020 GST 18%\nLetterhead\nDIGITAL PRINT\nBatch : Primary Batch",hsn:"48201020 GST 18%",qty:"200",unit:"Pcs = 200.000 Kgs",rate:"34.00/Pcs",disc:"",amount:6800}
     ]
   }
 };

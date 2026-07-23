@@ -22,6 +22,7 @@ function contentHash(v) {
 const DETAIL_SCALARS = [
   'narration', 'reference', 'refDate',
   'partyGstin', 'partyName', 'partyMailName', 'partyState', 'placeOfSupply',
+  'contactName', 'contactEmail', 'contactMobile',
   'consigneeName', 'consigneeGstin', 'consigneeState',
   'deliveryNote', 'deliveryNoteDate', 'despatchDocNo', 'despatchedThrough',
   'destination', 'ewayBillNo', 'vehicleNo', 'termsOfPayment', 'termsOfDelivery',

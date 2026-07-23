@@ -1,5 +1,45 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.2 (pipeline) — July 2026 — Invoice data-sync parity with the Tally print
+
+Branch `claude/invoice-data-sync-ep4ye1`. Closes the gap between the printed
+invoice (`/voucher/`) and the reference Tally invoice: fields that were blank or
+mis-formatted on CDC/2662/26-27 now match exactly.
+
+### Extractor (`pipeline/TallyToJson.ps1`)
+- `xfirst` now falls back to a **descendant** search when the direct child is
+  absent. Header fields like **e-way bill no.**, **buyer's order no./date** and
+  **delivery note** live nested inside `*.LIST` wrappers, so the old direct-child-only
+  lookup returned `""` for them — that's why they printed as `-`.
+- New `xall` (every descendant value, duplicates kept) + `Get-BuyerOrders`, which
+  pulls buyer orders **paired** — order No. N lined up with order Date N across the
+  `INVOICEORDERLIST.LIST` rows — so a multi-order sale prints
+  `Qtn. No. 6645.2, Qtn. No. 6720.1` against `13 Jul 26, 13 Jul 26`.
+- Line-item **description** is now the full Tally block: stock item name + user
+  description line(s) (`BASICUSERDESCRIPTION`) + **batch** (`BATCHNAME`), e.g.
+  `OTHER PRINTED MATERIALS… / Magazine Art Insights / OFFSET PRINT / Batch : Primary Batch`.
+- Captures buyer **contact name / email / mobile** (printed under the Bill-to block).
+
+### API (`server/ingest.js`)
+- `cleanDetails` whitelist gains `contactName`, `contactEmail`, `contactMobile`.
+
+### Printable voucher (`voucher/index.html`)
+- **Ack Date** and **Buyer's Order date(s)** are now formatted (`20260715` →
+  `15 Jul 26`; comma lists handled, duplicates preserved).
+- Line **Rate** is normalised (`655.00/Pcs` → `655`) and the **per** column shows the
+  primary unit only; the dual-unit tail (`Pcs = 200.000 Kgs`) renders as the
+  alternate quantity beside the billed qty (`200 Pcs (200.000 Kgs)`).
+- Buyer contact block rendered; the redundant `HSN/SAC:` sub-line under the
+  description (already its own column) removed.
+- `DEMO_INVOICE` updated to raw Tally-shaped values so `/voucher/?demo=invoice`
+  reproduces the reference invoice exactly and acts as a visual regression fixture.
+
+### Tests
+- `server/test_voucher_details.js` asserts delivery note, paired buyer order
+  no/date, and the three contact fields survive the sanitizer round-trip. All green.
+
+---
+
 ## v2.1 (pipeline) — July 2026 — Full voucher detail + printable invoice/journal PDF
 
 Branch `claude/voucher-details-completeness-ne9ejq`. Captures the *whole* voucher
