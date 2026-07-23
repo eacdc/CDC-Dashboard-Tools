@@ -13,8 +13,11 @@ REM      enough for incremental; it needs the /sync endpoint.)
 REM   3. The task runs while a user is logged on (Tally needs the interactive
 REM      session).
 REM
+REM   4. This box syncs only the branch whose company is loaded. Pass it via the
+REM      CDC_BRANCHES env var (e.g. set CDC_BRANCHES=kol) or an arg: run_sync.bat -Branches kol
+REM
 REM Register a 30-minute repeating task (run once in an ADMIN shell, fix the path):
 REM   schtasks /Create /TN "CDC_Tally_Sync_30min" /SC MINUTE /MO 30 /F ^
-REM     /TR "\"C:\path\to\pipeline\run_sync.bat\""
+REM     /TR "\"C:\path\to\pipeline\run_sync.bat\" -Branches kol"
 REM ---------------------------------------------------------------------------
 powershell -ExecutionPolicy Bypass -NoProfile -File "%~dp0run_daily.ps1" -Incremental %*

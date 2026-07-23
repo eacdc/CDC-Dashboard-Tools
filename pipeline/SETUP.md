@@ -119,15 +119,31 @@ both branches).
 - Tally **open** with the company loaded, gateway on `9001`.
 - `CDC_INGEST_URL` (+ optional `CDC_INGEST_TOKEN`) set as a **machine/user env var**
   so the scheduled task inherits it. Incremental needs the hosted API's `/sync`
-  endpoint — `MONGODB_URI` alone is **not** enough for incremental.
+  endpoint — `MONGODB_URI` alone is **not** enough for incremental. (If the run log
+  says *"Incremental requires -IngestUrl … falling back to full pull"* and
+  *"mode=files … NOT pushed"*, this env var is missing — that is the #1 cause of a
+  stale sync.)
 - A user is **logged on** (Tally needs the interactive session).
+
+**One branch per machine.** Each Tally box only has its own company loaded, so
+sync only that branch from it — set `CDC_BRANCHES` (or pass `-Branches`):
+
+```powershell
+setx CDC_BRANCHES kol      # on the Kolkata box   (setx ahm on the Ahmedabad box)
+```
+
+Pulling the other branch from the wrong box returns ~empty ("Ledgers : 1 … 0
+vouchers") and just wastes a request. `run_daily.ps1` defaults to both branches
+for backwards compatibility, so on a single-branch box you **must** scope it.
 
 **Register the task** (run once in an *Administrator* PowerShell; fix the path):
 
 ```powershell
 schtasks /Create /TN "CDC_Tally_Sync_30min" /SC MINUTE /MO 30 /F `
-  /TR "\"C:\path\to\CDC-Dashboard-Tools\pipeline\run_sync.bat\""
+  /TR "\"C:\path\to\CDC-Dashboard-Tools\pipeline\run_sync.bat\" -Branches kol"
 ```
+(use `-Branches ahm` on the Ahmedabad box; omit it only if one Tally has BOTH
+companies loaded.)
 
 Or via the GUI: Task Scheduler → Create Task → **Triggers** → New → *On a schedule*,
 **Repeat task every 30 minutes** for a duration of **Indefinitely** → **Actions** →

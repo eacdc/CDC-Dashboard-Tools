@@ -26,8 +26,9 @@ param(
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
     [string]$TallyUrl  = "http://localhost:9001",
     [string]$IngestUrl   = $env:CDC_INGEST_URL,     # falls back to the env var
-    [string]$IngestToken = $env:CDC_INGEST_TOKEN
-)
+    [string]$IngestToken = $env:CDC_INGEST_TOKEN,
+    [string]$Branches    = "kol,ahm"                # which branch(es) THIS machine syncs (e.g. "kol").
+)                                                   #   Each Tally box should sync only the company it has loaded.
 
 $ErrorActionPreference = "Stop"
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -44,6 +45,14 @@ $branches = @(
     @{ Branch = 'kol'; Company = 'CDC PRINTERS 2025-26' }
     @{ Branch = 'ahm'; Company = 'CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26' }
 )
+# Keep only the branch(es) this machine is responsible for. Each Tally box only
+# has ITS OWN company loaded; pulling the other branch here returns ~empty and
+# just wastes a request (and, if it returned data, could clash with the box that
+# owns it). Set -Branches / CDC_BRANCHES to "kol" on the Kol box, "ahm" on Ahm.
+if ($env:CDC_BRANCHES) { $Branches = $env:CDC_BRANCHES }
+$want = @($Branches.ToLower() -split '[,;\s]+' | Where-Object { $_ })
+$branches = @($branches | Where-Object { $want -contains $_.Branch })
+if ($branches.Count -eq 0) { throw "No valid branch in -Branches '$Branches' (expected kol and/or ahm)." }
 
 $to   = (Get-Date)
 $from = $to.AddDays(-1 * [math]::Max(0, $TrailingDays - 1))
@@ -61,7 +70,7 @@ $mode = if ($ingestUrl) { 'api' } elseif ($hasNode -and $mongoUri) { 'loader' } 
 # entries/edits/deletions anywhere in that window are caught -- needs the API.
 if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
 
-Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}" -f $FromDate, $ToDate, $mode, [bool]$Incremental)
+Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, ($branches | ForEach-Object { $_.Branch }) -join ',')
 
 foreach ($b in $branches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
