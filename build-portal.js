@@ -110,6 +110,8 @@ function Portal(){
 
   function go(){
     setErr(null);setLd(true);
+    // File-upload mode: no live API, so the per-voucher View/PDF link is unavailable.
+    try{window.__cdcFromApi=false;}catch(e){}
     var need=['kolHier','ahmHier','kolVouch','ahmVouch'];
     for(var i=0;i<need.length;i++){if(!files[need[i]]){setErr('Please upload all four JSON files (Kol + Ahm hierarchy & vouchers).');setLd(false);return;}}
     var keys=['kolHier','ahmHier','kolVouch','ahmVouch','kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
@@ -129,6 +131,9 @@ function Portal(){
   function goMongo(){
     setErr(null);setLd(true);
     var base=(apiBase||'').replace(/\\/+$/,'');
+    // API-backed: remember the base so the drill-down can link each voucher to
+    // its printable invoice/journal at <base>/voucher/ (enables View/PDF buttons).
+    try{window.__cdcFromApi=true;window.__cdcApiBase=base;}catch(e){}
     var url=base+'/api/dataset?from='+ymdP(fromD)+'&to='+ymdP(toD)+'&branch=all';
     var bkeys=['kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
     var billProms=bkeys.map(function(k){if(files[k])return files[k].text();if(cachedTexts[k])return Promise.resolve(cachedTexts[k]);return Promise.resolve(null);});
