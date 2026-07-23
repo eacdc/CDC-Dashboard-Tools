@@ -114,6 +114,9 @@ function vchKey(v){
   var amts=[];for(var ln in (v.ledgers||{}))amts.push(ln+':'+v.ledgers[ln]);amts.sort();
   return 'C:'+v.date+'|'+v.type+'|'+amts.join('|');
 }
+// Human-facing invoice / voucher number (as printed on the Tally voucher). Empty when the
+// source data carries no explicit number (composite-keyed vouchers).
+function vchNo(v){var n=v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref;return n==null?'':String(n);}
 // monthKey: year-aware bin index. startFY is the FY-start year for bucket 0.
 // e.g. startFY=2025 → Apr-2025 = 0, Mar-2026 = 11, Apr-2026 = 12, Mar-2027 = 23.
 function monthKey(ds,startFY){var y=parseInt(ds.substring(0,4)),m=parseInt(ds.substring(4,6));var fy=m>=4?y:y-1;return(fy-startFY)*12+((m-4+12)%12);}
@@ -169,7 +172,7 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
     if(__isSP&&__primaryAcct){var __dp=__domParty(v.party_ledgers||{});
       var __sideTag=Math.abs(__revAmt)>=Math.abs(__purchAmt)?'sale':'purchase';
       __invTypeCounts[v.type]=(__invTypeCounts[v.type]||0)+1;
-      invoiceList.push({key:__key,date:v.date,type:v.type,side:__sideTag,party:__dp||'(none)',primaryAccount:__primaryAcct,overrideAccount:__ovrAcct,amount:__invoiceAmt,overridden:!!__ovrAcct});}
+      invoiceList.push({key:__key,invNo:vchNo(v),date:v.date,type:v.type,side:__sideTag,party:__dp||'(none)',primaryAccount:__primaryAcct,overrideAccount:__ovrAcct,amount:__invoiceAmt,overridden:!!__ovrAcct});}
     // Also check party_ledgers for P&L items (some expenses may be there)
     for(var ln in v.party_ledgers){if(ibLedgers[ln])continue;var cat2=classify(ln,xd,lu,ovr);if(cat2!=='excluded'){if(!plData[cat2])plData[cat2]={};if(!plData[cat2][ln])plData[cat2][ln]=Array(monthCount).fill(0);plData[cat2][ln][mi]+=v.party_ledgers[ln];}}
   }
@@ -253,15 +256,41 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   // invoiceList was built in-place during the voucher loop above. Sort by descending abs(amount)
   // so the biggest invoices float to the top of the audit table.
   invoiceList.sort(function(a,b){return Math.abs(b.amount)-Math.abs(a.amount);});
+  // Ledger/party name (lowercased) -> list of invoice numbers (lowercased) booked against it.
+  // Powers "search by invoice number": typing a number expands the account/party that carries it.
+  // Built from EVERY voucher (not only sale/purchase invoices): map each ledger / party name
+  // touched by a voucher to that voucher's number, so a number search expands whatever account
+  // or party carries it. Uses the same (branch- and FY-filtered) voucher set shown on screen.
+  var invLedgerIndex={};
+  function __idxAdd(nm,no){if(!nm||!no)return;var k=(''+nm).toLowerCase();if(!invLedgerIndex[k])invLedgerIndex[k]=[];if(invLedgerIndex[k].indexOf(no)<0)invLedgerIndex[k].push(no);}
+  for(var __xi=0;__xi<vouchers.length;__xi++){var __xv=vouchers[__xi];var __no=vchNo(__xv).toLowerCase();if(!__no)continue;
+    for(var __xl in (__xv.ledgers||{}))__idxAdd(__xl,__no);
+    for(var __xp in (__xv.party_ledgers||{}))__idxAdd(__xp,__no);}
+  // Also index the resolved primary/override account for sale/purchase invoices, so remapped
+  // invoices stay findable under the account they were routed to.
+  invoiceList.forEach(function(r){if(!r.invNo)return;var no=(''+r.invNo).toLowerCase();__idxAdd(r.primaryAccount,no);__idxAdd(r.overrideAccount,no);__idxAdd(r.party,no);});
   var availableAccounts={sale:Object.keys(availSale).sort(),purchase:Object.keys(availPurch).sort()};
   // Diagnostic: which voucher types contributed to the invoice list, how many per account
-  try{var __byAcct={};invoiceList.forEach(function(r){var k=r.primaryAccount;if(!__byAcct[k])__byAcct[k]={count:0,total:0};__byAcct[k].count++;__byAcct[k].total+=r.amount;});window.__invoiceDebug={voucherTypes:__invTypeCounts,invoiceCount:invoiceList.length,byPrimaryAccount:__byAcct,availableAccounts:availableAccounts};console.log('%c[Invoice Debug]','color:#0891b2;font-weight:bold','window.__invoiceDebug',window.__invoiceDebug);}catch(e){}
+  try{var __byAcct={};invoiceList.forEach(function(r){var k=r.primaryAccount;if(!__byAcct[k])__byAcct[k]={count:0,total:0};__byAcct[k].count++;__byAcct[k].total+=r.amount;});var __idxKeys=Object.keys(invLedgerIndex);var __numbered=0;for(var __vc=0;__vc<vouchers.length;__vc++){if(vchNo(vouchers[__vc]))__numbered++;}var __sampleNos=[];for(var __sk=0;__sk<__idxKeys.length&&__sampleNos.length<8;__sk++){var __sa=invLedgerIndex[__idxKeys[__sk]];for(var __sj=0;__sj<__sa.length&&__sampleNos.length<8;__sj++)__sampleNos.push(__sa[__sj]);}window.__invoiceDebug={voucherTypes:__invTypeCounts,invoiceCount:invoiceList.length,byPrimaryAccount:__byAcct,availableAccounts:availableAccounts,indexedLedgers:__idxKeys.length,vouchersWithNumber:__numbered,totalVouchers:vouchers.length,sampleInvoiceNos:__sampleNos};console.log('%c[Invoice Debug]','color:#0891b2;font-weight:bold','window.__invoiceDebug',window.__invoiceDebug);}catch(e){}
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
-  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
+  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
 
 function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
 var expandRegistry={};function regKey(p,n,i){return p+'|'+n+'_'+i;}
+// Set (as a lookup object) of lowercased ledger/party names whose invoice numbers match the
+// current search term. Rebuilt in Dash on every render; read by nodeMatchesSearch below.
+var INV_MATCH=null;
+// True when a node — or any group/ledger nested beneath it, at any depth — matches the search
+// term, either by name or by an invoice number booked against that ledger (via INV_MATCH).
+function nodeMatchesSearch(n,sl){
+  if(!n)return false;
+  if(n.name&&n.name.toLowerCase().indexOf(sl)>=0)return true;
+  if(INV_MATCH&&n.name&&INV_MATCH[n.name.toLowerCase()])return true;
+  if(n.children)for(var i=0;i<n.children.length;i++)if(nodeMatchesSearch(n.children[i],sl))return true;
+  if(n.ledgers)for(var j=0;j<n.ledgers.length;j++)if(nodeMatchesSearch(n.ledgers[j],sl))return true;
+  return false;
+}
 function sortNodes(nodes,byVal){if(!nodes)return nodes;var s=nodes.slice();if(byVal)s.sort(function(a,b){return Math.abs(b.monthly.reduce(function(s,v){return s+v;},0))-Math.abs(a.monthly.reduce(function(s,v){return s+v;},0));});else s.sort(function(a,b){return a.name.localeCompare(b.name);});return s;}
 function exportToExcel(data,view,months,sortV,openState){var rows=[];var header=['Particulars'].concat(months).concat(['TOTAL']);function addSec(label,tree,pre){rows.push([label]);walk(sortNodes(tree,sortV),1,pre);}function walk(nodes,ind,pre){for(var i=0;i<nodes.length;i++){var n=nodes[i];var p='';for(var x=0;x<ind;x++)p+='  ';var row=[p+n.name];var t=0;for(var m=0;m<n.monthly.length;m++){row.push(n.monthly[m]);t+=n.monthly[m];}row.push(Math.round(t*100)/100);rows.push(row);var k=regKey(pre,n.name,i);if(openState[k]){if(n.children)walk(sortNodes(n.children,sortV),ind+1,k);if(n.ledgers)walk(sortNodes(n.ledgers,sortV),ind+1,k);}}}function addTot(label,mo){var row=[label];var t=0;for(var i=0;i<mo.length;i++){row.push(mo[i]);t+=mo[i];}row.push(Math.round(t*100)/100);rows.push(row);}if(view==='pl'){var pl=data.pl;addSec('REVENUE',pl.revTree,'pl_rev');addTot('Total Revenue',pl.revM);rows.push([]);addSec('PURCHASES',pl.purchTree,'pl_pur');addTot('Total Purchases',pl.purchM);rows.push([]);addSec('DIRECT EXPENSES',pl.dirExpTree,'pl_de');addTot('Total Direct Exp',pl.dirExpM);rows.push([]);addTot('STOCK CHANGE',pl.stockM);addTot('GROSS PROFIT',pl.gpM);rows.push([]);addSec('INDIRECT EXPENSES',pl.indExpTree,'pl_ie');addTot('Total Indirect Exp',pl.indExpM);rows.push([]);addTot('NET PROFIT',pl.npM);}else{var cf=data.cf;addSec('INFLOWS',cf.inTree,'cf_in');addTot('Total Inflows',cf.inM);rows.push([]);addSec('OUTFLOWS',cf.outTree,'cf_out');addTot('Total Outflows',cf.outM);rows.push([]);addTot('NET CASHFLOW',cf.netM);}var ws=XLSX.utils.aoa_to_sheet([header].concat(rows));ws['!cols']=[{wch:40}];for(var i=0;i<months.length+1;i++)ws['!cols'].push({wch:14});var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,view==='pl'?'P&L':'Cashflow');XLSX.writeFile(wb,'CDC_Consolidated_'+view+'.xlsx');}
 function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
@@ -272,7 +301,7 @@ var cells=[e('div',{key:'n',onClick:clickName,style:{padding:'9px 12px 9px '+(14
 for(var i=0;i<node.monthly.length;i++){var __mv=node.monthly[i];cells.push(e('div',{key:'m'+i,className:'num',onClick:canDrill&&__mv!==0?clickMonth(i):null,style:{padding:'9px 10px',textAlign:'right',fontSize:'13px',fontWeight:isL?400:500,color:__mv===0?'var(--dimnum)':isL?'var(--text2)':'var(--text)',borderRight:'1px solid var(--border)',cursor:canDrill&&__mv!==0?'pointer':'default'}},fmt(__mv)));}
 cells.push(e('div',{key:'t',className:'num',onClick:canDrill?clickName:null,style:{padding:'9px 12px 9px 10px',textAlign:'right',fontSize:'13px',fontWeight:600,color:total===0?'var(--dimnum)':'var(--text)',background:'var(--totalBg)',cursor:canDrill?'pointer':'default'}},fmt(total)));
 return e('div',{onMouseEnter:function(ev){ev.currentTarget.style.background='var(--rowHover)';},onMouseLeave:function(ev){ev.currentTarget.style.background='transparent';},style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)'}},cells);}
-function TreeRows(props){var nodes=sortNodes(props.nodes,props.sortByValue),mc=props.mc,prefix=props.prefix||'',search=props.search||'',onDrill=props.onDrill;var s=useState(function(){return{};}),open=s[0],setOpen=s[1];function toggle(key){setOpen(function(p){var x=Object.assign({},p);if(x[key])delete x[key];else x[key]=true;expandRegistry[key]=!expandRegistry[key];return x;});}if(search){var sl=search.toLowerCase();nodes=nodes.filter(function(n){if(n.name.toLowerCase().indexOf(sl)>=0)return true;if(n.children&&n.children.some(function(c){return c.name.toLowerCase().indexOf(sl)>=0;}))return true;if(n.ledgers&&n.ledgers.some(function(l){return l.name.toLowerCase().indexOf(sl)>=0;}))return true;return false;});}return nodes.map(function(n,i){var key=regKey(prefix,n.name,i);var isO=!!open[key]||(search&&search.length>0);return e('div',{key:key},e(Row,{node:n,expanded:isO,onToggle:function(){toggle(key);},mc:mc,onDrill:onDrill}),isO&&n.children&&e(TreeRows,{nodes:n.children,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}),isO&&n.ledgers&&e(TreeRows,{nodes:n.ledgers,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}));});}
+function TreeRows(props){var nodes=sortNodes(props.nodes,props.sortByValue),mc=props.mc,prefix=props.prefix||'',search=props.search||'',onDrill=props.onDrill;var s=useState(function(){return{};}),open=s[0],setOpen=s[1];function toggle(key){setOpen(function(p){var x=Object.assign({},p);if(x[key])delete x[key];else x[key]=true;expandRegistry[key]=!expandRegistry[key];return x;});}if(search){var sl=search.toLowerCase();nodes=nodes.filter(function(n){return nodeMatchesSearch(n,sl);});}return nodes.map(function(n,i){var key=regKey(prefix,n.name,i);var isO=!!open[key]||(search&&search.length>0);return e('div',{key:key},e(Row,{node:n,expanded:isO,onToggle:function(){toggle(key);},mc:mc,onDrill:onDrill}),isO&&n.children&&e(TreeRows,{nodes:n.children,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}),isO&&n.ledgers&&e(TreeRows,{nodes:n.ledgers,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}));});}
 function SectionRow(props){var label=props.label,monthly=props.monthly,total=props.total,color=props.color,bg=props.bg,borderColor=props.borderColor,open=props.open,onToggle=props.onToggle,mc=props.mc;var cells=[e('div',{key:'n',style:{padding:'11px 16px',display:'flex',alignItems:'center',gap:'8px',borderRight:'1px solid var(--border)'}},e('span',{style:{fontSize:'10px',color:color,transform:open?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),e('span',{style:{fontSize:'14px',fontWeight:700,color:color,letterSpacing:'0.3px'}},label))];for(var i=0;i<monthly.length;i++){cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'11px 10px',textAlign:'right',fontSize:'13.5px',fontWeight:700,color:color,borderRight:'1px solid var(--border)'}},fmt(monthly[i])));}cells.push(e('div',{key:'t',className:'num',style:{padding:'11px 12px',textAlign:'right',fontSize:'13.5px',fontWeight:700,color:color,background:bg}},fmt(total)));return e('div',{onClick:onToggle,style:{display:'grid',gridTemplateColumns:gtc(mc),background:bg,borderTop:'2px solid '+borderColor,borderBottom:'2px solid '+borderColor,cursor:'pointer'}},cells);}
 function TotalRow(props){var label=props.label,monthly=props.monthly,color=props.color,bg=props.bg,mc=props.mc;var total=monthly.reduce(function(a,b){return a+b;},0);var cells=[e('div',{key:'n',style:{padding:'12px 16px',fontSize:'14px',fontWeight:700,color:color||'var(--text)',borderRight:'1px solid var(--border)'}},label)];for(var i=0;i<monthly.length;i++){cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'12px 10px',textAlign:'right',fontSize:'14px',fontWeight:700,color:monthly[i]>=0?'var(--green)':'var(--red)',borderRight:'1px solid var(--border)'}},fmt(monthly[i])));}cells.push(e('div',{key:'t',className:'num',style:{padding:'12px 12px',textAlign:'right',fontSize:'14px',fontWeight:700,color:total>=0?'var(--green)':'var(--red)',background:bg||'var(--netBg)'}},fmt(total)));return e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),borderTop:'3px solid var(--border2)',background:bg||'var(--netBg)'}},cells);}
 
@@ -345,6 +374,9 @@ function Dash(props){
   var sView=useState('pl'),view=sView[0],setView=sView[1];var sCW=useState(320),colW=sCW[0],setColW=sCW[1];var sSort=useState(true),sortV=sSort[0],setSortV=sSort[1];var sSearch=useState(''),search=sSearch[0],setSearch=sSearch[1];
   var sDr=useState(null),drill=sDr[0],setDrill=sDr[1];function openDrill(node,mi){setDrill({ledger:node.name,monthIdx:mi});}
   GRID_COL1=colW;
+  // Rebuild the invoice-number match set for the current search term. A ledger/party qualifies
+  // when the typed text appears anywhere in one of its booked invoice numbers.
+  (function(){var sl=(search||'').toLowerCase();if(!sl){INV_MATCH=null;return;}var idx=data.invLedgerIndex||{};var m={};for(var k in idx){var arr=idx[k];for(var j=0;j<arr.length;j++){if(arr[j].indexOf(sl)>=0){m[k]=true;break;}}}INV_MATCH=m;})();
   var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
   var hCells=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];months.forEach(function(m,i){hCells.push(e('div',{key:'m'+i,style:hs},m));});hCells.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
   var s1=useState(true),revO=s1[0],setRevO=s1[1];var s2=useState(true),purO=s2[0],setPurO=s2[1];var s3=useState(true),deO=s3[0],setDeO=s3[1];var s4=useState(true),ieO=s4[0],setIeO=s4[1];var s5=useState(false),exO=s5[0],setExO=s5[1];var s6=useState(true),ciO=s6[0],setCiO=s6[1];var s7=useState(true),coO=s7[0],setCoO=s7[1];
@@ -370,7 +402,7 @@ e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
 e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},__lbl);})),
 e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegistry);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
-    e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'220px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
+    e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search name or invoice no...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'260px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
     e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+mc*105+115)+'px'}},
       e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hCells),
       view==='pl'&&e('div',null,
@@ -464,18 +496,6 @@ function AuditView(props){
 function DrillModal(props){
   var t=props.target;var data=props.data;var raw=data._raw;
   if(!raw)return null;
-  var DRILL_GRID='92px 96px minmax(180px,1fr) 78px 112px 132px';
-  // Build the printable-voucher link for a drill row. Only available when the
-  // data is API-backed (a live /voucher/ + /api/voucher exist on that origin)
-  // and we have branch + voucher no. to identify it.
-  function voucherLink(r){
-    if(!window.__cdcFromApi)return null;
-    if(!r.no||(r.branch!=='kol'&&r.branch!=='ahm'))return null;
-    var base=window.__cdcApiBase||'';
-    return base+'/voucher/?branch='+encodeURIComponent(r.branch)+
-      '&no='+encodeURIComponent(r.no)+'&type='+encodeURIComponent(r.type||'')+
-      '&date='+encodeURIComponent(r.date||'');
-  }
   var sS=useState(''),srch=sS[0],setSrch=sS[1];
   var sSort=useState('date_asc'),sortBy=sSort[0],setSortBy=sSort[1];
   var xd=raw.xd||data.xd;var lu=data.lu;if(!lu&&xd)lu=buildLookups(xd);
@@ -498,7 +518,7 @@ function DrillModal(props){
     for(var ln2 in (v.party_ledgers||{})){if(ln2===t.ledger){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
     if(foundIn){
       var dom=null,domAbs=0;for(var p in (v.party_ledgers||{})){var a=Math.abs(v.party_ledgers[p]);if(a>domAbs){domAbs=a;dom=p;}}
-      contributing.push({date:v.date,no:v.no||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
+      contributing.push({date:v.date,type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
     }
   }
   // Sort
@@ -534,26 +554,20 @@ function DrillModal(props){
           e('button',{onClick:copyAsText,style:{background:'var(--cyan)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'📋'),
           e('button',{onClick:props.onClose,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕'))),
       e('div',{style:{overflowY:'auto',flex:1}},
-        e('div',{style:{display:'grid',gridTemplateColumns:DRILL_GRID,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
+        e('div',{style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('DATE','date')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('TYPE','type')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('PARTY','party')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BRANCH'),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt()),
-          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'center'}},'VOUCHER')),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt())),
         contributing.length===0?
           e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No transactions found.')
-          :contributing.map(function(r,i){var vl=voucherLink(r);return e('div',{key:i,style:{display:'grid',gridTemplateColumns:DRILL_GRID,alignItems:'center',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
+          :contributing.map(function(r,i){return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'95px 110px minmax(220px,1fr) 100px 120px',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
             e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(r.date)),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},r.type),
             e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(via override)')),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase'}},r.branch||'—'),
-            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)),
-            e('div',{style:{padding:'6px 8px',textAlign:'center',display:'flex',gap:'6px',justifyContent:'center'}},
-              vl?[
-                e('a',{key:'v',href:vl,target:'_blank',rel:'noopener',title:'Open this voucher on screen',style:{textDecoration:'none',background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'👁 View'),
-                e('a',{key:'p',href:vl+'&print=1',target:'_blank',rel:'noopener',title:'Open and download this voucher as a PDF',style:{textDecoration:'none',background:'var(--cyan)',color:'#fff',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'📄 PDF')
-              ]:e('span',{style:{fontSize:'10px',color:'var(--text3)'}},r.no?'—':'')));
+            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)));
           }))));
 }
 
@@ -1485,8 +1499,6 @@ function Portal(){
 
   function go(){
     setErr(null);setLd(true);
-    // File-upload mode: no live API, so the per-voucher PDF link is unavailable.
-    try{window.__cdcFromApi=false;}catch(e){}
     var need=['kolHier','ahmHier','kolVouch','ahmVouch'];
     for(var i=0;i<need.length;i++){if(!files[need[i]]){setErr('Please upload all four JSON files (Kol + Ahm hierarchy & vouchers).');setLd(false);return;}}
     var keys=['kolHier','ahmHier','kolVouch','ahmVouch','kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
@@ -1506,9 +1518,6 @@ function Portal(){
   function goMongo(){
     setErr(null);setLd(true);
     var base=(apiBase||'').replace(/\/+$/,'');
-    // Remember we're API-backed (and the base) so the drill-down can link each
-    // voucher to its printable invoice/journal at <base>/voucher/.
-    try{window.__cdcFromApi=true;window.__cdcApiBase=base;}catch(e){}
     var url=base+'/api/dataset?from='+ymdP(fromD)+'&to='+ymdP(toD)+'&branch=all';
     var bkeys=['kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
     var billProms=bkeys.map(function(k){if(files[k])return files[k].text();if(cachedTexts[k])return Promise.resolve(cachedTexts[k]);return Promise.resolve(null);});
