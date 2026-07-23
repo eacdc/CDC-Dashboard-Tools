@@ -222,33 +222,39 @@ function Get-BuyerOrders($v) {
 # names them inconsistently across versions); guaranteed on inventory + narration.
 function Get-VoucherDetails($v) {
     $orders = Get-BuyerOrders $v
+    # Dispatch/logistics fields sit in their own nested wrappers -- scope the lookup
+    # to the wrapper so a generic tag name (e.g. BILLNUMBER) can't match elsewhere.
+    #   e-way bill  : <EWAYBILLDETAILS.LIST><BILLNUMBER>..</><BILLDATE>..</></>
+    #   delivery note: <INVOICEDELNOTES.LIST><BASICSHIPDELIVERYNOTE>..</><BASICSHIPPINGDATE>..</></>
+    $eway    = $v.SelectSingleNode(".//EWAYBILLDETAILS.LIST")
+    $ewayNo  = if ($eway) { xfirst $eway @("BILLNUMBER","EWAYBILLNUMBER","EWAYBILLNO") } else { "" }
+    $deln    = $v.SelectSingleNode(".//INVOICEDELNOTES.LIST")
+    $delNote = if ($deln) { xfirst $deln @("BASICSHIPDELIVERYNOTE","DELIVERYNOTENO") } else { "" }
+    $delDate = if ($deln) { xfirst $deln @("BASICSHIPPINGDATE","BASICSHIPDELIVERYNOTEDATE") } else { "" }
     return [ordered]@{
         narration      = xfirst $v @("NARRATION")
         reference      = xfirst $v @("REFERENCE","BASICORDERREF")
         refDate        = xfirst $v @("REFERENCEDATE")
-        # party / buyer
+        # party / buyer  (contact person/email/mobile are NOT on the voucher -- they
+        # come from the party's Ledger master and are merged in by the API.)
         partyGstin     = xfirst $v @("PARTYGSTIN","CONSIGNEEGSTIN")
         partyName      = xfirst $v @("PARTYNAME","PARTYLEDGERNAME","PARTYMAILINGNAME","BASICBUYERNAME")
         partyMailName  = xfirst $v @("PARTYMAILINGNAME","BASICBUYERNAME")
         partyAddress   = xaddress $v @("BASICBUYERADDRESS.LIST","LEDGERMAILINGADDRESS.LIST")
         partyState     = xfirst $v @("PARTYSTATENAME","STATENAME","CONSIGNEESTATENAME")
         placeOfSupply  = xfirst $v @("PLACEOFSUPPLY")
-        # buyer contact (printed under the Bill-to block)
-        contactName    = xfirst $v @("BASICBUYERCONTACTPERSON","CONTACTPERSON","LEDGERCONTACT")
-        contactEmail   = xfirst $v @("CONSIGNEEEMAILID","EMAIL","LEDGEREMAIL","BASICBUYEREMAIL")
-        contactMobile  = xfirst $v @("CONSIGNEEMOBILENO","BASICBUYERMOBILENO","LEDGERMOBILE","PHONENUMBER","MOBILENO")
         # consignee (ship-to)
         consigneeName  = xfirst $v @("CONSIGNEEMAILINGNAME","BASICBUYERNAME")
         consigneeGstin = xfirst $v @("CONSIGNEEGSTIN","PARTYGSTIN")
         consigneeAddr  = xaddress $v @("ADDRESS.LIST","CONSIGNEEADDRESS.LIST")
         consigneeState = xfirst $v @("CONSIGNEESTATENAME","STATENAME")
         # dispatch / logistics
-        deliveryNote     = xfirst $v @("BASICSHIPDELIVERYNOTE","DELIVERYNOTENO","BASICSHIPDOCUMENTNO")
-        deliveryNoteDate = xfirst $v @("DELIVERYNOTEDATE")
+        deliveryNote     = $delNote
+        deliveryNoteDate = $delDate
         despatchDocNo    = xfirst $v @("BASICSHIPDOCUMENTNO")
         despatchedThrough= xfirst $v @("BASICSHIPPEDBY")
         destination      = xfirst $v @("BASICFINALDESTINATION","DESTINATION")
-        ewayBillNo       = xfirst $v @("EWAYBILLNUMBER","EWAYBILLNO")
+        ewayBillNo       = $ewayNo
         vehicleNo        = xfirst $v @("BASICSHIPVESSELNO","VEHICLENUMBER","MOTORVEHICLENO")
         termsOfPayment   = xfirst $v @("BASICDUEDATEOFPYMT","TERMSOFPAYMENT")
         termsOfDelivery  = xfirst $v @("BASICORDERTERMS","TERMSOFDELIVERY")
@@ -413,7 +419,7 @@ $ledgerPayload = @"
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerList" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <FETCH>NAME,PARENT</FETCH>
+        <FETCH>NAME,PARENT,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -441,13 +447,22 @@ $groupPayload = @"
 
 $ledgerToGroup = @{}   # ledger name -> immediate group
 $groupToParent = @{}   # group name  -> parent group (or "" at root)
+$ledgerContacts = @{}  # ledger name -> @{ name; email; mobile }  (party contact block)
 
 [xml]$lx = Post-Tally $ledgerPayload
 foreach ($l in $lx.SelectNodes("//LEDGER")) {
     $name = xval $l.NAME; if (-not $name) { continue }
     $ledgerToGroup[$name] = xval $l.PARENT
+    # Contact person / email / mobile live on the Ledger master, not on the voucher,
+    # so the printable invoice's Bill-to contact block is sourced from here.
+    $cName   = xval $l.LEDGERCONTACT
+    $cEmail  = xval $l.EMAIL
+    $cMobile = xval $l.LEDGERMOBILE; if (-not $cMobile) { $cMobile = xval $l.LEDGERPHONE }
+    if ($cName -or $cEmail -or $cMobile) {
+        $ledgerContacts[$name] = [ordered]@{ name = $cName; email = $cEmail; mobile = $cMobile }
+    }
 }
-Write-Host ("  Ledgers : {0}" -f $ledgerToGroup.Count)
+Write-Host ("  Ledgers : {0}  (contacts: {1})" -f $ledgerToGroup.Count, $ledgerContacts.Count)
 
 [xml]$gx = Post-Tally $groupPayload
 foreach ($g in $gx.SelectNodes("//GROUP")) {
@@ -507,7 +522,9 @@ foreach ($gn in ($groupToParent.Keys | Sort-Object)) {
     $par = $groupToParent[$gn]
     if (-not $par -or $par -eq "Primary") { $mGroups[$gn] = $null } else { $mGroups[$gn] = $par }
 }
-$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups }
+$mContacts = [ordered]@{}
+foreach ($ln in ($ledgerContacts.Keys | Sort-Object)) { $mContacts[$ln] = $ledgerContacts[$ln] }
+$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

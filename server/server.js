@@ -123,6 +123,22 @@ app.get('/api/voucher', async (req, res) => {
       return res.status(400).json({ error: 'provide id, or no (+ optional type/date)' });
     }
     if (!doc) return res.status(404).json({ error: 'voucher not found' });
+    // Enrich the Bill-to contact block from the party's Ledger master (contact
+    // person/email/mobile are stored on the ledger, not the voucher). Only fills
+    // gaps, so anything already on the voucher wins.
+    if (doc.details) {
+      const master = await db.collection('masters').findOne({ branch }, { projection: { contacts: 1 } });
+      const contacts = master && master.contacts;
+      if (contacts) {
+        const key = doc.party || doc.details.partyMailName || doc.details.partyName;
+        const c = key && contacts[key];
+        if (c) {
+          if (!doc.details.contactName && c.name) doc.details.contactName = c.name;
+          if (!doc.details.contactEmail && c.email) doc.details.contactEmail = c.email;
+          if (!doc.details.contactMobile && c.mobile) doc.details.contactMobile = c.mobile;
+        }
+      }
+    }
     res.json(doc);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

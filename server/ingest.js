@@ -30,6 +30,22 @@ const DETAIL_SCALARS = [
 ];
 const ITEM_FIELDS = ['slNo', 'description', 'hsn', 'qty', 'unit', 'rate', 'disc', 'amount'];
 
+// Party contact map from the Ledger master: { ledgerName: { name, email, mobile } }.
+// Kept small and string-only so a master push can't smuggle arbitrary structure in.
+function cleanContacts(c) {
+  if (!c || typeof c !== 'object') return undefined;
+  const out = {};
+  for (const [ledger, v] of Object.entries(c)) {
+    if (!v || typeof v !== 'object') continue;
+    const row = {};
+    for (const f of ['name', 'email', 'mobile']) {
+      if (v[f] != null && v[f] !== '') row[f] = String(v[f]);
+    }
+    if (Object.keys(row).length) out[String(ledger)] = row;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Normalise the extractor's `details` object into a compact, known shape. Returns
 // undefined when there's nothing worth storing (bare vouchers stay lean).
 function cleanDetails(d) {
@@ -89,11 +105,10 @@ async function ingest(payload) {
 
   // 1) Master snapshot (latest wins per branch).
   if (payload.master && payload.master.ledgers && payload.master.groups) {
-    await db.collection('masters').updateOne(
-      { branch },
-      { $set: { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() } },
-      { upsert: true }
-    );
+    const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
+    const contacts = cleanContacts(payload.master.contacts);
+    if (contacts) set.contacts = contacts;
+    await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }
 
@@ -163,11 +178,10 @@ async function syncIncremental(payload) {
   const result = { branch, masterUpserted: false, replacedDates: 0, upserted: 0, deletedByDate: 0, deletedMissing: 0, lastAlterId: null };
 
   if (payload.master && payload.master.ledgers && payload.master.groups) {
-    await db.collection('masters').updateOne(
-      { branch },
-      { $set: { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() } },
-      { upsert: true }
-    );
+    const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
+    const contacts = cleanContacts(payload.master.contacts);
+    if (contacts) set.contacts = contacts;
+    await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }
 
@@ -218,4 +232,4 @@ async function syncIncremental(payload) {
   return result;
 }
 
-module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, voucherKey, diffMeta, getSyncState, syncIncremental };
+module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, voucherKey, diffMeta, getSyncState, syncIncremental };

@@ -63,7 +63,14 @@ function get(port, p) {
   let fails = 0;
   const assert = (c, m) => { if (!c) { console.error('FAIL:', m); fails++; } else console.log('ok  -', m); };
 
-  const master = { ledgers: { Sale: 'Sales Accounts' }, groups: { 'Sales Accounts': null } };
+  const master = {
+    ledgers: { Sale: 'Sales Accounts' }, groups: { 'Sales Accounts': null },
+    // Contact person/email/mobile live on the party's Ledger master, not the voucher.
+    contacts: {
+      'Aakriti Art Gallery Pvt Ltd': { name: 'Vikram Bachawat', email: 'aakritiartgallery@yahoo.com', mobile: '9830411111' },
+      Junk: 'should be dropped', Blank: { name: '' },
+    },
+  };
   const invoice = {
     guid: 'g-inv-1', date: '20260715', no: 'CDC/2662/26-27', type: 'Sales', party: 'Aakriti Art Gallery Pvt Ltd',
     ledgers: { Sale: 137800, 'Output CGST': 12402, 'Output SGST': 12402 },
@@ -71,7 +78,6 @@ function get(port, p) {
     details: {
       partyGstin: '19AAICA7555R1ZQ', ewayBillNo: '811714091343', narration: '',
       deliveryNote: '2678', buyersOrderNo: 'Qtn. No. 6645.2, Qtn. No. 6720.1', buyersOrderDate: '20260713, 20260713',
-      contactName: 'Vikram Bachawat', contactEmail: 'aakritiartgallery@yahoo.com', contactMobile: '9830411111',
       partyAddress: ['Orbit Enclave, 1st Floor', '12/3A, Hungerford Street', ''],
       badField: 'should be dropped',
       items: [{ slNo: 1, description: 'OTHER PRINTED MATERIALS HSN 49119990 GST 18%\nMagazine Art Insights\nBatch : Primary Batch', hsn: '49119990', qty: '200', unit: 'Pcs = 200.000 Kgs', rate: '655.00/Pcs', amount: 131000, junk: 'x' }],
@@ -92,11 +98,15 @@ function get(port, p) {
   assert(storedInv.details.deliveryNote === '2678', 'delivery note persisted');
   assert(storedInv.details.buyersOrderNo === 'Qtn. No. 6645.2, Qtn. No. 6720.1', 'buyer order no persisted');
   assert(storedInv.details.buyersOrderDate === '20260713, 20260713', 'buyer order date (paired) persisted');
-  assert(storedInv.details.contactName === 'Vikram Bachawat', 'buyer contact name persisted');
-  assert(storedInv.details.contactEmail === 'aakritiartgallery@yahoo.com', 'buyer contact email persisted');
-  assert(storedInv.details.contactMobile === '9830411111', 'buyer contact mobile persisted');
   assert(!('badField' in storedInv.details), 'unknown detail field dropped by sanitizer');
   assert(!('junk' in storedInv.details.items[0]), 'unknown item field dropped by sanitizer');
+
+  // Master contacts persisted + sanitised (party contact block source).
+  const storedMaster = fakeDb.collection('masters').docs.find((d) => d.branch === 'kol');
+  assert(storedMaster.contacts && storedMaster.contacts['Aakriti Art Gallery Pvt Ltd'].name === 'Vikram Bachawat', 'master contacts persisted');
+  assert(!('Junk' in storedMaster.contacts), 'non-object contact entry dropped');
+  assert(!('Blank' in storedMaster.contacts), 'empty contact entry dropped');
+  assert(!('contactName' in storedInv.details), 'contact NOT stored on the voucher (comes from master)');
   assert(storedInv.details.partyAddress.length === 2, 'blank address lines filtered');
   assert(typeof storedInv.details.items[0].amount === 'number', 'item amount coerced to number');
   assert(!('details' in storedJrnl), 'bare journal stores no details key');
@@ -115,6 +125,10 @@ function get(port, p) {
   const one = (await get(port, '/api/voucher?branch=kol&no=CDC%2F2662%2F26-27')).body;
   assert(one.details && one.details.ewayBillNo === '811714091343', 'voucher endpoint returns details');
   assert(one.details.items && one.details.items[0].hsn === '49119990', 'voucher endpoint returns line items');
+  // Contact block enriched from the party's master contact at request time.
+  assert(one.details.contactName === 'Vikram Bachawat', 'voucher endpoint enriches contact name from master');
+  assert(one.details.contactEmail === 'aakritiartgallery@yahoo.com', 'voucher endpoint enriches contact email from master');
+  assert(one.details.contactMobile === '9830411111', 'voucher endpoint enriches contact mobile from master');
 
   const byId = (await get(port, '/api/voucher?branch=kol&id=g-inv-1')).body;
   assert(byId.no === 'CDC/2662/26-27', 'voucher endpoint resolves by guid');

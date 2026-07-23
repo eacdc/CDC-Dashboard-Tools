@@ -6,22 +6,35 @@ Branch `claude/invoice-data-sync-ep4ye1`. Closes the gap between the printed
 invoice (`/voucher/`) and the reference Tally invoice: fields that were blank or
 mis-formatted on CDC/2662/26-27 now match exactly.
 
+Exact Tally tag names were confirmed against the raw Day Book XML export for
+CDC/2662/26-27 (not guessed).
+
 ### Extractor (`pipeline/TallyToJson.ps1`)
 - `xfirst` now falls back to a **descendant** search when the direct child is
-  absent. Header fields like **e-way bill no.**, **buyer's order no./date** and
-  **delivery note** live nested inside `*.LIST` wrappers, so the old direct-child-only
-  lookup returned `""` for them — that's why they printed as `-`.
-- New `xall` (every descendant value, duplicates kept) + `Get-BuyerOrders`, which
-  pulls buyer orders **paired** — order No. N lined up with order Date N across the
-  `INVOICEORDERLIST.LIST` rows — so a multi-order sale prints
-  `Qtn. No. 6645.2, Qtn. No. 6720.1` against `13 Jul 26, 13 Jul 26`.
-- Line-item **description** is now the full Tally block: stock item name + user
-  description line(s) (`BASICUSERDESCRIPTION`) + **batch** (`BATCHNAME`), e.g.
-  `OTHER PRINTED MATERIALS… / Magazine Art Insights / OFFSET PRINT / Batch : Primary Batch`.
-- Captures buyer **contact name / email / mobile** (printed under the Bill-to block).
+  absent — header fields live nested inside `*.LIST` wrappers, so the old
+  direct-child-only lookup returned `""` and they printed as `-`.
+- **E-way bill no.** read from `EWAYBILLDETAILS.LIST > BILLNUMBER` (the tag is
+  `BILLNUMBER`, not `EWAYBILLNUMBER`); **delivery note** + date from
+  `INVOICEDELNOTES.LIST > BASICSHIPDELIVERYNOTE` / `BASICSHIPPINGDATE`. Both scoped
+  to their wrapper so the generic tag can't match elsewhere.
+- New `xall` + `Get-BuyerOrders`, which pulls buyer orders **paired** — order No. N
+  lined up with order Date N across the `INVOICEORDERLIST.LIST` rows — so a
+  multi-order sale prints `Qtn. No. 6645.2, Qtn. No. 6720.1` against
+  `13 Jul 26, 13 Jul 26`.
+- Line-item **description** is now the full Tally block: stock item name + every
+  `BASICUSERDESCRIPTION` line (incl. the `====` separators the buyer typed) +
+  **batch** (`BATCHNAME`).
+- Buyer **contact** person/email/mobile are NOT on the voucher — they live on the
+  party's **Ledger master**. The masters pull now also fetches
+  `LEDGERCONTACT / EMAIL / LEDGERMOBILE / LEDGERPHONE` and emits a
+  `master.contacts` map `{ ledgerName: { name, email, mobile } }`.
 
-### API (`server/ingest.js`)
-- `cleanDetails` whitelist gains `contactName`, `contactEmail`, `contactMobile`.
+### API (`server/`)
+- `ingest.js`: `cleanDetails` whitelist gains `contactName/Email/Mobile`; new
+  `cleanContacts` persists the sanitised `master.contacts` map.
+- `server.js`: `GET /api/voucher` **enriches** the Bill-to contact block from the
+  party's master contact at request time (fills gaps only; voucher data wins).
+  `/api/dataset` still never returns contacts (dashboards stay lean).
 
 ### Printable voucher (`voucher/index.html`)
 - **Ack Date** and **Buyer's Order date(s)** are now formatted (`20260715` →
