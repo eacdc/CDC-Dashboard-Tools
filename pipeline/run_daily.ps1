@@ -41,7 +41,9 @@ $log = Join-Path $logDir ("run_" + (Get-Date).ToString('yyyyMMdd_HHmmss') + ".lo
 function Say($m){ $line = "[{0}] {1}" -f (Get-Date).ToString('HH:mm:ss'), $m; Write-Host $line; Add-Content -Path $log -Value $line }
 
 # Branch -> Tally company name (must match Tally EXACTLY, including punctuation/spacing).
-$branches = @(
+# NOTE: PowerShell variable names are case-insensitive, so this array must NOT be
+# named $branches -- that would collide with the -Branches parameter above.
+$branchDefs = @(
     @{ Branch = 'kol'; Company = 'CDC PRINTERS 2025-26' }
     @{ Branch = 'ahm'; Company = 'CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26' }
 )
@@ -51,8 +53,8 @@ $branches = @(
 # owns it). Set -Branches / CDC_BRANCHES to "kol" on the Kol box, "ahm" on Ahm.
 if ($env:CDC_BRANCHES) { $Branches = $env:CDC_BRANCHES }
 $want = @($Branches.ToLower() -split '[,;\s]+' | Where-Object { $_ })
-$branches = @($branches | Where-Object { $want -contains $_.Branch })
-if ($branches.Count -eq 0) { throw "No valid branch in -Branches '$Branches' (expected kol and/or ahm)." }
+$syncBranches = @($branchDefs | Where-Object { $want -contains $_.Branch })
+if ($syncBranches.Count -eq 0) { throw "No valid branch in -Branches '$Branches' (expected kol and/or ahm)." }
 
 $to   = (Get-Date)
 $from = $to.AddDays(-1 * [math]::Max(0, $TrailingDays - 1))
@@ -70,9 +72,9 @@ $mode = if ($ingestUrl) { 'api' } elseif ($hasNode -and $mongoUri) { 'loader' } 
 # entries/edits/deletions anywhere in that window are caught -- needs the API.
 if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
 
-Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, ($branches | ForEach-Object { $_.Branch }) -join ',')
+Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, (($syncBranches | ForEach-Object { $_.Branch }) -join ','))
 
-foreach ($b in $branches) {
+foreach ($b in $syncBranches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
     try {
         if ($Incremental) {
