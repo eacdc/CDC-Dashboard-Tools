@@ -92,6 +92,7 @@
     <span class="spacer"></span>
     <span class="demo-links">samples:
       <a href="?demo=invoice">Tax Invoice</a>
+      <a href="?demo=purchase">Purchase Invoice</a>
       <a href="?demo=journal">Journal Voucher</a>
     </span>
   </div>
@@ -103,17 +104,18 @@
 <script>
 "use strict";
 /* ------------------------------------------------------------------ helpers */
+var CDC_ADDR=["45 Radhanath Choudhury Road","Kolkata 700015, West Bengal","Pin code : 700015"];
 var COMPANY = {
   ahm: { name:"CDC PRINTERS PVT LTD", lines:[
     "45 Radhanath Choudhury Road","Kolkata 700015, West Bengal",
     "Phone no. : 2329 8856","GSTIN : 19AABCC2946B1ZZ",
     "CIN: U22121WB1998PTC088263","E-Mail : cdc@cdcprinters.com"],
-    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B" },
+    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B", addr:CDC_ADDR, state:"West Bengal" },
   kol: { name:"CDC PRINTERS PVT LTD", lines:[
     "45 Radhanath Choudhury Road","Kolkata 700015, West Bengal",
     "Phone no. : 2329 8856","GSTIN : 19AABCC2946B1ZZ",
     "CIN: U22121WB1998PTC088263","E-Mail : cdc@cdcprinters.com"],
-    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B" }
+    gstin:"19AABCC2946B1ZZ", pan:"AABCC2946B", addr:CDC_ADDR, state:"West Bengal" }
 };
 var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
@@ -185,23 +187,45 @@ function rupeeWords(amt){
 
 /* ---------------------------------------------------------- tax computation */
 function findLeg(ledgers,re){var t=0; for(var k in ledgers){ if(re.test(k)) t+=Math.abs(Number(ledgers[k])||0);} return t;}
+// A purchase is recorded in OUR books, so the goods/tax legs are Dr (negative) and
+// the supplier is the party. The printed invoice is the SUPPLIER's, so amounts show
+// as positive and the roles (seller/buyer) flip vs a sale — see renderInvoice.
+function isPurchase(v){
+  if(/purchas|debit note/i.test(v.type||"")) return true;
+  var led=v.ledgers||{}; for(var k in led){ if(/purchas/i.test(k)) return true; }
+  return false;
+}
 function computeTax(v){
   var d=v.details||{}, items=d.items||[];
-  var sub=0; items.forEach(function(it){sub+=Number(it.amount)||0;});
+  var purchase=isPurchase(v), sgn=purchase?-1:1;   // display sign: purchase legs are Dr(-ve)
+  var sub=0; items.forEach(function(it){sub+=sgn*(Number(it.amount)||0);});
   var led=v.ledgers||{};
   var cgst=findLeg(led,/c ?gst/i), sgst=findLeg(led,/s ?gst|state.*tax/i),
-      igst=findLeg(led,/i ?gst|integ/i), round=0;
-  for(var k in led){ if(/round/i.test(k)) round+=Number(led[k])||0; }
-  // invoice total: dominant party leg if present, else sub+taxes+round
+      igst=findLeg(led,/i ?gst|integ/i), roundRaw=0;
+  for(var k in led){ if(/round/i.test(k)) roundRaw+=Number(led[k])||0; }
+  var round=sgn*roundRaw;
+  // Other charge/deduction legs (e.g. TDS) — every ledger that isn't GST, round-off,
+  // or the goods leg (its magnitude equals the item subtotal, or it's a sale/purchase
+  // ledger). Shown on their own line with the display sign applied (TDS -> deduction).
+  var charges=[], subAbs=Math.abs(sub);
+  for(var kk in led){
+    if(/c ?gst|s ?gst|state.*tax|i ?gst|integ|round/i.test(kk)) continue;
+    var amt=Number(led[kk])||0; if(amt===0) continue;
+    if(/purchas|sale/i.test(kk)) continue;
+    if(subAbs && Math.abs(Math.abs(amt)-subAbs)<1) continue;
+    charges.push({name:kk, amount:sgn*amt});
+  }
+  var chSum=0; charges.forEach(function(c){chSum+=c.amount;});
+  // invoice total: dominant party leg if present, else sub+taxes+round+charges
   var pl=v.party_ledgers||{}, ptot=0;
   for(var pk in pl){ if(Math.abs(pl[pk])>Math.abs(ptot)) ptot=pl[pk]; }
-  var total=ptot?Math.abs(ptot):(sub+cgst+sgst+igst+round);
+  var total=ptot?Math.abs(ptot):(sub+cgst+sgst+igst+round+chSum);
   // HSN-wise breakup: group items by hsn, allocate tax proportional to taxable share
   var byHsn={}, order=[];
   items.forEach(function(it){
     var h=(it.hsn||"").replace(/\s*GST.*/i,"").trim()||"-";
     if(!byHsn[h]){byHsn[h]={hsn:h,taxable:0};order.push(h);}
-    byHsn[h].taxable+=Number(it.amount)||0;
+    byHsn[h].taxable+=sgn*(Number(it.amount)||0);
   });
   var rows=order.map(function(h){
     var r=byHsn[h], share=sub?r.taxable/sub:0;
@@ -209,7 +233,7 @@ function computeTax(v){
     r.tax=+(r.cgst+r.sgst+r.igst).toFixed(2);
     return r;
   });
-  return {sub:sub,cgst:cgst,sgst:sgst,igst:igst,round:round,total:total,rows:rows};
+  return {sub:sub,cgst:cgst,sgst:sgst,igst:igst,round:round,charges:charges,total:total,rows:rows,purchase:purchase,sgn:sgn};
 }
 
 /* ---------------------------------------------------------------- renderers */
@@ -245,12 +269,28 @@ function renderInvoice(v){
       (state?'<div><span class="lbl">State</span>'+esc(state)+'</div>':'')+
       (cLines?'<div class="mt6">'+cLines+'</div>':'')+'</div>';
   }
-  var contact={name:d.contactName, email:d.contactEmail, mobile:d.contactMobile};
-  var buyer = partyBox('Buyer (Bill to)', d.partyMailName||d.partyName||v.party,
-      d.partyAddress, d.partyGstin, d.partyState, contact);
-  var consignee = partyBox('Consignee (Ship to)', d.consigneeName||d.partyMailName||v.party,
-      (d.consigneeAddr&&d.consigneeAddr.length?d.consigneeAddr:d.partyAddress),
-      d.consigneeGstin||d.partyGstin, d.consigneeState||d.partyState);
+  // Counterparty = the non-CDC party on the voucher (customer on a sale, supplier on a
+  // purchase). On a PURCHASE the invoice is the supplier's, so the supplier becomes the
+  // letterhead/seller and CDC becomes the buyer + consignee; on a SALE it's unchanged.
+  var cpName=d.partyMailName||d.partyName||v.party||'';
+  var cpAddr=d.partyAddress||[], cpGstin=d.partyGstin||'', cpState=d.partyState||'';
+  var cpContact={name:d.contactName, email:d.contactEmail, mobile:d.contactMobile};
+  var sellerCo = t.purchase
+    ? { name:cpName,
+        lines:cpAddr.concat(cpGstin?["GSTIN : "+cpGstin]:[], cpState?["State Name : "+cpState]:[],
+              d.contactEmail?["E-Mail : "+d.contactEmail]:[]),
+        gstin:cpGstin, pan:"" }
+    : co;
+  var buyer, consignee;
+  if(t.purchase){
+    buyer     = partyBox('Buyer (Bill to)', co.name, co.addr, co.gstin, co.state);
+    consignee = partyBox('Consignee (Ship to)', co.name, co.addr, co.gstin, co.state);
+  }else{
+    buyer     = partyBox('Buyer (Bill to)', cpName, cpAddr, cpGstin, cpState, cpContact);
+    consignee = partyBox('Consignee (Ship to)', d.consigneeName||cpName,
+        (d.consigneeAddr&&d.consigneeAddr.length?d.consigneeAddr:cpAddr),
+        d.consigneeGstin||cpGstin, d.consigneeState||cpState);
+  }
   var pos = d.placeOfSupply?'<div class="b mt6" style="padding:5px 9px"><span class="lbl">Place of Supply</span><span class="val">'+esc(d.placeOfSupply)+'</span></div>':'';
 
   var rows=items.map(function(it){
@@ -264,13 +304,14 @@ function renderInvoice(v){
       '<td class="num">'+esc(fmtRate(it.rate))+'</td>'+
       '<td class="center">'+esc(u.unit||it.unit||'')+'</td>'+
       '<td class="num">'+(it.disc?esc(it.disc):'')+'</td>'+
-      '<td class="num">'+fmtIN(it.amount)+'</td></tr>';
+      '<td class="num">'+fmtIN(t.sgn*(Number(it.amount)||0))+'</td></tr>';
   }).join('');
   var taxRows='';
   if(t.cgst) taxRows+='<tr><td colspan="7" class="right">CGST</td><td class="num">'+fmtIN(t.cgst)+'</td></tr>';
   if(t.sgst) taxRows+='<tr><td colspan="7" class="right">SGST</td><td class="num">'+fmtIN(t.sgst)+'</td></tr>';
   if(t.igst) taxRows+='<tr><td colspan="7" class="right">IGST</td><td class="num">'+fmtIN(t.igst)+'</td></tr>';
   if(t.round) taxRows+='<tr><td colspan="7" class="right">Round Off</td><td class="num">'+fmtIN(t.round)+'</td></tr>';
+  t.charges.forEach(function(c){ taxRows+='<tr><td colspan="7" class="right">'+esc(c.name)+'</td><td class="num">'+fmtIN(c.amount)+'</td></tr>'; });
 
   var itemsTbl='<table class="items mt6"><thead><tr>'+
     '<th style="width:26px">Sr</th><th>Description of Goods/Services</th><th style="width:70px">HSN/SAC</th>'+
@@ -308,13 +349,13 @@ function renderInvoice(v){
       ' &nbsp; <span class="lbl" style="display:inline">PAN</span> '+esc(co.pan)+'</div>'+
     '</div>'+
     '<div class="b" style="padding:8px 9px;max-width:230px">'+
-      '<div class="right bold">for '+esc(co.name)+'</div>'+
+      '<div class="right bold">for '+esc(sellerCo.name)+'</div>'+
       '<div class="sign"></div>'+
       '<div class="right lbl" style="display:block">Authorised Signatory</div>'+
     '</div></div>';
 
   return '<div class="doc-title">Tax Invoice</div>'+einv+
-    companyHeader(co)+ meta+
+    companyHeader(sellerCo)+ meta+
     '<div class="flex mt6" style="gap:6px">'+consignee+buyer+'</div>'+ pos+
     itemsTbl+ amtWords+ hsnTbl+ footer;
 }
@@ -457,6 +498,25 @@ var DEMO_INVOICE={
     ]
   }
 };
+// Purchase invoice: goods/tax legs are Dr (negative) in Tally; the printed doc is the
+// supplier's, so the renderer flips roles (supplier = letterhead) and shows amounts +ve.
+var DEMO_PURCHASE={
+  branch:"kol", type:"Purchase - Goods", no:"PUR/1337/26-27", date:"20260531",
+  party:"Sudarshan Paper & Board Pvt Ltd",
+  ledgers:{"Purchase Paper & Board":-2928673.49,"CGST":-263580.61,"SGST":-263580.61,
+    "Round Off":-0.29,"TDS Payable- Section 393 (1) Sl.8 (ii) (194Q)":2929},
+  party_ledgers:{"Sudarshan Paper & Board Pvt Ltd":3452906},
+  details:{
+    reference:"1902SA262700210", termsOfPayment:"90 Days", placeOfSupply:"West Bengal",
+    partyName:"Sudarshan Paper & Board Pvt Ltd", partyMailName:"Sudarshan Paper & Board Pvt Ltd",
+    partyGstin:"19AAHCS1241F1ZJ", partyState:"West Bengal, Code: 19",
+    partyAddress:["Unit No- 1106","11th Floor","Godrej Genesis","Street Number 18","Bidhan Nagar, College Mor","North Twenty Four Parganas","Pincode : 700091"],
+    contactName:"Sudarshan Paper & Board Pvt Ltd", contactEmail:"accounts@sudarshanpaper.com", contactMobile:"8335050140",
+    items:[
+      {slNo:1,description:"Paper & Board - GST 18%\nBatch : Primary Batch",hsn:"48114100",qty:"40941.000",unit:"Kgs",rate:"71.53/Kgs",disc:"",amount:-2928673.49}
+    ]
+  }
+};
 var DEMO_JOURNAL={
   branch:"kol", type:"Journal", no:"443", date:"20260630",
   party:"Employees - Salary",
@@ -490,6 +550,7 @@ document.getElementById("id").addEventListener("keydown",function(e){if(e.key===
   WANT_PRINT = p.get("print")==="1" || p.get("print")==="true";
   var demo=p.get("demo");
   if(demo==="invoice"){ render(DEMO_INVOICE); return; }
+  if(demo==="purchase"){ render(DEMO_PURCHASE); return; }
   if(demo==="journal"){ render(DEMO_JOURNAL); return; }
   var branch=p.get("branch"), id=p.get("id"), no=p.get("no");
   if(branch) document.getElementById("branch").value=branch;

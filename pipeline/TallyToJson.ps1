@@ -240,7 +240,11 @@ function Get-VoucherDetails($v) {
         partyGstin     = xfirst $v @("PARTYGSTIN","CONSIGNEEGSTIN")
         partyName      = xfirst $v @("PARTYNAME","PARTYLEDGERNAME","PARTYMAILINGNAME","BASICBUYERNAME")
         partyMailName  = xfirst $v @("PARTYMAILINGNAME","BASICBUYERNAME")
-        partyAddress   = xaddress $v @("BASICBUYERADDRESS.LIST","LEDGERMAILINGADDRESS.LIST")
+        # The party's OWN mailing address is ADDRESS.LIST. On a sale that equals the
+        # buyer address; on a PURCHASE it's the supplier's (whereas BASICBUYERADDRESS
+        # is CDC-the-buyer's) -- so ADDRESS.LIST must come first or the supplier block
+        # gets CDC's address. Kept BASICBUYERADDRESS as a last-resort fallback.
+        partyAddress   = xaddress $v @("ADDRESS.LIST","LEDGERMAILINGADDRESS.LIST","BASICBUYERADDRESS.LIST")
         partyState     = xfirst $v @("PARTYSTATENAME","STATENAME","CONSIGNEESTATENAME")
         placeOfSupply  = xfirst $v @("PLACEOFSUPPLY")
         # consignee (ship-to)

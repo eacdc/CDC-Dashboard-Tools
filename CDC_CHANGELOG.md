@@ -1,5 +1,34 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.4 (voucher) — July 2026 — Purchase-invoice format (supplier orientation)
+
+The printable voucher rendered every invoice in *sales* orientation, so a **purchase**
+(e.g. `PUR/1337/26-27` from Sudarshan Paper & Board) came out wrong: CDC as the
+letterhead, supplier/buyer names swapped onto each other's addresses, no line items,
+and the TDS deduction missing. Confirmed the purchase voucher's tag layout against its
+raw Day Book XML.
+
+### Renderer (`voucher/index.html`)
+- `isPurchase(v)` detects a purchase (voucher type or a purchase ledger leg). On a
+  purchase the invoice is the **supplier's**, so the renderer flips roles: the
+  **supplier (party) becomes the letterhead/seller**, **CDC becomes the buyer +
+  consignee**, and the signatory reads **"for &lt;supplier&gt;"**. Sales are unchanged.
+- Purchase goods/tax legs are Dr (negative) in Tally; amounts now display with the
+  correct sign (item, sub-total, round-off), so the item line and Sub Total appear
+  instead of being blank/negative.
+- **Non-GST charge/deduction ledgers** (e.g. `TDS Payable … 194Q`) now render as their
+  own total line (`-2,929`) between Round Off and Total — previously dropped.
+- `COMPANY` gains a clean `addr`/`state` for the CDC buyer block. New
+  `/voucher/?demo=purchase` sample reproduces the Sudarshan reference exactly.
+
+### Extractor (`pipeline/TallyToJson.ps1`)
+- `partyAddress` now reads the party's own **`ADDRESS.LIST`** first (then
+  `LEDGERMAILINGADDRESS`, then `BASICBUYERADDRESS`). On a sale that's identical to the
+  old source; on a purchase it's the **supplier's** address rather than CDC-the-buyer's
+  `BASICBUYERADDRESS` — fixing the name↔address scramble.
+
+---
+
 ## v2.3 (portal) — July 2026 — Drill-down View/PDF opens the correct voucher
 
 The drill-down's **View / PDF** buttons identified a voucher by `no + type + date`.
