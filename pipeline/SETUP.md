@@ -109,6 +109,52 @@ The `/sync` response reports `replacedDates`, `deletedByDate`, `deletedMissing`
 > with `-DryRun` before trusting the nightly job (the `ALTERID`/`GUID` fetch field
 > names can vary by TallyPrime build).
 
+## Frequent incremental schedule (every 30 min)
+
+For near-live data, run the **incremental** sync on a short interval instead of
+once a day. Use `run_sync.bat` (a thin wrapper for `run_daily.ps1 -Incremental`,
+both branches).
+
+**Prerequisites** — if any is missing the job runs but nothing lands in Mongo:
+- Tally **open** with the company loaded, gateway on `9001`.
+- `CDC_INGEST_URL` (+ optional `CDC_INGEST_TOKEN`) set as a **machine/user env var**
+  so the scheduled task inherits it. Incremental needs the hosted API's `/sync`
+  endpoint — `MONGODB_URI` alone is **not** enough for incremental.
+- A user is **logged on** (Tally needs the interactive session).
+
+**Register the task** (run once in an *Administrator* PowerShell; fix the path):
+
+```powershell
+schtasks /Create /TN "CDC_Tally_Sync_30min" /SC MINUTE /MO 30 /F `
+  /TR "\"C:\path\to\CDC-Dashboard-Tools\pipeline\run_sync.bat\""
+```
+
+Or via the GUI: Task Scheduler → Create Task → **Triggers** → New → *On a schedule*,
+**Repeat task every 30 minutes** for a duration of **Indefinitely** → **Actions** →
+Start a program → `...\pipeline\run_sync.bat` → **General** → *Run only when user is
+logged on*.
+
+**Verify it's actually running:**
+- After a run, the `sync_state` collection's `updatedAt` for **both** `kol` and
+  `ahm` should jump to "now" and stay within a few minutes of each other — every
+  successful incremental run bumps it, even when nothing changed. A stale or
+  one-sided `updatedAt` means the task isn't firing (or is failing).
+- `GET /api/sync-state?branch=ahm` returns the current `lastAlterId` + `updatedAt`.
+- Each run writes a timestamped log to `pipeline\logs\` — open the latest to see
+  the per-branch `sync posted: {...}` line (`replacedDates`, `upserted`, ...).
+- Task Scheduler → the task → **History** tab shows the fire times and exit codes.
+
+**Test it by hand first** (proves Tally + env vars + API all work):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -Incremental
+```
+
+Watch the console for `sync posted:` per branch, then re-check `sync_state.updatedAt`.
+If the manual run updates Mongo but the scheduled task doesn't, it's a Task
+Scheduler config issue (wrong path, env vars not visible to the task, or "run only
+when logged on" not set while the box is locked/logged off).
+
 ## Notes for this testing copy
 
 - **Branches:** `run_daily.ps1` loads both:
