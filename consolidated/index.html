@@ -110,7 +110,7 @@ function vchKey(v){
 }
 // Human-facing invoice / voucher number (as printed on the Tally voucher). Empty when the
 // source data carries no explicit number (composite-keyed vouchers).
-function vchNo(v){var n=v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref;return n==null?'':String(n);}
+function vchNo(v){var n=v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref;return n==null?'':String(n);}
 // monthKey: year-aware bin index. startFY is the FY-start year for bucket 0.
 // e.g. startFY=2025 → Apr-2025 = 0, Mar-2026 = 11, Apr-2026 = 12, Mar-2027 = 23.
 function monthKey(ds,startFY){var y=parseInt(ds.substring(0,4)),m=parseInt(ds.substring(4,6));var fy=m>=4?y:y-1;return(fy-startFY)*12+((m-4+12)%12);}
