@@ -252,12 +252,20 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   invoiceList.sort(function(a,b){return Math.abs(b.amount)-Math.abs(a.amount);});
   // Ledger/party name (lowercased) -> list of invoice numbers (lowercased) booked against it.
   // Powers "search by invoice number": typing a number expands the account/party that carries it.
+  // Built from EVERY voucher (not only sale/purchase invoices): map each ledger / party name
+  // touched by a voucher to that voucher's number, so a number search expands whatever account
+  // or party carries it. Uses the same (branch- and FY-filtered) voucher set shown on screen.
   var invLedgerIndex={};
-  invoiceList.forEach(function(r){if(!r.invNo)return;var no=(''+r.invNo).toLowerCase();
-    [r.primaryAccount,r.overrideAccount,r.party].forEach(function(nm){if(!nm)return;var k=(''+nm).toLowerCase();if(!invLedgerIndex[k])invLedgerIndex[k]=[];if(invLedgerIndex[k].indexOf(no)<0)invLedgerIndex[k].push(no);});});
+  function __idxAdd(nm,no){if(!nm||!no)return;var k=(''+nm).toLowerCase();if(!invLedgerIndex[k])invLedgerIndex[k]=[];if(invLedgerIndex[k].indexOf(no)<0)invLedgerIndex[k].push(no);}
+  for(var __xi=0;__xi<vouchers.length;__xi++){var __xv=vouchers[__xi];var __no=vchNo(__xv).toLowerCase();if(!__no)continue;
+    for(var __xl in (__xv.ledgers||{}))__idxAdd(__xl,__no);
+    for(var __xp in (__xv.party_ledgers||{}))__idxAdd(__xp,__no);}
+  // Also index the resolved primary/override account for sale/purchase invoices, so remapped
+  // invoices stay findable under the account they were routed to.
+  invoiceList.forEach(function(r){if(!r.invNo)return;var no=(''+r.invNo).toLowerCase();__idxAdd(r.primaryAccount,no);__idxAdd(r.overrideAccount,no);__idxAdd(r.party,no);});
   var availableAccounts={sale:Object.keys(availSale).sort(),purchase:Object.keys(availPurch).sort()};
   // Diagnostic: which voucher types contributed to the invoice list, how many per account
-  try{var __byAcct={};invoiceList.forEach(function(r){var k=r.primaryAccount;if(!__byAcct[k])__byAcct[k]={count:0,total:0};__byAcct[k].count++;__byAcct[k].total+=r.amount;});window.__invoiceDebug={voucherTypes:__invTypeCounts,invoiceCount:invoiceList.length,byPrimaryAccount:__byAcct,availableAccounts:availableAccounts};console.log('%c[Invoice Debug]','color:#0891b2;font-weight:bold','window.__invoiceDebug',window.__invoiceDebug);}catch(e){}
+  try{var __byAcct={};invoiceList.forEach(function(r){var k=r.primaryAccount;if(!__byAcct[k])__byAcct[k]={count:0,total:0};__byAcct[k].count++;__byAcct[k].total+=r.amount;});var __idxKeys=Object.keys(invLedgerIndex);var __numbered=0;for(var __vc=0;__vc<vouchers.length;__vc++){if(vchNo(vouchers[__vc]))__numbered++;}var __sampleNos=[];for(var __sk=0;__sk<__idxKeys.length&&__sampleNos.length<8;__sk++){var __sa=invLedgerIndex[__idxKeys[__sk]];for(var __sj=0;__sj<__sa.length&&__sampleNos.length<8;__sj++)__sampleNos.push(__sa[__sj]);}window.__invoiceDebug={voucherTypes:__invTypeCounts,invoiceCount:invoiceList.length,byPrimaryAccount:__byAcct,availableAccounts:availableAccounts,indexedLedgers:__idxKeys.length,vouchersWithNumber:__numbered,totalVouchers:vouchers.length,sampleInvoiceNos:__sampleNos};console.log('%c[Invoice Debug]','color:#0891b2;font-weight:bold','window.__invoiceDebug',window.__invoiceDebug);}catch(e){}
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
   return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
