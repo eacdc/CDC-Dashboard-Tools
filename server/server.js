@@ -1,6 +1,7 @@
 // CDC Dashboard API — ingest Tally JSON into MongoDB and serve it back to the
 // dashboards by date range. Also serves the static dashboards so the whole thing
 // can run as a single Render web service.
+// Auto-deploy test marker — 2026-07-24 (server/ change, expected to trigger a Render deploy).
 require('./loadEnv');
 const path = require('path');
 const express = require('express');
