@@ -80,7 +80,13 @@ app.get('/api/dataset', async (req, res) => {
     const db = await getDb();
     const out = { from, to, branches: {} };
     for (const branch of branches) {
-      const master = await db.collection('masters').findOne({ branch }, { projection: { _id: 0, updatedAt: 0 } });
+      const master = await db.collection('masters').findOne({ branch }, { projection: { _id: 0 } });
+      // "Last updated" = the most recent write we know about for this branch: the
+      // master snapshot (pushed every sync) or the incremental sync high-water stamp.
+      const syncSt = await db.collection('sync_state').findOne({ branch }, { projection: { updatedAt: 1 } });
+      const stamps = [master && master.updatedAt, syncSt && syncSt.updatedAt]
+        .filter(Boolean).map((d) => new Date(d).getTime());
+      const lastUpdatedAt = stamps.length ? new Date(Math.max.apply(null, stamps)).toISOString() : null;
       const vouchers = await db.collection('vouchers')
         .find({ branch, date: { $gte: from, $lte: to } },
               // `details` is excluded here to keep the dashboard payload small — the
@@ -94,6 +100,7 @@ app.get('/api/dataset', async (req, res) => {
       out.branches[branch] = {
         hierarchy: master ? { ledgers: master.ledgers, groups: master.groups } : null,
         vouchers,
+        lastUpdatedAt,
       };
     }
     res.json(out);

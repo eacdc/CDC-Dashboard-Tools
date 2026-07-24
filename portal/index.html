@@ -1517,6 +1517,7 @@ function Portal(){
   var sApi=useState(''),apiBase=sApi[0],setApiBase=sApi[1];
   var sFrom=useState('2025-04-01'),fromD=sFrom[0],setFromD=sFrom[1];// full history default; change here to switch back to current-FY-only
   var sTo=useState(new Date().toISOString().slice(0,10)),toD=sTo[0],setToD=sTo[1];
+  var sUpd=useState(null),lastUpd=sUpd[0],setLastUpd=sUpd[1];// {kol,ahm} ISO strings of last DB update
   function setF(k){return function(file){var nf=Object.assign({},files);nf[k]=file;setFiles(nf);};}
   // cached bills/stock text
   var cachedTexts={};BILL_KEYS.forEach(function(k){var c=lcGet(k);if(c)cachedTexts[k]=c;});
@@ -1553,6 +1554,7 @@ function Portal(){
     Promise.all(billProms).then(function(br){
       fetch(url).then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();}).then(function(d){
         var b=d.branches||{},kol=b.kol||{},ahm=b.ahm||{};
+        setLastUpd({kol:kol.lastUpdatedAt||null,ahm:ahm.lastUpdatedAt||null});
         var nk=(kol.vouchers||[]).length,na=(ahm.vouchers||[]).length;
         if(nk+na===0){setErr('No vouchers in that range. Load data via the pipeline first, or widen the range.');setLd(false);return;}
         var texts={
@@ -1613,6 +1615,12 @@ function Portal(){
 
   // Portal chrome + active app
   function navBtn(id,label,color){return e('button',{key:id,onClick:function(){setActive(id);},style:{padding:'8px 18px',borderRadius:'8px',border:active===id?('2px solid '+color):'1px solid #e2e8f0',background:active===id?color:'#fff',color:active===id?'#fff':'#475569',fontSize:'12px',fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'0.5px'}},label);}
+  // Format an ISO timestamp as a short local "24-Jul 14:32" (blank when never synced).
+  function fmtUpd(iso){if(!iso)return '—';var dt=new Date(iso);if(isNaN(dt))return '—';var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var p=function(n){return(n<10?'0':'')+n;};return p(dt.getDate())+'-'+MN[dt.getMonth()]+' '+p(dt.getHours())+':'+p(dt.getMinutes());}
+  function updBadge(){if(!lastUpd)return null;return e('div',{style:{marginLeft:'auto',display:'flex',gap:'14px',alignItems:'center',fontFamily:'monospace'}},
+    ['kol','ahm'].map(function(bk){return e('div',{key:bk,style:{textAlign:'right',lineHeight:'1.25'}},
+      e('div',{style:{fontSize:'8px',letterSpacing:'1px',color:'#94a3b8',textTransform:'uppercase'}},(bk==='kol'?'KOL':'AHM')+' updated'),
+      e('div',{style:{fontSize:'11px',fontWeight:700,color:lastUpd[bk]?'#0f172a':'#cbd5e1'}},fmtUpd(lastUpd[bk])));}));}
   var activeEl=active==='consol'
     ? e(window.CDC_CONSOL.Dash,{data:consolData,setData:setConsolData,onReset:reset})
     : e(window.CDC_PROJ.Dash,{data:projData,onReset:reset});
@@ -1622,7 +1630,8 @@ function Portal(){
       navBtn('consol','📘 Consolidated (P&L / Cashflow / Audit)','#0891b2'),
       navBtn('proj','📈 Projected (Projection / Receivables / Payables / PvA)','#be185d'),
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
-      e('button',{onClick:reset,style:{marginLeft:'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
+      updBadge(),
+      e('button',{onClick:reset,style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
     e('div',{key:active},activeEl));
 }
 ReactDOM.render(e(Portal),document.getElementById('root'));
