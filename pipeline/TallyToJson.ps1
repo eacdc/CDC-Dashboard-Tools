@@ -231,6 +231,11 @@ function Get-VoucherDetails($v) {
     $deln    = $v.SelectSingleNode(".//INVOICEDELNOTES.LIST")
     $delNote = if ($deln) { xfirst $deln @("BASICSHIPDELIVERYNOTE","DELIVERYNOTENO") } else { "" }
     $delDate = if ($deln) { xfirst $deln @("BASICSHIPPINGDATE","BASICSHIPDELIVERYNOTEDATE") } else { "" }
+    # Party (supplier on a purchase / customer on a sale) mailing address = ADDRESS.LIST,
+    # with the party's pincode (a separate PARTYPINCODE tag) appended as a line.
+    $partyAddr = @(xaddress $v @("ADDRESS.LIST","LEDGERMAILINGADDRESS.LIST","BASICBUYERADDRESS.LIST"))
+    $partyPin  = xfirst $v @("PARTYPINCODE")
+    if ($partyPin -and (($partyAddr -join " ") -notmatch "Pincode")) { $partyAddr = @($partyAddr) + ("Pincode : " + $partyPin) }
     return [ordered]@{
         narration      = xfirst $v @("NARRATION")
         reference      = xfirst $v @("REFERENCE","BASICORDERREF")
@@ -240,11 +245,11 @@ function Get-VoucherDetails($v) {
         partyGstin     = xfirst $v @("PARTYGSTIN","CONSIGNEEGSTIN")
         partyName      = xfirst $v @("PARTYNAME","PARTYLEDGERNAME","PARTYMAILINGNAME","BASICBUYERNAME")
         partyMailName  = xfirst $v @("PARTYMAILINGNAME","BASICBUYERNAME")
-        # The party's OWN mailing address is ADDRESS.LIST. On a sale that equals the
-        # buyer address; on a PURCHASE it's the supplier's (whereas BASICBUYERADDRESS
-        # is CDC-the-buyer's) -- so ADDRESS.LIST must come first or the supplier block
-        # gets CDC's address. Kept BASICBUYERADDRESS as a last-resort fallback.
-        partyAddress   = xaddress $v @("ADDRESS.LIST","LEDGERMAILINGADDRESS.LIST","BASICBUYERADDRESS.LIST")
+        # The party's OWN mailing address is ADDRESS.LIST (+ PARTYPINCODE). On a sale
+        # that equals the buyer address; on a PURCHASE it's the supplier's (whereas
+        # BASICBUYERADDRESS is CDC-the-buyer's) -- so ADDRESS.LIST must come first or the
+        # supplier block gets CDC's address. See $partyAddr built above.
+        partyAddress   = $partyAddr
         partyState     = xfirst $v @("PARTYSTATENAME","STATENAME","CONSIGNEESTATENAME")
         placeOfSupply  = xfirst $v @("PLACEOFSUPPLY")
         # consignee (ship-to)
