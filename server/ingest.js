@@ -55,13 +55,18 @@ function cleanDetails(d) {
   for (const k of DETAIL_SCALARS) {
     if (d[k] != null && d[k] !== '') out[k] = String(d[k]);
   }
-  const addrLines = (a) => (Array.isArray(a) ? a.map((x) => String(x)).filter(Boolean).slice(0, 10) : []);
+  // PowerShell's ConvertTo-Json UNWRAPS a single-element array into a bare
+  // object/scalar, so a voucher with exactly one item (or one address line) arrives
+  // as {..}/"str" instead of [..]. Coerce back to an array so it isn't dropped.
+  const asArr = (x) => (Array.isArray(x) ? x : (x == null || x === '' ? [] : [x]));
+  const addrLines = (a) => asArr(a).map((x) => String(x)).filter(Boolean).slice(0, 10);
   const pa = addrLines(d.partyAddress);
   const ca = addrLines(d.consigneeAddr || d.consigneeAddress);
   if (pa.length) out.partyAddress = pa;
   if (ca.length) out.consigneeAddr = ca;
-  if (Array.isArray(d.items) && d.items.length) {
-    out.items = d.items.map((it) => {
+  const items = asArr(d.items).filter((it) => it && typeof it === 'object');
+  if (items.length) {
+    out.items = items.map((it) => {
       const row = {};
       for (const f of ITEM_FIELDS) {
         if (it[f] == null) continue;

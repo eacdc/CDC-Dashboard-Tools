@@ -59,9 +59,19 @@ function get(port, p) {
 }
 
 (async () => {
-  const { ingest } = require('./ingest');
+  const { ingest, cleanDetails } = require('./ingest');
   let fails = 0;
   const assert = (c, m) => { if (!c) { console.error('FAIL:', m); fails++; } else console.log('ok  -', m); };
+
+  // PowerShell ConvertTo-Json unwraps a single-element array to a bare object/scalar;
+  // cleanDetails must coerce that back so a 1-item purchase keeps its line.
+  const unwrapped = cleanDetails({
+    items: { slNo: '1', description: 'Paper & Board - GST 18%', hsn: '48114100', qty: '40941.000', amount: -2928673.49 },
+    partyAddress: 'Unit No- 1106',
+  });
+  assert(Array.isArray(unwrapped.items) && unwrapped.items.length === 1 && unwrapped.items[0].hsn === '48114100', 'single-object item coerced to array (PS unwrap)');
+  assert(unwrapped.items[0].amount === -2928673.49, 'unwrapped item amount preserved (negative)');
+  assert(Array.isArray(unwrapped.partyAddress) && unwrapped.partyAddress[0] === 'Unit No- 1106', 'single address line coerced to array');
 
   const master = {
     ledgers: { Sale: 'Sales Accounts' }, groups: { 'Sales Accounts': null },
