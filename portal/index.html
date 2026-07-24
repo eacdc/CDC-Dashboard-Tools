@@ -272,8 +272,31 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   var availableAccounts={sale:Object.keys(availSale).sort(),purchase:Object.keys(availPurch).sort()};
   // Diagnostic: which voucher types contributed to the invoice list, how many per account
   try{var __byAcct={};invoiceList.forEach(function(r){var k=r.primaryAccount;if(!__byAcct[k])__byAcct[k]={count:0,total:0};__byAcct[k].count++;__byAcct[k].total+=r.amount;});var __idxKeys=Object.keys(invLedgerIndex);var __numbered=0;for(var __vc=0;__vc<vouchers.length;__vc++){if(vchNo(vouchers[__vc]))__numbered++;}var __sampleNos=[];for(var __sk=0;__sk<__idxKeys.length&&__sampleNos.length<8;__sk++){var __sa=invLedgerIndex[__idxKeys[__sk]];for(var __sj=0;__sj<__sa.length&&__sampleNos.length<8;__sj++)__sampleNos.push(__sa[__sj]);}window.__invoiceDebug={voucherTypes:__invTypeCounts,invoiceCount:invoiceList.length,byPrimaryAccount:__byAcct,availableAccounts:availableAccounts,indexedLedgers:__idxKeys.length,vouchersWithNumber:__numbered,totalVouchers:vouchers.length,sampleInvoiceNos:__sampleNos};console.log('%c[Invoice Debug]','color:#0891b2;font-weight:bold','window.__invoiceDebug',window.__invoiceDebug);}catch(e){}
+  // ---- Sales Analysis (party-anchored) -------------------------------------
+  // A customer/vendor-centric view of the same sale & purchase invoices. Each
+  // sale is attributed to its Sundry-DEBTOR party; each purchase to its Sundry-
+  // CREDITOR party. Two measures per party:
+  //   net   = the taxable sales/purchase ledger legs (excl GST) — the P&L basis.
+  //   gross = the party's receivable/payable leg (incl GST) — full invoice value.
+  // The party map is then run through buildTree (which nests by the party's Tally
+  // group chain) and we lift out the "Sundry Debtors"/"Sundry Creditors" subtree,
+  // so that node becomes the section's topmost group.
+  var saSalesNet={},saSalesGross={},saPurchNet={},saPurchGross={};
+  function __saAdd(map,key,mi,amt){if(!map[key])map[key]=Array(monthCount).fill(0);map[key][mi]+=amt;}
+  for(var savi=0;savi<vouchers.length;savi++){var sav=vouchers[savi];var sami=monthKey(sav.date,startFY);if(sami<0||sami>=monthCount)continue;
+    var saNetR=0,saNetP=0;for(var sal in (sav.ledgers||{})){if(ibLedgers[sal])continue;var sac=classify(sal,xd,lu,ovr);if(sac==='revenue')saNetR+=sav.ledgers[sal];else if(sac==='purchase')saNetP+=sav.ledgers[sal];}
+    var saDebG=0,saCredG=0,saDomD=null,saDomDAbs=0,saDomC=null,saDomCAbs=0;
+    for(var sap in (sav.party_ledgers||{})){if(ibLedgers[sap])continue;var saAv=Math.abs(sav.party_ledgers[sap]);
+      if(chainHas(sap,['sundry debtors'])){saDebG+=saAv;if(saAv>saDomDAbs){saDomDAbs=saAv;saDomD=sap;}}
+      else if(chainHas(sap,['sundry creditors'])){saCredG+=saAv;if(saAv>saDomCAbs){saDomCAbs=saAv;saDomC=sap;}}}
+    if(saNetR!==0&&saDomD){__saAdd(saSalesNet,saDomD,sami,Math.abs(saNetR));__saAdd(saSalesGross,saDomD,sami,saDebG);}
+    if(saNetP!==0&&saDomC){__saAdd(saPurchNet,saDomC,sami,Math.abs(saNetP));__saAdd(saPurchGross,saDomC,sami,saCredG);}}
+  function __saFind(nodes,name){for(var i=0;i<nodes.length;i++){var n=nodes[i];if(n.name===name)return n;if(n.children){var f=__saFind(n.children,name);if(f)return f;}}return null;}
+  function __saRebase(n,delta){n.depth=(n.depth||0)-delta;if(n.children)n.children.forEach(function(c){__saRebase(c,delta);});if(n.ledgers)n.ledgers.forEach(function(c){__saRebase(c,delta);});}
+  function __saSection(map,rootName){var full=buildTree(map,xd,lu,monthCount);var node=__saFind(full,rootName);if(!node)return null;__saRebase(node,(node.depth||1));return node;}
+  var saObj={salesNet:__saSection(saSalesNet,'Sundry Debtors'),salesGross:__saSection(saSalesGross,'Sundry Debtors'),purchNet:__saSection(saPurchNet,'Sundry Creditors'),purchGross:__saSection(saPurchGross,'Sundry Creditors')};
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
-  return{months:months,fy:fyLabel,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
+  return{months:months,fy:fyLabel,sa:saObj,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
 
 function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
@@ -381,6 +404,7 @@ function Dash(props){
   var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
   var hCells=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];months.forEach(function(m,i){hCells.push(e('div',{key:'m'+i,style:hs},m));});hCells.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
   var s1=useState(true),revO=s1[0],setRevO=s1[1];var s2=useState(true),purO=s2[0],setPurO=s2[1];var s3=useState(true),deO=s3[0],setDeO=s3[1];var s4=useState(true),ieO=s4[0],setIeO=s4[1];var s5=useState(false),exO=s5[0],setExO=s5[1];var s6=useState(true),ciO=s6[0],setCiO=s6[1];var s7=useState(true),coO=s7[0],setCoO=s7[1];
+  var sSaS=useState(true),saSalesO=sSaS[0],setSaSalesO=sSaS[1];var sSaP=useState(true),saPurchO=sSaP[0],setSaPurchO=sSaP[1];var sGross=useState(false),gross=sGross[0],setGross=sGross[1];
   function sumArr(a){return a?a.reduce(function(s,v){return s+v;},0):0;}
   var tRev=sumArr(pl.revM),tPur=sumArr(pl.purchM),tGP=sumArr(pl.gpM),tNP=sumArr(pl.npM),tIn=sumArr(cf.inM),tOut=sumArr(cf.outM),tNet=sumArr(cf.netM);
   var bs=data.branchStats||{};
@@ -397,7 +421,7 @@ function Dash(props){
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tIn))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tOut))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tNet>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tNet>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tNet))),
-        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
+        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(view==='sales'?' active':''),onClick:function(){setView('sales');}},'\ud83d\udcc8 Sales Analysis'),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['net','Net'],['gross','Gross']].map(function(g){var on=(g[0]==='gross')===gross;return e('span',{key:g[0],onClick:function(){setGross(g[0]==='gross');},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
 // FY toggle: switches between Current FY (fyOffset=0) and Prior FY (fyOffset=-1), 12 months each.
 e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
@@ -420,7 +444,16 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
         e(SectionRow,{label:'CASH OUTFLOWS ('+data.stats.cfOutParties+')',monthly:cf.outM,total:tOut,color:'var(--pink)',bg:'var(--sectionOutBg)',borderColor:'var(--sectionOutBorder)',open:coO,onToggle:function(){setCoO(!coO);},mc:mc}),coO&&e(TreeRows,{nodes:cf.outTree,mc:mc,sortByValue:sortV,prefix:'cf_out',search:search,onDrill:openDrill}),
         e(TotalRow,{label:'NET CASHFLOW',monthly:cf.netM,mc:mc}),
       ),
-      view==='audit'&&e(AuditView,{data:data,onOverrideChange:function(){var raw=data._raw;if(!raw)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,data.monthCount||12,data.fyOffset||0,data.branch||'all');nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);}}))),
+      view==='audit'&&e(AuditView,{data:data,onOverrideChange:function(){var raw=data._raw;if(!raw)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,data.monthCount||12,data.fyOffset||0,data.branch||'all');nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);}}),
+      view==='sales'&&(function(){var sa=data.sa||{};var salesNode=gross?sa.salesGross:sa.salesNet;var purchNode=gross?sa.purchGross:sa.purchNet;
+        function saNodes(n){return n?((n.children||[]).concat(n.ledgers||[])):[];}
+        function saM(n){return n?n.monthly:Array(mc).fill(0);}
+        return e('div',null,
+          e(SectionRow,{label:'SALES \u00B7 SUNDRY DEBTORS ('+(gross?'Gross incl GST':'Net excl GST')+')',monthly:saM(salesNode),total:sumArr(saM(salesNode)),color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:saSalesO,onToggle:function(){setSaSalesO(!saSalesO);},mc:mc}),
+          saSalesO&&(salesNode?e(TreeRows,{nodes:saNodes(salesNode),mc:mc,sortByValue:sortV,prefix:'sa_sales',search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No sales attributable to a Sundry Debtor party in this range.')),
+          e(SectionRow,{label:'PURCHASES \u00B7 SUNDRY CREDITORS ('+(gross?'Gross incl GST':'Net excl GST')+')',monthly:saM(purchNode),total:sumArr(saM(purchNode)),color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:saPurchO,onToggle:function(){setSaPurchO(!saPurchO);},mc:mc}),
+          saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:mc,sortByValue:sortV,prefix:'sa_purch',search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
+      })())),
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'),
     drill&&e(DrillModal,{target:drill,data:data,initialSearch:search,onClose:function(){setDrill(null);}}));
 }
