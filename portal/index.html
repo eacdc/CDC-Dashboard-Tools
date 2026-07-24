@@ -318,11 +318,15 @@ function sortNodes(nodes,byVal){if(!nodes)return nodes;var s=nodes.slice();if(by
 function exportToExcel(data,view,months,sortV,openState){var rows=[];var header=['Particulars'].concat(months).concat(['TOTAL']);function addSec(label,tree,pre){rows.push([label]);walk(sortNodes(tree,sortV),1,pre);}function walk(nodes,ind,pre){for(var i=0;i<nodes.length;i++){var n=nodes[i];var p='';for(var x=0;x<ind;x++)p+='  ';var row=[p+n.name];var t=0;for(var m=0;m<n.monthly.length;m++){row.push(n.monthly[m]);t+=n.monthly[m];}row.push(Math.round(t*100)/100);rows.push(row);var k=regKey(pre,n.name,i);if(openState[k]){if(n.children)walk(sortNodes(n.children,sortV),ind+1,k);if(n.ledgers)walk(sortNodes(n.ledgers,sortV),ind+1,k);}}}function addTot(label,mo){var row=[label];var t=0;for(var i=0;i<mo.length;i++){row.push(mo[i]);t+=mo[i];}row.push(Math.round(t*100)/100);rows.push(row);}if(view==='pl'){var pl=data.pl;addSec('REVENUE',pl.revTree,'pl_rev');addTot('Total Revenue',pl.revM);rows.push([]);addSec('PURCHASES',pl.purchTree,'pl_pur');addTot('Total Purchases',pl.purchM);rows.push([]);addSec('DIRECT EXPENSES',pl.dirExpTree,'pl_de');addTot('Total Direct Exp',pl.dirExpM);rows.push([]);addTot('STOCK CHANGE',pl.stockM);addTot('GROSS PROFIT',pl.gpM);rows.push([]);addSec('INDIRECT EXPENSES',pl.indExpTree,'pl_ie');addTot('Total Indirect Exp',pl.indExpM);rows.push([]);addTot('NET PROFIT',pl.npM);}else{var cf=data.cf;addSec('INFLOWS',cf.inTree,'cf_in');addTot('Total Inflows',cf.inM);rows.push([]);addSec('OUTFLOWS',cf.outTree,'cf_out');addTot('Total Outflows',cf.outM);rows.push([]);addTot('NET CASHFLOW',cf.netM);}var ws=XLSX.utils.aoa_to_sheet([header].concat(rows));ws['!cols']=[{wch:40}];for(var i=0;i<months.length+1;i++)ws['!cols'].push({wch:14});var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,view==='pl'?'P&L':'Cashflow');XLSX.writeFile(wb,'CDC_Consolidated_'+view+'.xlsx');}
 function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
 function Row(props){var node=props.node,expanded=props.expanded,onToggle=props.onToggle,mc=props.mc;var onDrill=props.onDrill;var has=node.children||node.ledgers;var total=node.monthly.reduce(function(a,b){return a+b;},0);var indent=(node.depth||0)*20;var isL=node.type==='ledger';var canDrill=isL&&!!onDrill;
+// Value cells (month + total) drill for BOTH ledgers and groups; a group drill
+// aggregates every voucher under any ledger/party nested beneath it.
+var canDrillVal=!!onDrill;
 function clickName(ev){ev.stopPropagation();if(canDrill){onDrill(node,-1);}else if(has){onToggle();}}
-function clickMonth(idx){return function(ev){ev.stopPropagation();if(canDrill)onDrill(node,idx);else if(has)onToggle();};}
+function clickMonth(idx){return function(ev){ev.stopPropagation();if(onDrill)onDrill(node,idx);else if(has)onToggle();};}
+function clickTotal(ev){ev.stopPropagation();if(onDrill)onDrill(node,-1);else if(has)onToggle();}
 var cells=[e('div',{key:'n',onClick:clickName,style:{padding:'9px 12px 9px '+(14+indent)+'px',display:'flex',alignItems:'center',gap:'7px',borderRight:'1px solid var(--border)',minWidth:0,cursor:canDrill||has?'pointer':'default'}},has?e('span',{style:{fontSize:'9px',color:'var(--text3)',transform:expanded?'rotate(90deg)':'rotate(0)',transition:'transform 0.15s',display:'inline-block',width:'14px',textAlign:'center',flexShrink:0}},'\u25B6'):e('span',{style:{width:'14px',flexShrink:0}}),e('span',{style:{fontSize:isL?'12.5px':'13px',fontWeight:isL?400:500,color:isL?'var(--text2)':'var(--text)',overflow:'hidden',whiteSpace:'normal',wordBreak:'break-word',lineHeight:'1.3',textDecoration:canDrill?'underline dotted var(--border2)':'none'}},node.name),has&&e('span',{style:{fontSize:'10px',color:'var(--text3)',flexShrink:0,marginLeft:'4px'}},(node.children?node.children.length+'g':'')+(node.children&&node.ledgers?' \u00B7 ':'')+(node.ledgers?node.ledgers.length+'l':'')))];
-for(var i=0;i<node.monthly.length;i++){var __mv=node.monthly[i];cells.push(e('div',{key:'m'+i,className:'num',onClick:canDrill&&__mv!==0?clickMonth(i):null,style:{padding:'9px 10px',textAlign:'right',fontSize:'13px',fontWeight:isL?400:500,color:__mv===0?'var(--dimnum)':isL?'var(--text2)':'var(--text)',borderRight:'1px solid var(--border)',cursor:canDrill&&__mv!==0?'pointer':'default'}},fmt(__mv)));}
-cells.push(e('div',{key:'t',className:'num',onClick:canDrill?clickName:null,style:{padding:'9px 12px 9px 10px',textAlign:'right',fontSize:'13px',fontWeight:600,color:total===0?'var(--dimnum)':'var(--text)',background:'var(--totalBg)',cursor:canDrill?'pointer':'default'}},fmt(total)));
+for(var i=0;i<node.monthly.length;i++){var __mv=node.monthly[i];cells.push(e('div',{key:'m'+i,className:'num',onClick:canDrillVal&&__mv!==0?clickMonth(i):null,style:{padding:'9px 10px',textAlign:'right',fontSize:'13px',fontWeight:isL?400:500,color:__mv===0?'var(--dimnum)':isL?'var(--text2)':'var(--text)',borderRight:'1px solid var(--border)',cursor:canDrillVal&&__mv!==0?'pointer':'default'}},fmt(__mv)));}
+cells.push(e('div',{key:'t',className:'num',onClick:canDrillVal&&total!==0?clickTotal:null,style:{padding:'9px 12px 9px 10px',textAlign:'right',fontSize:'13px',fontWeight:600,color:total===0?'var(--dimnum)':'var(--text)',background:'var(--totalBg)',cursor:canDrillVal&&total!==0?'pointer':'default'}},fmt(total)));
 function clickRow(ev){if(canDrill){onDrill(node,-1);}else if(has){onToggle();}}
 return e('div',{onClick:clickRow,onMouseEnter:function(ev){ev.currentTarget.style.background='var(--rowHover)';},onMouseLeave:function(ev){ev.currentTarget.style.background='transparent';},style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)',cursor:canDrill||has?'pointer':'default'}},cells);}
 function TreeRows(props){var nodes=sortNodes(props.nodes,props.sortByValue),mc=props.mc,prefix=props.prefix||'',search=props.search||'',onDrill=props.onDrill;var s=useState(function(){return{};}),open=s[0],setOpen=s[1];function toggle(key){setOpen(function(p){var x=Object.assign({},p);if(x[key])delete x[key];else x[key]=true;expandRegistry[key]=!expandRegistry[key];return x;});}if(search){var sl=search.toLowerCase();nodes=nodes.filter(function(n){return nodeMatchesSearch(n,sl);});}return nodes.map(function(n,i){var key=regKey(prefix,n.name,i);var isO=!!open[key]||(search&&search.length>0);return e('div',{key:key},e(Row,{node:n,expanded:isO,onToggle:function(){toggle(key);},mc:mc,onDrill:onDrill}),isO&&n.children&&e(TreeRows,{nodes:n.children,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}),isO&&n.ledgers&&e(TreeRows,{nodes:n.ledgers,mc:mc,sortByValue:props.sortByValue,prefix:key,search:search,onDrill:onDrill}));});}
@@ -396,7 +400,11 @@ function Upload(props){
 function Dash(props){
   var data=props.data,onReset=props.onReset,months=data.months,mc=months.length,pl=data.pl,cf=data.cf;
   var sView=useState('pl'),view=sView[0],setView=sView[1];var sCW=useState(320),colW=sCW[0],setColW=sCW[1];var sSort=useState(true),sortV=sSort[0],setSortV=sSort[1];var sSearch=useState(''),search=sSearch[0],setSearch=sSearch[1];
-  var sDr=useState(null),drill=sDr[0],setDrill=sDr[1];function openDrill(node,mi){setDrill({ledger:node.name,monthIdx:mi});}
+  var sDr=useState(null),drill=sDr[0],setDrill=sDr[1];
+  // Collect every leaf ledger/party name nested under a node (a group aggregates
+  // all its descendants; a leaf is just itself).
+  function collectLeaves(n,out){if(!n)return out;if(n.type==='ledger'||(!n.children&&!n.ledgers)){out[n.name]=true;return out;}if(n.children)for(var i=0;i<n.children.length;i++)collectLeaves(n.children[i],out);if(n.ledgers)for(var j=0;j<n.ledgers.length;j++)collectLeaves(n.ledgers[j],out);return out;}
+  function openDrill(node,mi){var isLeaf=node.type==='ledger'||(!node.children&&!node.ledgers);setDrill({ledger:node.name,monthIdx:mi,ledgers:isLeaf?null:Object.keys(collectLeaves(node,{})),isGroup:!isLeaf});}
   GRID_COL1=colW;
   // Rebuild the invoice-number match set for the current search term. A ledger/party qualifies
   // when the typed text appears anywhere in one of its booked invoice numbers.
@@ -554,6 +562,10 @@ function DrillModal(props){
   var startFY=data.startFY,monthCount=data.monthCount||12;var branch=data.branch||'all';
   var fyStart=String(startFY)+'0401';var fyEnd=String(startFY+Math.ceil(monthCount/12))+'0401';
   function fmtDate(d){if(!d||d.length<8)return d||'';return d.substring(6,8)+'-'+d.substring(4,6)+'-'+d.substring(0,4);}
+  // Match set: a leaf drill matches one name; a group drill matches every leaf
+  // ledger/party nested beneath it (t.ledgers). matches(name) → in-set test.
+  var matchSet=null;if(t.ledgers&&t.ledgers.length){matchSet={};for(var __mi2=0;__mi2<t.ledgers.length;__mi2++)matchSet[t.ledgers[__mi2]]=true;}
+  function matches(nm){return matchSet?!!matchSet[nm]:(nm===t.ledger);}
   var contributing=[];
   for(var i=0;i<raw.vouchers.length;i++){var v=raw.vouchers[i];
     if(branch!=='all'&&v._branch&&v._branch!==branch)continue;
@@ -564,9 +576,9 @@ function DrillModal(props){
     for(var ln in (v.ledgers||{})){
       var cat=classify(ln,xd,lu,ovr);
       var effLn=(ovrAcct&&(cat==='revenue'||cat==='purchase'))?ovrAcct:ln;
-      if(effLn===t.ledger){amt+=v.ledgers[ln];foundIn='ledgers';}
+      if(matches(effLn)){amt+=v.ledgers[ln];foundIn='ledgers';}
     }
-    for(var ln2 in (v.party_ledgers||{})){if(ln2===t.ledger){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
+    for(var ln2 in (v.party_ledgers||{})){if(matches(ln2)){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
     if(foundIn){
       var dom=null,domAbs=0;for(var p in (v.party_ledgers||{})){var a=Math.abs(v.party_ledgers[p]);if(a>domAbs){domAbs=a;dom=p;}}
       contributing.push({date:v.date,no:v.no||'',guid:v.guid||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
