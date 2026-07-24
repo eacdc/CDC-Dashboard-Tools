@@ -383,12 +383,20 @@ function Dash(props){
   function sumArr(a){return a?a.reduce(function(s,v){return s+v;},0):0;}
   var tRev=sumArr(pl.revM),tPur=sumArr(pl.purchM),tGP=sumArr(pl.gpM),tNP=sumArr(pl.npM),tIn=sumArr(cf.inM),tOut=sumArr(cf.outM),tNet=sumArr(cf.netM);
   var bs=data.branchStats||{};
+  // Last synced Tally date per branch = newest voucher date in the loaded data.
+  var __rv=(data._raw&&data._raw.vouchers)||[]; var __kL='',__aL='';
+  for(var __li=0;__li<__rv.length;__li++){var __v=__rv[__li];
+    if(__v._branch==='kol'){ if(__v.date>__kL)__kL=__v.date; }
+    else if(__v._branch==='ahm'){ if(__v.date>__aL)__aL=__v.date; } }
+  function fmtSyncDate(y){ if(!y||y.length<8)return '—'; var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return (+y.substr(6,2))+' '+M[(+y.substr(4,2))-1]+' '+y.substr(0,4); }
   return e('div',{style:{minHeight:'100vh',background:'var(--bg)',color:'var(--text)',fontFamily:'var(--sans)'}},
     e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'10px'}},
       e('div',null,
         e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC Printers \u00B7 '+(data.branch==='kol'?'KOLKATA':(data.branch==='ahm'?'AHMEDABAD':'CONSOLIDATED'))+' \u00B7 FY '+data.fy),
         e('div',{style:{fontSize:'18px',fontWeight:700,color:'var(--text)',marginTop:'2px'}},'Consolidated Dashboard'),
-        bs.kol&&e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'KOL: '+bs.kol+' \u00B7 AHM: '+bs.ahm+' vouchers \u00B7 '+bs.ibElim+' IB ledgers eliminated')),
+        bs.kol&&e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'KOL: '+bs.kol+' \u00B7 AHM: '+bs.ahm+' vouchers \u00B7 '+bs.ibElim+' IB ledgers eliminated'),
+        e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'Last synced Tally data \u00B7 KOL: '+fmtSyncDate(__kL)+' \u00B7 AHM: '+fmtSyncDate(__aL))),
       e('div',{style:{display:'flex',gap:'16px',alignItems:'center',flexWrap:'wrap'}},
         view==='pl'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'REVENUE'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tRev))),
         view==='pl'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tGP>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'GP'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tGP>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tGP))),
