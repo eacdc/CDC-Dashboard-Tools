@@ -40,8 +40,11 @@ param(
     [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
     [switch]$DryRun,                     # incremental: print the plan, don't pull detail or post
-    [int]$MinLedgers = 50                # safety floor: abort if the company returns fewer ledgers
-)                                        #   (means it isn't loaded in this Tally). Set 0 to disable.
+    [int]$MinLedgers = 50,               # safety floor: abort if the company returns fewer ledgers
+    [string]$VoucherNos = ""             #   (means it isn't loaded in this Tally). Set 0 to disable.
+)                                        # targeted: only re-sync these exact voucher no(s), comma-
+                                         # separated (e.g. "PUR/1337/26-27,PUR/2269/26-27"). Finds
+                                         # each one's date, re-pulls just those, upserts via -IngestUrl.
 
 $ErrorActionPreference = "Stop"
 
@@ -413,6 +416,60 @@ function Invoke-Incremental {
     Write-Host ("  sync posted: {0}" -f $resp.Content)
 }
 
+# ---- TARGETED re-sync of specific voucher numbers -------------------------
+# Server-side Collection filter finds a voucher's DATE by its exact number, so we
+# can re-pull just that one day's full detail and upsert only the wanted vouchers.
+function Find-VoucherDate([string]$vno) {
+    $q = @"
+<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>VFind</ID></HEADER>
+<BODY><DESC><STATICVARIABLES>
+<SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+<SVFROMDATE>20250401</SVFROMDATE><SVTODATE>20270331</SVTODATE>
+<SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+</STATICVARIABLES>
+<TDL><TDLMESSAGE>
+<COLLECTION NAME="VFind" ISMODIFY="No"><TYPE>Voucher</TYPE><FILTER>fNo</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="fNo">`$VoucherNumber = "$vno"</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>
+"@
+    [xml]$xml = Post-Tally $q
+    foreach ($n in $xml.SelectNodes("//VOUCHER")) {
+        $dt = xval $n.DATE
+        if ($dt -and $dt.Length -ne 8) { try { $dt = ([datetime]$dt).ToString('yyyyMMdd') } catch {} }
+        if ($dt) { return $dt }
+    }
+    return ""
+}
+function Invoke-Targeted {
+    $nos = @($VoucherNos -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    Write-Host ("Targeted re-sync (branch {0}): {1}" -f $Branch, ($nos -join ', '))
+    $want = @{}; foreach ($n in $nos) { $want[$n] = $true }
+    $days = @{}
+    foreach ($vno in $nos) {
+        $d = Find-VoucherDate $vno
+        if ($d) { $days[$d] = $true; Write-Host ("  {0} -> {1}" -f $vno, $d) }
+        else    { Write-Warning ("  {0}: not found in {1}" -f $vno, $Company) }
+    }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($ymd in ($days.Keys | Sort-Object)) {
+        foreach ($o in (Get-DayVouchers $ymd)) { if ($want[$o.no]) { [void]$out.Add($o) } }
+    }
+    Write-Host ("  collected {0} voucher(s)" -f $out.Count)
+    if ($out.Count -eq 0) { Write-Warning "nothing matched - check the exact voucher numbers/company."; return }
+    if (-not $IngestUrl) {
+        $p = Join-Path $OutDir ("{0}_TargetVouchers.json" -f $Branch)
+        [System.IO.File]::WriteAllText($p, ($out.ToArray() | ConvertTo-Json -Depth 12 -Compress), (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host ("  no -IngestUrl: wrote {0} (push it yourself)." -f $p); return
+    }
+    # Upsert ONLY these vouchers (+ master, so the contact block enriches).
+    $payload = [ordered]@{ branch = $Branch; master = $masterObj; vouchers = $out.ToArray() }
+    $body = $payload | ConvertTo-Json -Depth 12 -Compress
+    $headers = @{ 'Content-Type' = 'application/json' }
+    if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
+    $resp = Invoke-WebRequest -Uri ("{0}/ingest" -f $IngestUrl.TrimEnd('/')) -Method Post -Body $body -Headers $headers -UseBasicParsing
+    Write-Host ("  ingest OK: {0}" -f $resp.Content)
+}
+
 # ======================================================================
 # STEP 1 - MASTERS (ledgers + groups)
 # ======================================================================
@@ -543,6 +600,15 @@ $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mCo
 if ($Incremental) {
     Invoke-Incremental
     Write-Host "Incremental run complete."
+    return
+}
+
+# ======================================================================
+# TARGETED MODE - re-sync only the named voucher(s), then stop.
+# ======================================================================
+if ($VoucherNos) {
+    Invoke-Targeted
+    Write-Host "Targeted run complete."
     return
 }
 
