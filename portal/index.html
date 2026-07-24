@@ -1535,11 +1535,27 @@ EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style
   build: function(t, asOfStr){
     var kx=parseHierarchy(t.kolHier), ax=parseHierarchy(t.ahmHier);
     var xd=mergeH(kx,ax), ib=findIB(xd);
-    var kV=JSON.parse(t.kolVouch), aV=JSON.parse(t.ahmVouch), vs=kV.concat(aV);
-    var rb=parseBillsCSV(t.kolBillsRecv||''), pb=parseBillsCSV(t.kolBillsPay||'');
-    if(t.ahmBillsPay) pb=pb.concat(parseBillsCSV(t.ahmBillsPay));
-    var asOf=asOfStr?new Date(asOfStr+'T00:00:00'):new Date();
-    return {proj:buildProjection(vs,xd,ib,rb,pb,asOf), vs:vs, xd:xd, ib:ib, rb:rb, pb:pb};
+    var kV=JSON.parse(t.kolVouch), aV=JSON.parse(t.ahmVouch);
+    for(var i=0;i<kV.length;i++)kV[i]._branch='kol';
+    for(var j=0;j<aV.length;j++)aV[j]._branch='ahm';
+    // Keep the bill sets branch-separated (kol receivable, kol payable, ahm payable)
+    // so the Projected view can switch between KOL / AHM / Consolidated.
+    var rbKol=parseBillsCSV(t.kolBillsRecv||''), pbKol=parseBillsCSV(t.kolBillsPay||''), pbAhm=t.ahmBillsPay?parseBillsCSV(t.ahmBillsPay):[];
+    var raw={kV:kV,aV:aV,xd:xd,ib:ib,rbKol:rbKol,pbKol:pbKol,pbAhm:pbAhm,asOfStr:asOfStr};
+    return window.CDC_PROJ.buildForBranch(raw,'all');
+  },
+  // Rebuild the projection for a single branch (or 'all'). KOL keeps its own
+  // receivable+payable; AHM has payable only (no Ahm receivable feed).
+  buildForBranch: function(raw, branch){
+    var asOf=raw.asOfStr?new Date(raw.asOfStr+'T00:00:00'):new Date();
+    var vs,rb,pb;
+    if(branch==='kol'){vs=raw.kV;rb=raw.rbKol;pb=raw.pbKol;}
+    else if(branch==='ahm'){vs=raw.aV;rb=[];pb=raw.pbAhm;}
+    else {vs=raw.kV.concat(raw.aV);rb=raw.rbKol;pb=raw.pbKol.concat(raw.pbAhm);}
+    // Consolidated eliminates inter-branch; a single-branch view treats the other
+    // branch as an external party, so drop the IB filter there.
+    var ibEff=branch==='all'?raw.ib:{};
+    return {proj:buildProjection(vs,raw.xd,ibEff,rb,pb,asOf), vs:vs, xd:raw.xd, ib:ibEff, rb:rb, pb:pb, branch:branch, _projRaw:raw};
   }
 };
 })();
@@ -1564,6 +1580,7 @@ function Portal(){
   var sActive=useState('consol'),active=sActive[0],setActive=sActive[1];
   var sConsol=useState(null),consolData=sConsol[0],setConsolData=sConsol[1];
   var sProj=useState(null),projData=sProj[0],setProjData=sProj[1];
+  var sPB=useState('all'),projBranch=sPB[0],setProjBranch=sPB[1];// Projected view branch: all|kol|ahm
   var sErr=useState(null),err=sErr[0],setErr=sErr[1];
   var sLd=useState(false),ld=sLd[0],setLd=sLd[1];
   var sMode=useState('mongo'),mode=sMode[0],setMode=sMode[1];
@@ -1629,8 +1646,9 @@ function Portal(){
       }).catch(function(ex){setErr('Fetch failed: '+ex.message);setLd(false);});
     });
   }
-  function rebuildProj(newAsOf){setAsOf(newAsOf);if(built){try{setProjData(window.CDC_PROJ.build(built.texts,newAsOf));}catch(ex){}}}
-  function reset(){setBuilt(null);setConsolData(null);setProjData(null);setFiles({});}
+  function rebuildProj(newAsOf){setAsOf(newAsOf);if(built){try{var full=window.CDC_PROJ.build(built.texts,newAsOf);var pd=(projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full;setProjData(pd);}catch(ex){}}}
+  function chooseProjBranch(b){setProjBranch(b);if(projData&&projData._projRaw){try{setProjData(window.CDC_PROJ.buildForBranch(projData._projRaw,b));}catch(ex){}}}
+  function reset(){setBuilt(null);setConsolData(null);setProjData(null);setFiles({});setProjBranch('all');}
 
   if(!built){
     return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px',fontFamily:'Inter,-apple-system,sans-serif'}},
@@ -1691,6 +1709,7 @@ function Portal(){
       navBtn('consol','📘 Consolidated (P&L / Cashflow / Audit)','#0891b2'),
       navBtn('proj','📈 Projected (Projection / Receivables / Payables / PvA)','#be185d'),
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
+      active==='proj'?e('div',{style:{display:'flex',gap:'2px',marginLeft:'2px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){if(projBranch!==__b)chooseProjBranch(__b);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:projBranch===__b?'#be185d':'#f1f5f9',color:projBranch===__b?'#fff':'#475569'}},__lbl);})):null,
       updBadge(),
       e('button',{onClick:reset,style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
     e('div',{key:active},activeEl));
