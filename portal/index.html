@@ -853,7 +853,6 @@ for(var p in dStats){
 // − Σ receipts up to that month. dInv already folds in debit notes, dRct folds
 // in credit notes, so this reflects CN/DN. It is the TOTAL balance (ties to
 // Tally's ledger closing), independent of FIFO / bill-wise allocation.
-function __spOf(pn){var ch=getChain(pn,xd);for(var ii=0;ii<ch.length;ii++){var lo=ch[ii].toLowerCase();if(lo==='sundry debtors'||lo==='sundry creditors'){if(ii+2>=ch.length)return '(Direct)';return ch[ii+2];}}return '(No SP)';}
 var __asOfYM=todayYMD.substring(0,6);
 var __minD=null;for(var __p in dInv){for(var __k=0;__k<dInv[__p].length;__k++){var __d=dInv[__p][__k].date;if(__minD===null||__d<__minD)__minD=__d;}}
 for(var __p in dRct){for(var __k=0;__k<dRct[__p].length;__k++){var __d=dRct[__p][__k].date;if(__minD===null||__d<__minD)__minD=__d;}}
@@ -861,21 +860,32 @@ if(!__minD)__minD=todayYMD;
 var __my=parseInt(__minD.substring(0,4)),__mm=parseInt(__minD.substring(4,6));var __fyY=__mm>=4?__my:__my-1;
 var __moKeys=[];(function(){var y=__fyY,m=4;var ey=parseInt(__asOfYM.substring(0,4)),em=parseInt(__asOfYM.substring(4,6));var g=0;while((y<ey||(y===ey&&m<=em))&&g<60){__moKeys.push(String(y)+(m<10?'0'+m:''+m));m++;if(m>12){m=1;y++;}g++;}})();
 var __idxOf={};for(var __i=0;__i<__moKeys.length;__i++)__idxOf[__moKeys[__i]]=__i;
-var debtMoByParty={};
+var __moN=__moKeys.length;function __zeros(){var a=[];for(var i=0;i<__moN;i++)a.push(0);return a;}
+// Per-party monthly closing outstanding (running balance) + monthly sales (invoices, incl DN).
+var partyOut={},partySales={};
 for(var p in allDebtors){
   var __open=0;var __obs=obByD[p]||[];for(var __i=0;__i<__obs.length;__i++)__open+=(__obs[__i].isAdvance?-1:1)*__obs[__i].amount;
-  var __flow=[];for(var __i=0;__i<__moKeys.length;__i++)__flow.push(0);
-  var __dv=dInv[p]||[];for(var __i=0;__i<__dv.length;__i++){var __k=__idxOf[__dv[__i].date.substring(0,6)];if(__k!==undefined)__flow[__k]+=__dv[__i].amt;}
+  var __flow=__zeros(),__sal=__zeros();
+  var __dv=dInv[p]||[];for(var __i=0;__i<__dv.length;__i++){var __k=__idxOf[__dv[__i].date.substring(0,6)];if(__k!==undefined){__flow[__k]+=__dv[__i].amt;__sal[__k]+=__dv[__i].amt;}}
   var __rv=dRct[p]||[];for(var __i=0;__i<__rv.length;__i++){var __k=__idxOf[__rv[__i].date.substring(0,6)];if(__k!==undefined)__flow[__k]-=__rv[__i].amt;}
-  var __run=__open,__arr=[];for(var __i=0;__i<__moKeys.length;__i++){__run+=__flow[__i];__arr.push(Math.round(__run*100)/100);}
-  debtMoByParty[p]=__arr;
+  var __run=__open,__arr=[];for(var __i=0;__i<__moN;__i++){__run+=__flow[__i];__arr.push(Math.round(__run*100)/100);}
+  partyOut[p]=__arr;partySales[p]=__sal;
 }
-var debtMoGroups={};
-for(var p in debtMoByParty){var __g=__spOf(p);if(!debtMoGroups[__g]){debtMoGroups[__g]={name:__g,series:[],parties:[]};for(var __i=0;__i<__moKeys.length;__i++)debtMoGroups[__g].series.push(0);}
-  var __a=debtMoByParty[p];for(var __i=0;__i<__moKeys.length;__i++)debtMoGroups[__g].series[__i]+=__a[__i];
-  debtMoGroups[__g].parties.push({party:p,series:__a});}
+// Build the FULL nested tree under "Sundry Debtors" (every intermediate group kept),
+// summing outstanding + sales into each node; parties are the leaves.
+function __accum(node,out,sal){for(var i=0;i<__moN;i++){node.out[i]+=out[i];node.sales[i]+=sal[i];}}
+var __root={name:'Sundry Debtors',depth:0,out:__zeros(),sales:__zeros(),children:{},isLeaf:false};
+for(var p in partyOut){
+  var __ch=getChain(p,xd);var __ri=__ch.indexOf('Sundry Debtors');var __sub=__ri>=0?__ch.slice(__ri+1):[];
+  __accum(__root,partyOut[p],partySales[p]);
+  var __node=__root;
+  for(var __s=0;__s<__sub.length;__s++){var __g=__sub[__s];if(!__node.children[__g])__node.children[__g]={name:__g,depth:__node.depth+1,out:__zeros(),sales:__zeros(),children:{},isLeaf:false};__node=__node.children[__g];__accum(__node,partyOut[p],partySales[p]);}
+  if(!__node.children[p])__node.children[p]={name:p,depth:__node.depth+1,out:partyOut[p].slice(),sales:partySales[p].slice(),children:{},isLeaf:true};
+}
+function __toArr(node){var ks=Object.keys(node.children);node.childArr=ks.map(function(k){return __toArr(node.children[k]);});node.children=null;return node;}
+__toArr(__root);
 var __MN2=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-var debtorMonthly={months:__moKeys.map(function(k){return __MN2[parseInt(k.substring(4,6))-1]+"'"+k.substring(2,4);}),groups:debtMoGroups};
+var debtorMonthly={months:__moKeys.map(function(k){return __MN2[parseInt(k.substring(4,6))-1]+"'"+k.substring(2,4);}),root:__root};
 
 // Step 4: Process creditors (same logic)
 var obByC={};for(var i=0;i<payBills.length;i++){var b=payBills[i];(obByC[b.party]=obByC[b.party]||[]).push(b);}
@@ -1368,29 +1378,31 @@ e('span',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:
 e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'\u00B7 '+totCust+' customers \u00B7 '+totBills+' bills'),
 e('button',{onClick:exportRecXLS,style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'))),
 recMode==='monthly'&&(function(){
-  var dm=ed.debtorMonthly||{months:[],groups:{}};var mos=dm.months||[];var grps=dm.groups||{};
-  if(!mos.length)return e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No monthly data.');
-  var gArr=Object.keys(grps).map(function(k){return grps[k];});
-  gArr.sort(function(a,b){return (b.series[b.series.length-1]||0)-(a.series[a.series.length-1]||0);});
-  var totRow=[];for(var i=0;i<mos.length;i++)totRow.push(0);gArr.forEach(function(g){for(var i=0;i<mos.length;i++)totRow[i]+=g.series[i];});
-  var MGRID='minmax(200px,1.4fr) repeat('+mos.length+',minmax(74px,1fr))';
-  function cells(series,color,weight){return mos.map(function(m,i){var v=Math.round((series[i]||0)*100)/100;return e('div',{key:'c'+i,style:{padding:'7px 8px',fontSize:'11px',textAlign:'right',fontFamily:'var(--mono)',color:v===0?'var(--dimnum)':(v<0?'var(--red)':(color||'var(--text2)')),fontWeight:weight||400}},v===0?'\u2014':fmt(v));});}
-  return e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(220+mos.length*82)+'px'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing outstanding at each month-end (opening + invoices \u2212 receipts, incl. CN/DN) \u00B7 click a group to expand parties'),
+  var dm=ed.debtorMonthly||{};var mos=dm.months||[];var root=dm.root;
+  if(!mos.length||!root)return e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No monthly data.');
+  var MGRID='minmax(240px,1.6fr) repeat('+mos.length+',minmax(78px,1fr))';
+  // Avg days outstanding (DSO) at month i = closing / trailing sales \u00D7 trailing days
+  // (trailing window = up to 3 months). Rising DSO with steady sales \u21D2 collection slowing;
+  // rising outstanding with flat DSO \u21D2 just higher sales.
+  function dsoAt(outArr,salArr,i){var w=Math.min(3,i+1),ts=0;for(var j=i-w+1;j<=i;j++)ts+=(salArr[j]||0);if(ts<=0||(outArr[i]||0)<=0)return null;return Math.round(outArr[i]/ts*(w*30));}
+  function moCells(node){return mos.map(function(m,i){var v=Math.round((node.out[i]||0)*100)/100;var dso=dsoAt(node.out,node.sales,i);
+    var dcol='var(--text3)';if(dso!==null&&i>0){var pd=dsoAt(node.out,node.sales,i-1);if(pd){if(dso>pd*1.1)dcol='var(--red)';else if(dso<pd*0.9)dcol='var(--green)';}}
+    return e('div',{key:'c'+i,style:{padding:'6px 8px',textAlign:'right',fontFamily:'var(--mono)',borderLeft:'1px solid var(--border)'}},
+      e('div',{style:{fontSize:'11px',fontWeight:node.isLeaf?400:600,color:v===0?'var(--dimnum)':(v<0?'var(--red)':'var(--text1)')}},v===0?'\u2014':fmt(v)),
+      e('div',{style:{fontSize:'8px',color:dcol}},dso!==null?dso+'d':''));});}
+  var rowEls=[];
+  function walk(node,path,depth){var kids=node.childArr||[];var hasKids=kids.length>0;var open=(path in moExp)?moExp[path]:(depth===0);var indent=24+depth*15;
+    rowEls.push(e('div',{key:path,onClick:hasKids?function(){var ne=Object.assign({},moExp);ne[path]=!open;setMoExp(ne);}:null,style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'1px solid var(--border)',background:depth===0?'var(--bg3)':(node.isLeaf?'transparent':'var(--bg2)'),cursor:hasKids?'pointer':'default'}},
+      e('div',{style:{padding:'6px 8px 6px '+indent+'px',fontSize:(depth===0?12:11)+'px',fontWeight:node.isLeaf?400:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'5px',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},hasKids?e('span',{style:{fontSize:'9px',color:'var(--text3)',flexShrink:0}},open?'\u25BC':'\u25B6'):e('span',{style:{width:'9px',flexShrink:0}}),e('span',{style:{overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},node.name)),
+      moCells(node)));
+    if(hasKids&&open){var sk=kids.slice().sort(function(a,b){return (b.out[b.out.length-1]||0)-(a.out[a.out.length-1]||0);});for(var i=0;i<sk.length;i++)walk(sk[i],path+'/'+sk[i].name,depth+1);}}
+  walk(root,root.name,0);
+  return e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(260+mos.length*84)+'px'}},
+    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing outstanding at each month-end (opening + invoices \u2212 receipts, incl. CN/DN). Small figure = avg days outstanding (DSO, 3-mo). Rising DSO with steady sales \u21D2 collection slowing; flat DSO \u21D2 just higher sales. Click a group to drill down.'),
     e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
-      e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'LEDGER GROUP'),
-      mos.map(function(m,i){return e('div',{key:'h'+i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},m);})),
-    gArr.map(function(g,gi){var rows=[e('div',{key:'g'+gi,onClick:function(){var ne=Object.assign({},moExp);if(ne[g.name])delete ne[g.name];else ne[g.name]=true;setMoExp(ne);},style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer'}},
-        e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},moExp[g.name]?'\u25BC':'\u25B6'),g.name),
-        cells(g.series,'var(--text1)',600))];
-      if(moExp[g.name]){var ps=g.parties.slice().sort(function(a,b){return (b.series[b.series.length-1]||0)-(a.series[a.series.length-1]||0);});
-        ps.forEach(function(pp,pi){rows.push(e('div',{key:'g'+gi+'p'+pi,style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'1px solid var(--border)'}},
-          e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)'}},pp.party),
-          cells(pp.series)));});}
-      return rows;}),
-    e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderTop:'2px solid var(--border)',background:'var(--bg2)',position:'sticky',bottom:0}},
-      e('div',{style:{padding:'10px 24px',fontSize:'13px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'}},'TOTAL'),
-      cells(totRow,'var(--amber)',700))));
+      e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'LEDGER GROUP / PARTY \u00B7 amount + DSO'),
+      mos.map(function(m,i){return e('div',{key:'h'+i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right',borderLeft:'1px solid var(--border)'}},m);})),
+    rowEls));
 })(),
 recMode==='aging'&&e('div',{style:{overflowY:'auto'}},
 e('div',{style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
