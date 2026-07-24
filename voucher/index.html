@@ -420,9 +420,12 @@ function companyHeader(co){
 }
 
 function isInvoice(v){
+  // The invoice layout needs stock lines. A sale/purchase with NO line items is an
+  // accounting-only voucher (e.g. a service/expense purchase booked ledger-to-ledger)
+  // -- render it as a Dr/Cr journal, which is how Tally/bizanalyst present it, instead
+  // of an invoice with an empty items table.
   var d=v.details||{};
-  if(d.items&&d.items.length) return true;
-  return /sale|purchase|invoice|debit note|credit note/i.test(v.type||"");
+  return !!(d.items&&d.items.length);
 }
 var CUR_V=null;
 function render(v){
@@ -535,6 +538,16 @@ var DEMO_PURCHASE={
     ]
   }
 };
+// Accounting purchase (no stock items) — a service/expense booked ledger-to-ledger.
+// Has no `items`, so it renders in the Dr/Cr journal format, not an empty invoice.
+var DEMO_ACCT_PURCHASE={
+  branch:"kol", type:"Purchase - Goods", no:"PUR/92/26-27", date:"20260430",
+  party:"Sudarshan Paper & Board Pvt Ltd",
+  ledgers:{"Purchase - Job Work":-1800680.61,"IGST":-324122.51,"Round Off":0.12,
+    "TDS Payable- Section 393(1) Sl.8(ii) (94Q)":1801},
+  party_ledgers:{"Sudarshan Paper & Board Pvt Ltd":2123002},
+  details:{ reference:"1902SA262700060", narration:"Job-work purchase against bill 1902SA262700060" }
+};
 var DEMO_JOURNAL={
   branch:"kol", type:"Journal", no:"443", date:"20260630",
   party:"Employees - Salary",
@@ -569,6 +582,7 @@ document.getElementById("id").addEventListener("keydown",function(e){if(e.key===
   var demo=p.get("demo");
   if(demo==="invoice"){ render(DEMO_INVOICE); return; }
   if(demo==="purchase"){ render(DEMO_PURCHASE); return; }
+  if(demo==="acctpurchase"){ render(DEMO_ACCT_PURCHASE); return; }
   if(demo==="journal"){ render(DEMO_JOURNAL); return; }
   var branch=p.get("branch"), id=p.get("id"), no=p.get("no");
   if(branch) document.getElementById("branch").value=branch;

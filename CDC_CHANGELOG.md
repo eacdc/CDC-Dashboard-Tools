@@ -1,5 +1,17 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.6 (voucher) — July 2026 — Item-less purchases render as Dr/Cr journals
+
+A "Purchase" voucher with **no stock items** (a service/expense booked
+ledger-to-ledger, e.g. `PUR/92/26-27` — job-work, IGST, no inventory) was drawn as
+an invoice with an **empty items table**. `isInvoice(v)` now requires line items:
+a sale/purchase with none falls back to the **journal Dr/Cr particulars** layout
+(letterhead, voucher no/date, Debit/Credit postings, narration) — how Tally/bizanalyst
+present such vouchers. Purchases/sales **with** items are unaffected (still full
+invoices). New `/voucher/?demo=acctpurchase` sample.
+
+---
+
 ## v2.5 (voucher) — July 2026 — Tax-rate % column + Bill of Lading field
 
 Two fields the reference Tax Invoice shows were missing from the printable voucher:
