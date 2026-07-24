@@ -848,6 +848,35 @@ for(var p in dStats){
   } else if(ds.outstanding>0){exD[p]={reason:'due_after_3mo',days:ef.days,outstanding:ds.outstanding};}
 }
 
+// ---- Monthly closing outstanding per debtor & ledger group ----------------
+// Running receivable balance at each month-end = opening (1-Apr) + Σ invoices
+// − Σ receipts up to that month. dInv already folds in debit notes, dRct folds
+// in credit notes, so this reflects CN/DN. It is the TOTAL balance (ties to
+// Tally's ledger closing), independent of FIFO / bill-wise allocation.
+function __spOf(pn){var ch=getChain(pn,xd);for(var ii=0;ii<ch.length;ii++){var lo=ch[ii].toLowerCase();if(lo==='sundry debtors'||lo==='sundry creditors'){if(ii+2>=ch.length)return '(Direct)';return ch[ii+2];}}return '(No SP)';}
+var __asOfYM=todayYMD.substring(0,6);
+var __minD=null;for(var __p in dInv){for(var __k=0;__k<dInv[__p].length;__k++){var __d=dInv[__p][__k].date;if(__minD===null||__d<__minD)__minD=__d;}}
+for(var __p in dRct){for(var __k=0;__k<dRct[__p].length;__k++){var __d=dRct[__p][__k].date;if(__minD===null||__d<__minD)__minD=__d;}}
+if(!__minD)__minD=todayYMD;
+var __my=parseInt(__minD.substring(0,4)),__mm=parseInt(__minD.substring(4,6));var __fyY=__mm>=4?__my:__my-1;
+var __moKeys=[];(function(){var y=__fyY,m=4;var ey=parseInt(__asOfYM.substring(0,4)),em=parseInt(__asOfYM.substring(4,6));var g=0;while((y<ey||(y===ey&&m<=em))&&g<60){__moKeys.push(String(y)+(m<10?'0'+m:''+m));m++;if(m>12){m=1;y++;}g++;}})();
+var __idxOf={};for(var __i=0;__i<__moKeys.length;__i++)__idxOf[__moKeys[__i]]=__i;
+var debtMoByParty={};
+for(var p in allDebtors){
+  var __open=0;var __obs=obByD[p]||[];for(var __i=0;__i<__obs.length;__i++)__open+=(__obs[__i].isAdvance?-1:1)*__obs[__i].amount;
+  var __flow=[];for(var __i=0;__i<__moKeys.length;__i++)__flow.push(0);
+  var __dv=dInv[p]||[];for(var __i=0;__i<__dv.length;__i++){var __k=__idxOf[__dv[__i].date.substring(0,6)];if(__k!==undefined)__flow[__k]+=__dv[__i].amt;}
+  var __rv=dRct[p]||[];for(var __i=0;__i<__rv.length;__i++){var __k=__idxOf[__rv[__i].date.substring(0,6)];if(__k!==undefined)__flow[__k]-=__rv[__i].amt;}
+  var __run=__open,__arr=[];for(var __i=0;__i<__moKeys.length;__i++){__run+=__flow[__i];__arr.push(Math.round(__run*100)/100);}
+  debtMoByParty[p]=__arr;
+}
+var debtMoGroups={};
+for(var p in debtMoByParty){var __g=__spOf(p);if(!debtMoGroups[__g]){debtMoGroups[__g]={name:__g,series:[],parties:[]};for(var __i=0;__i<__moKeys.length;__i++)debtMoGroups[__g].series.push(0);}
+  var __a=debtMoByParty[p];for(var __i=0;__i<__moKeys.length;__i++)debtMoGroups[__g].series[__i]+=__a[__i];
+  debtMoGroups[__g].parties.push({party:p,series:__a});}
+var __MN2=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var debtorMonthly={months:__moKeys.map(function(k){return __MN2[parseInt(k.substring(4,6))-1]+"'"+k.substring(2,4);}),groups:debtMoGroups};
+
 // Step 4: Process creditors (same logic)
 var obByC={};for(var i=0;i<payBills.length;i++){var b=payBills[i];(obByC[b.party]=obByC[b.party]||[]).push(b);}
 var allCreditors={};for(var p in obByC)allCreditors[p]=1;for(var p in cInv)allCreditors[p]=1;
@@ -898,7 +927,7 @@ for(var k=1;k<=3;k++){
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
 
-return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA};};
+return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA,debtorMonthly:debtorMonthly};};
 
 // ============ PREDICTION VS ACTUAL ============
 function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
@@ -964,7 +993,7 @@ return{pa:pa,tp:tp,d:od,s:sr};}
 var nIn={},nInS={},nInM=[0,0,0];for(var p in data.projInflowStats){var st=data.projInflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nIn[p]=r.pa;nInS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nInM[m]+=r.pa[m];}}
 var nOut={},nOutS={},nOutM=[0,0,0];for(var p in data.projOutflowStats){var st=data.projOutflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nOut[p]=r.pa;nOutS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nOutM[m]+=r.pa[m];}}
 var net=data.projMonths.map(function(_,m){return nInM[m]-nOutM[m]-data.projIndExp[m];});
-return{projMonths:data.projMonths,xd:data.xd,asOfDate:data.asOfDate,projInflows:nIn,projInflowStats:nInS,projInM:nInM,projOutflows:nOut,projOutflowStats:nOutS,projOutM:nOutM,projIndExp:data.projIndExp,projNetM:net,companyAvgDays:data.companyAvgDays,debtorCount:Object.keys(nIn).length,creditorCount:Object.keys(nOut).length,totalOutstanding:data.totalOutstanding,excluded:data.excluded,excludedTotals:data.excludedTotals,allDebtorBills:data.allDebtorBills,debtorGroupAvgs:data.debtorGroupAvgs,allCreditorBills:data.allCreditorBills,creditorGroupAvgs:data.creditorGroupAvgs};}
+return{projMonths:data.projMonths,xd:data.xd,asOfDate:data.asOfDate,projInflows:nIn,projInflowStats:nInS,projInM:nInM,projOutflows:nOut,projOutflowStats:nOutS,projOutM:nOutM,projIndExp:data.projIndExp,projNetM:net,companyAvgDays:data.companyAvgDays,debtorCount:Object.keys(nIn).length,creditorCount:Object.keys(nOut).length,totalOutstanding:data.totalOutstanding,excluded:data.excluded,excludedTotals:data.excludedTotals,allDebtorBills:data.allDebtorBills,debtorGroupAvgs:data.debtorGroupAvgs,allCreditorBills:data.allCreditorBills,creditorGroupAvgs:data.creditorGroupAvgs,debtorMonthly:data.debtorMonthly};}
 
 var GRID_COL1=320;function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
 
@@ -1082,6 +1111,8 @@ var sView=useState('projection'),viewMode=sView[0],setView=sView[1];
 var sPvaSort=useState('ac_desc'),pvaSort=sPvaSort[0],setPvaSort=sPvaSort[1];
 var sPvaSp=useState(''),pvaSpF=sPvaSp[0],setPvaSpF=sPvaSp[1];
 var sRecAg=useState('bill'),recAg=sRecAg[0],setRecAg=sRecAg[1];// 'bill' | 'due'
+var sRecMode=useState('aging'),recMode=sRecMode[0],setRecMode=sRecMode[1];// 'aging' | 'monthly'
+var sMoExp=useState({}),moExp=sMoExp[0],setMoExp=sMoExp[1];// expanded groups in the monthly matrix
 var sRecExp=useState({}),recExp=sRecExp[0],setRecExp=sRecExp[1];// expanded salespersons
 var sRecSort=useState('tot_desc'),recSort=sRecSort[0],setRecSort=sRecSort[1];
 var sRecModal=useState(null),recModal=sRecModal[0],setRecModal=sRecModal[1];// {party, salesperson, group}
@@ -1329,12 +1360,39 @@ e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:'
 e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid bills \u2265 \u20B95,000 \u00B7 stale and excluded parties included \u00B7 Aging by '+(recAg==='due'?'predicted DUE DATE':'BILL DATE'))),
 e('div',{style:{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},
+[['aging','AGING'],['monthly','MONTHLY OUTSTANDING']].map(function(__m){return e('span',{key:__m[0],onClick:function(){setRecMode(__m[0]);},style:{padding:'5px 12px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:recMode===__m[0]?'var(--cyan)':'var(--bg3)',color:recMode===__m[0]?'#fff':'var(--text2)'}},__m[1]);})),
+recMode==='aging'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},
 ['bill','due'].map(function(__a){var lbl=__a==='bill'?'BILL DATE':'DUE DATE';return e('span',{key:__a,onClick:function(){setRecAg(__a);},style:{padding:'5px 12px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:recAg===__a?'var(--amber)':'var(--bg3)',color:recAg===__a?'#fff':'var(--text2)'}},lbl);})),
 e('span',{style:{fontSize:'12px',fontFamily:'var(--mono)',color:'var(--text2)'}},'Total: '),
 e('span',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:'var(--mono)'}},fmt(totTot)),
 e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'\u00B7 '+totCust+' customers \u00B7 '+totBills+' bills'),
 e('button',{onClick:exportRecXLS,style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'))),
-e('div',{style:{overflowY:'auto'}},
+recMode==='monthly'&&(function(){
+  var dm=ed.debtorMonthly||{months:[],groups:{}};var mos=dm.months||[];var grps=dm.groups||{};
+  if(!mos.length)return e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No monthly data.');
+  var gArr=Object.keys(grps).map(function(k){return grps[k];});
+  gArr.sort(function(a,b){return (b.series[b.series.length-1]||0)-(a.series[a.series.length-1]||0);});
+  var totRow=[];for(var i=0;i<mos.length;i++)totRow.push(0);gArr.forEach(function(g){for(var i=0;i<mos.length;i++)totRow[i]+=g.series[i];});
+  var MGRID='minmax(200px,1.4fr) repeat('+mos.length+',minmax(74px,1fr))';
+  function cells(series,color,weight){return mos.map(function(m,i){var v=Math.round((series[i]||0)*100)/100;return e('div',{key:'c'+i,style:{padding:'7px 8px',fontSize:'11px',textAlign:'right',fontFamily:'var(--mono)',color:v===0?'var(--dimnum)':(v<0?'var(--red)':(color||'var(--text2)')),fontWeight:weight||400}},v===0?'\u2014':fmt(v));});}
+  return e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(220+mos.length*82)+'px'}},
+    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing outstanding at each month-end (opening + invoices \u2212 receipts, incl. CN/DN) \u00B7 click a group to expand parties'),
+    e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
+      e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'LEDGER GROUP'),
+      mos.map(function(m,i){return e('div',{key:'h'+i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},m);})),
+    gArr.map(function(g,gi){var rows=[e('div',{key:'g'+gi,onClick:function(){var ne=Object.assign({},moExp);if(ne[g.name])delete ne[g.name];else ne[g.name]=true;setMoExp(ne);},style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer'}},
+        e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},moExp[g.name]?'\u25BC':'\u25B6'),g.name),
+        cells(g.series,'var(--text1)',600))];
+      if(moExp[g.name]){var ps=g.parties.slice().sort(function(a,b){return (b.series[b.series.length-1]||0)-(a.series[a.series.length-1]||0);});
+        ps.forEach(function(pp,pi){rows.push(e('div',{key:'g'+gi+'p'+pi,style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'1px solid var(--border)'}},
+          e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)'}},pp.party),
+          cells(pp.series)));});}
+      return rows;}),
+    e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderTop:'2px solid var(--border)',background:'var(--bg2)',position:'sticky',bottom:0}},
+      e('div',{style:{padding:'10px 24px',fontSize:'13px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'}},'TOTAL'),
+      cells(totRow,'var(--amber)',700))));
+})(),
+recMode==='aging'&&e('div',{style:{overflowY:'auto'}},
 e('div',{style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
 e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},recTh('SALESPERSON / CUSTOMER','sp')),
 e('div',{style:{padding:'8px 6px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},recTh('# CUST','cust')),
