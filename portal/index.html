@@ -1616,7 +1616,10 @@ function Portal(){
   // Portal chrome + active app
   function navBtn(id,label,color){return e('button',{key:id,onClick:function(){setActive(id);},style:{padding:'8px 18px',borderRadius:'8px',border:active===id?('2px solid '+color):'1px solid #e2e8f0',background:active===id?color:'#fff',color:active===id?'#fff':'#475569',fontSize:'12px',fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'0.5px'}},label);}
   // Format an ISO timestamp as a short local "24-Jul 14:32" (blank when never synced).
-  function fmtUpd(iso){if(!iso)return '—';var dt=new Date(iso);if(isNaN(dt))return '—';var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var p=function(n){return(n<10?'0':'')+n;};return p(dt.getDate())+'-'+MN[dt.getMonth()]+' '+p(dt.getHours())+':'+p(dt.getMinutes());}
+  function fmtUpd(iso){if(!iso)return '—';var dt=new Date(iso);if(isNaN(dt))return '—';
+    // Always render in India Standard Time (Asia/Kolkata), regardless of the viewer's timezone.
+    try{return dt.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}).replace(',','')+' IST';}
+    catch(e){var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];var p=function(n){return(n<10?'0':'')+n;};var k=new Date(dt.getTime()+(330+dt.getTimezoneOffset())*60000);return p(k.getDate())+'-'+MN[k.getMonth()]+' '+p(k.getHours())+':'+p(k.getMinutes())+' IST';}}
   function updBadge(){if(!lastUpd)return null;return e('div',{style:{marginLeft:'auto',display:'flex',gap:'14px',alignItems:'center',fontFamily:'monospace'}},
     ['kol','ahm'].map(function(bk){return e('div',{key:bk,style:{textAlign:'right',lineHeight:'1.25'}},
       e('div',{style:{fontSize:'8px',letterSpacing:'1px',color:'#94a3b8',textTransform:'uppercase'}},(bk==='kol'?'KOL':'AHM')+' updated'),
