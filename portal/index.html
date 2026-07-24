@@ -1597,6 +1597,9 @@ function Portal(){
     var bkeys=['kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
     var billProms=bkeys.map(function(k){if(files[k])return files[k].text();if(cachedTexts[k])return Promise.resolve(cachedTexts[k]);return Promise.resolve(null);});
     Promise.all(billProms).then(function(br){
+      // Persist any NEWLY uploaded bill/stock file so it is reused on later runs
+      // (these 4 fixed files only change occasionally — upload once, retained until re-uploaded).
+      bkeys.forEach(function(k,idx){if(files[k]&&br[idx])lcSet(k,br[idx]);});
       fetch(url).then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();}).then(function(d){
         var b=d.branches||{},kol=b.kol||{},ahm=b.ahm||{};
         setLastUpd({kol:kol.lastUpdatedAt||null,ahm:ahm.lastUpdatedAt||null});
@@ -1644,7 +1647,9 @@ function Portal(){
           e('div',null,e('div',{style:{fontSize:'10px',fontWeight:700,color:'#7c3aed',fontFamily:'monospace',letterSpacing:'1px'}},'AHMEDABAD'),
             e(FileSlot,{label:'Hierarchy JSON',hint:'ahm_hierarchy.json',accept:'.json',val:files.ahmHier,onFile:setF('ahmHier'),icon:'📋'}),
             e(FileSlot,{label:'Vouchers JSON',hint:'ahm_vouchers.json',accept:'.json',val:files.ahmVouch,onFile:setF('ahmVouch'),icon:'📊'}))),
-        e('div',{style:{marginTop:'12px',fontSize:'10px',fontWeight:700,color:'#d97706',fontFamily:'monospace',letterSpacing:'1px'}},'BILL-WISE (for Projection / Receivables / Payables)'),
+        e('div',{style:{marginTop:'12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+          e('span',{style:{fontSize:'10px',fontWeight:700,color:'#d97706',fontFamily:'monospace',letterSpacing:'1px'}},'BILL-WISE (for Projection / Receivables / Payables)'),
+          (cachedTexts.kolBillsRecv||cachedTexts.kolBillsPay||cachedTexts.ahmBillsPay||cachedTexts.stock)&&e('span',{onClick:function(){BILL_KEYS.forEach(function(k){lcSet(k,'');try{localStorage.removeItem('cdc_portal_'+k);}catch(e){}});setFiles(Object.assign({},files,{kolBillsRecv:null,kolBillsPay:null,ahmBillsPay:null,stock:null}));},style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace',cursor:'pointer',textDecoration:'underline'}},'clear cached files')),
         e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px'}},
           e(FileSlot,{label:'Kol Bills Receivable',hint:'CSV',accept:'.csv',val:files.kolBillsRecv,cached:!files.kolBillsRecv&&!!cachedTexts.kolBillsRecv,onFile:setF('kolBillsRecv'),icon:'📄'}),
           e(FileSlot,{label:'Kol Bills Payable',hint:'CSV',accept:'.csv',val:files.kolBillsPay,cached:!files.kolBillsPay&&!!cachedTexts.kolBillsPay,onFile:setF('kolBillsPay'),icon:'📄'}),
