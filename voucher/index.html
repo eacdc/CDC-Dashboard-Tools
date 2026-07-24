@@ -199,8 +199,8 @@ function isPurchase(v){
   var led=v.ledgers||{}; for(var k in led){ if(/purchas/i.test(k)) return true; }
   return false;
 }
-function computeTax(v){
-  var d=v.details||{}, items=d.items||[];
+function computeTax(v, items){
+  items=items||[];
   var purchase=isPurchase(v), sgn=purchase?-1:1;   // display sign: purchase legs are Dr(-ve)
   var sub=0; items.forEach(function(it){sub+=sgn*(Number(it.amount)||0);});
   var led=v.ledgers||{};
@@ -242,8 +242,9 @@ function computeTax(v){
 
 /* ---------------------------------------------------------------- renderers */
 function renderInvoice(v){
-  var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{}, t=computeTax(v);
-  var items=d.items||[]; var totQty=0; items.forEach(function(it){totQty+=Number(it.qty)||0;});
+  var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{};
+  var items=effectiveItems(v), t=computeTax(v, items);
+  var totQty=0; items.forEach(function(it){totQty+=Number(it.qty)||0;});
   var einv = d.irn ? '<div class="einv">e-Invoice &nbsp; IRN : '+esc(d.irn)+
        (d.ackNo?' &nbsp; Ack No. : '+esc(d.ackNo):'')+(d.ackDate?' &nbsp; Ack Date : '+esc(fmtDate(d.ackDate)):'')+'</div>' : '';
 
@@ -420,12 +421,26 @@ function companyHeader(co){
 }
 
 function isInvoice(v){
-  // The invoice layout needs stock lines. A sale/purchase with NO line items is an
-  // accounting-only voucher (e.g. a service/expense purchase booked ledger-to-ledger)
-  // -- render it as a Dr/Cr journal, which is how Tally/bizanalyst present it, instead
-  // of an invoice with an empty items table.
   var d=v.details||{};
-  return !!(d.items&&d.items.length);
+  if(d.items&&d.items.length) return true;
+  return /sale|purchase|invoice|debit note|credit note/i.test(v.type||"");
+}
+// The goods/service ledger leg (the taxable value) — the largest non-tax, non-round,
+// non-TDS ledger. Used to synthesise a line when an invoice carries no stock items
+// (an accounting purchase/sale, or items not yet re-synced) so it isn't left blank.
+function goodsLeg(v){
+  var led=v.ledgers||{}, best=null, bestAbs=0;
+  for(var k in led){
+    if(/c ?gst|s ?gst|state.*tax|i ?gst|integ|round|tds|tcs/i.test(k)) continue;
+    var a=Number(led[k])||0; if(Math.abs(a)>bestAbs){ bestAbs=Math.abs(a); best={name:k,amount:a}; }
+  }
+  return best;
+}
+function effectiveItems(v){
+  var d=v.details||{};
+  if(d.items&&d.items.length) return d.items;
+  var g=goodsLeg(v);
+  return g? [{slNo:1, description:g.name, hsn:"", qty:"", unit:"", rate:"", disc:"", amount:g.amount}] : [];
 }
 var CUR_V=null;
 function render(v){
@@ -539,7 +554,8 @@ var DEMO_PURCHASE={
   }
 };
 // Accounting purchase (no stock items) — a service/expense booked ledger-to-ledger.
-// Has no `items`, so it renders in the Dr/Cr journal format, not an empty invoice.
+// Has no `items`, so the goods/service ledger is synthesised into a single invoice
+// line (the invoice layout is kept; the table is never left blank).
 var DEMO_ACCT_PURCHASE={
   branch:"kol", type:"Purchase - Goods", no:"PUR/92/26-27", date:"20260430",
   party:"Sudarshan Paper & Board Pvt Ltd",

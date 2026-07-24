@@ -1,14 +1,19 @@
 # CDC Dashboard Tools — CHANGELOG
 
-## v2.6 (voucher) — July 2026 — Item-less purchases render as Dr/Cr journals
+## v2.6 (voucher) — July 2026 — Item-less invoices synthesise a goods line
 
-A "Purchase" voucher with **no stock items** (a service/expense booked
-ledger-to-ledger, e.g. `PUR/92/26-27` — job-work, IGST, no inventory) was drawn as
-an invoice with an **empty items table**. `isInvoice(v)` now requires line items:
-a sale/purchase with none falls back to the **journal Dr/Cr particulars** layout
-(letterhead, voucher no/date, Debit/Credit postings, narration) — how Tally/bizanalyst
-present such vouchers. Purchases/sales **with** items are unaffected (still full
-invoices). New `/voucher/?demo=acctpurchase` sample.
+A sale/purchase with **no stock items** (an accounting purchase/sale booked
+ledger-to-ledger, e.g. `PUR/92/26-27` — job-work, IGST, no inventory; or a voucher
+whose items aren't re-synced yet) was drawn as an invoice with an **empty items
+table**. Such vouchers keep the **invoice layout** (that is the correct format), and
+the goods/service ledger — the largest non-tax/non-round/non-TDS leg — is now
+**synthesised into a single line** so the table is never blank. `PUR/92` renders as a
+proper supplier invoice: line `Purchase - Job Work 18,00,680.61`, IGST 18%
+`3,24,122.51`, Round Off, TDS `-1,801`, total `21,23,002`. Real stock lines always
+take precedence when present. New `/voucher/?demo=acctpurchase` sample.
+
+(Supersedes an interim change that routed item-less purchases to the Dr/Cr journal
+layout — the invoice layout is the intended format.)
 
 ---
 
