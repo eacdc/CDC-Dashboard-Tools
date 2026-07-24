@@ -26,6 +26,7 @@ const DETAIL_SCALARS = [
   'consigneeName', 'consigneeGstin', 'consigneeState',
   'deliveryNote', 'deliveryNoteDate', 'despatchDocNo', 'despatchedThrough',
   'destination', 'ewayBillNo', 'vehicleNo', 'termsOfPayment', 'termsOfDelivery',
+  'billOfLading', 'billOfLadingDate', 'otherReference',
   'buyersOrderNo', 'buyersOrderDate', 'irn', 'ackNo', 'ackDate',
 ];
 const ITEM_FIELDS = ['slNo', 'description', 'hsn', 'qty', 'unit', 'rate', 'disc', 'amount'];

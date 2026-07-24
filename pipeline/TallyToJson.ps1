@@ -258,6 +258,8 @@ function Get-VoucherDetails($v) {
         despatchDocNo    = xfirst $v @("BASICSHIPDOCUMENTNO")
         despatchedThrough= xfirst $v @("BASICSHIPPEDBY")
         destination      = xfirst $v @("BASICFINALDESTINATION","DESTINATION")
+        billOfLading     = xfirst $v @("BILLOFLADINGNO")
+        billOfLadingDate = xfirst $v @("BILLOFLADINGDATE")
         ewayBillNo       = $ewayNo
         vehicleNo        = xfirst $v @("BASICSHIPVESSELNO","VEHICLENUMBER","MOTORVEHICLENO")
         termsOfPayment   = xfirst $v @("BASICDUEDATEOFPYMT","TERMSOFPAYMENT")

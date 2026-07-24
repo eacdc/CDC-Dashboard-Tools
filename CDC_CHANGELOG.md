@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.5 (voucher) — July 2026 — Tax-rate % column + Bill of Lading field
+
+Two fields the reference Tax Invoice shows were missing from the printable voucher:
+
+- **HSN-wise tax summary now shows the rate.** The table gained grouped
+  **Central Tax** / **State Tax** (and **Integrated Tax** when IGST applies) headers,
+  each with a **Rate** + **Amount** sub-column — the CGST/SGST **9%** now prints next
+  to each amount (rate derived as tax ÷ taxable value).
+- **Bill of Lading/LR-RR No.** added to the meta grid, on a new fourth row alongside
+  **Delivery Note Date**, **Despatch Doc No.**, and **Other Reference(s)** — matching
+  the reference layout. Extractor reads `BILLOFLADINGNO` / `BILLOFLADINGDATE`;
+  `ingest.js` whitelists `billOfLading`, `billOfLadingDate`, `otherReference`.
+
+Verified against the reference for both sales (CDC/2662/26-27) and purchase
+(PUR/1337/26-27) via headless render.
+
+---
+
 ## v2.4 (voucher) — July 2026 — Purchase-invoice format (supplier orientation)
 
 The printable voucher rendered every invoice in *sales* orientation, so a **purchase**

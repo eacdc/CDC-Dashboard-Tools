@@ -154,6 +154,10 @@ function fmtIN(n){ // Indian grouping, 2 dp, blank for 0
   return neg?"-"+out:out;
 }
 function fmtQty(n){n=Number(n)||0; if(n===0)return""; return (n%1===0?n.toFixed(0):n.toFixed(2));}
+// Tax rate as a % of taxable value, e.g. 11790 of 131000 -> "9%". Blank when either is 0.
+function pct(part,base){ part=Number(part)||0; base=Number(base)||0;
+  if(!part||!base) return ""; var r=part/base*100;
+  return (Math.abs(r-Math.round(r))<0.05? String(Math.round(r)) : r.toFixed(2).replace(/0+$/,"").replace(/\.$/,""))+"%"; }
 
 /* number -> Indian words (Rupees). e.g. 162604 -> "One Lakh Sixty Two Thousand Six Hundred Four" */
 var ONES=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve",
@@ -253,6 +257,10 @@ function renderInvoice(v){
     '</tr><tr>'+
       metaCell('Despatched through', d.despatchedThrough)+ metaCell('Destination', d.destination)+
       metaCell('Motor Vehicle No.', d.vehicleNo)+ metaCell('Terms of Delivery', d.termsOfDelivery)+
+    '</tr><tr>'+
+      metaCell('Delivery Note Date', d.deliveryNoteDate?fmtDate(d.deliveryNoteDate):d.deliveryNoteDate)+
+      metaCell('Despatch Doc No.', d.despatchDocNo)+
+      metaCell('Bill of Lading/LR-RR No.', d.billOfLading)+ metaCell('Other Reference(s)', d.otherReference)+
     '</tr></table>';
 
   function partyBox(title,name,addr,gstin,state,contact){
@@ -327,16 +335,26 @@ function renderInvoice(v){
   var amtWords='<div class="b words mt6"><span class="lbl">Amount Chargeable (in words)</span> '+
     '<span class="bold">'+esc(rupeeWords(t.total))+'</span></div>';
 
+  var anyIgst=!!t.igst;
   var hsnRows=t.rows.map(function(r){
     return '<tr><td>'+esc(r.hsn)+'</td><td class="num">'+fmtIN(r.taxable)+'</td>'+
-      '<td class="num">'+(r.cgst?fmtIN(r.cgst):'')+'</td><td class="num">'+(r.sgst?fmtIN(r.sgst):'')+'</td>'+
-      '<td class="num">'+(r.igst?fmtIN(r.igst):'')+'</td><td class="num">'+fmtIN(r.tax)+'</td></tr>';
+      '<td class="num">'+pct(r.cgst,r.taxable)+'</td><td class="num">'+(r.cgst?fmtIN(r.cgst):'')+'</td>'+
+      '<td class="num">'+pct(r.sgst,r.taxable)+'</td><td class="num">'+(r.sgst?fmtIN(r.sgst):'')+'</td>'+
+      (anyIgst?'<td class="num">'+pct(r.igst,r.taxable)+'</td><td class="num">'+(r.igst?fmtIN(r.igst):'')+'</td>':'')+
+      '<td class="num">'+fmtIN(r.tax)+'</td></tr>';
   }).join('');
-  var hsnTbl = t.rows.length? '<table class="mt6"><thead><tr><th>HSN/SAC</th><th>Taxable Value</th>'+
-    '<th>CGST</th><th>SGST</th><th>IGST</th><th>Total Tax</th></tr></thead><tbody>'+hsnRows+
+  var hsnHead='<thead><tr>'+
+      '<th rowspan="2">HSN/SAC</th><th rowspan="2">Taxable Value</th>'+
+      '<th colspan="2">Central Tax</th><th colspan="2">State Tax</th>'+
+      (anyIgst?'<th colspan="2">Integrated Tax</th>':'')+
+      '<th rowspan="2">Total Tax Amount</th></tr>'+
+      '<tr><th>Rate</th><th>Amount</th><th>Rate</th><th>Amount</th>'+(anyIgst?'<th>Rate</th><th>Amount</th>':'')+'</tr></thead>';
+  var hsnTbl = t.rows.length? '<table class="mt6">'+hsnHead+'<tbody>'+hsnRows+
     '<tr class="tot-row"><td class="right">Total</td><td class="num">'+fmtIN(t.sub)+'</td>'+
-    '<td class="num">'+(t.cgst?fmtIN(t.cgst):'')+'</td><td class="num">'+(t.sgst?fmtIN(t.sgst):'')+'</td>'+
-    '<td class="num">'+(t.igst?fmtIN(t.igst):'')+'</td><td class="num">'+fmtIN(t.cgst+t.sgst+t.igst)+'</td></tr>'+
+    '<td></td><td class="num">'+(t.cgst?fmtIN(t.cgst):'')+'</td>'+
+    '<td></td><td class="num">'+(t.sgst?fmtIN(t.sgst):'')+'</td>'+
+    (anyIgst?'<td></td><td class="num">'+(t.igst?fmtIN(t.igst):'')+'</td>':'')+
+    '<td class="num">'+fmtIN(t.cgst+t.sgst+t.igst)+'</td></tr>'+
     '</tbody></table>'+
     '<div class="b words mt6"><span class="lbl">Tax Amount (in words)</span> <span class="bold">'+
       esc(rupeeWords(t.cgst+t.sgst+t.igst))+'</span></div>' : '';
