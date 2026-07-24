@@ -420,6 +420,8 @@ function Invoke-Incremental {
 # Server-side Collection filter finds a voucher's DATE by its exact number, so we
 # can re-pull just that one day's full detail and upsert only the wanted vouchers.
 function Find-VoucherDate([string]$vno) {
+    # CONTAINS (not '=') is far more tolerant of how Tally stores the number, then we
+    # confirm the exact match in PS (xval trims, so trailing-space numbers still match).
     $q = @"
 <ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>VFind</ID></HEADER>
 <BODY><DESC><STATICVARIABLES>
@@ -429,16 +431,19 @@ function Find-VoucherDate([string]$vno) {
 </STATICVARIABLES>
 <TDL><TDLMESSAGE>
 <COLLECTION NAME="VFind" ISMODIFY="No"><TYPE>Voucher</TYPE><FILTER>fNo</FILTER></COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="fNo">`$VoucherNumber = "$vno"</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="fNo">`$VoucherNumber CONTAINS "$vno"</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>
 "@
     [xml]$xml = Post-Tally $q
+    $fallback = ""
     foreach ($n in $xml.SelectNodes("//VOUCHER")) {
         $dt = xval $n.DATE
         if ($dt -and $dt.Length -ne 8) { try { $dt = ([datetime]$dt).ToString('yyyyMMdd') } catch {} }
-        if ($dt) { return $dt }
+        if (-not $dt) { continue }
+        if ((xval $n.VOUCHERNUMBER) -eq $vno) { return $dt }   # exact
+        if (-not $fallback) { $fallback = $dt }                 # first CONTAINS hit
     }
-    return ""
+    return $fallback
 }
 function Invoke-Targeted {
     $nos = @($VoucherNos -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -452,7 +457,14 @@ function Invoke-Targeted {
     }
     $out = New-Object System.Collections.ArrayList
     foreach ($ymd in ($days.Keys | Sort-Object)) {
-        foreach ($o in (Get-DayVouchers $ymd)) { if ($want[$o.no]) { [void]$out.Add($o) } }
+        foreach ($o in (Get-DayVouchers $ymd)) {
+            if ($want[$o.no]) {
+                $ni = 0; if ($o.details -and $o.details.items) { $ni = @($o.details.items).Count }
+                $nl = 0; if ($o.ledgers) { $nl = @($o.ledgers.Keys).Count }
+                Write-Host ("    + {0}  (type='{1}', items={2}, ledgers={3})" -f $o.no, $o.type, $ni, $nl)
+                [void]$out.Add($o)
+            }
+        }
     }
     Write-Host ("  collected {0} voucher(s)" -f $out.Count)
     if ($out.Count -eq 0) { Write-Warning "nothing matched - check the exact voucher numbers/company."; return }
