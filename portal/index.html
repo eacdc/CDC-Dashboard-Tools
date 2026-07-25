@@ -1715,7 +1715,11 @@ EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style
     // Canonicalize party names on vouchers AND opening bills so renamed parties merge
     // (opening bills carry the OLD name, current vouchers the new one -> same party).
     try{window.__cdcCanon(xd,kV,rbKol.concat(pbKol,pbAhm));window.__cdcCanon(xd,aV,null);}catch(e){}
-    var raw={kV:kV,aV:aV,xd:xd,ib:ib,rbKol:rbKol,pbKol:pbKol,pbAhm:pbAhm,asOfStr:asOfStr};
+    // Distinct party names seen (post-merge) — powers the Merge-names dropdowns.
+    var __pn={};function __colp(v){var pl=v.party_ledgers||{};for(var k in pl)__pn[k]=1;}
+    for(var __i=0;__i<kV.length;__i++)__colp(kV[__i]);for(var __j=0;__j<aV.length;__j++)__colp(aV[__j]);
+    [rbKol,pbKol,pbAhm].forEach(function(arr){arr.forEach(function(b){if(b&&b.party)__pn[b.party]=1;});});
+    var raw={kV:kV,aV:aV,xd:xd,ib:ib,rbKol:rbKol,pbKol:pbKol,pbAhm:pbAhm,asOfStr:asOfStr,partyNames:Object.keys(__pn).sort()};
     return window.CDC_PROJ.buildForBranch(raw,'all');
   },
   // Rebuild the projection for a single branch (or 'all'). KOL keeps its own
@@ -1729,7 +1733,7 @@ EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style
     // Consolidated eliminates inter-branch; a single-branch view treats the other
     // branch as an external party, so drop the IB filter there.
     var ibEff=branch==='all'?raw.ib:{};
-    return {proj:buildProjection(vs,raw.xd,ibEff,rb,pb,asOf), vs:vs, xd:raw.xd, ib:ibEff, rb:rb, pb:pb, branch:branch, _projRaw:raw};
+    return {proj:buildProjection(vs,raw.xd,ibEff,rb,pb,asOf), vs:vs, xd:raw.xd, ib:ibEff, rb:rb, pb:pb, branch:branch, _projRaw:raw, partyNames:raw.partyNames||[]};
   }
 };
 })();
@@ -1904,23 +1908,25 @@ function Portal(){
       e('button',{onClick:function(){setAliasUI(true);},title:'Merge parties renamed in Tally',style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'🔗 Merge names'+(Object.keys(aliases||{}).length?' ('+Object.keys(aliases).length+')':'')),
       e('button',{onClick:reset,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
     e('div',{key:active},activeEl),
-    aliasUI&&e(AliasModal,{aliases:aliases,onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
+    aliasUI&&e(AliasModal,{aliases:aliases,names:(projData&&projData.partyNames)||[],onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
 }
 // Editor for the shared party name-merge map: "variant/old name" -> "canonical/current name".
 function AliasModal(pr){
   var s1=useState(''),va=s1[0],sVa=s1[1];var s2=useState(''),ca=s2[0],sCa=s2[1];
-  var map=pr.aliases||{};var keys=Object.keys(map).sort();
+  var map=pr.aliases||{};var keys=Object.keys(map).sort();var names=pr.names||[];
   function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(m);sVa('');sCa('');}
   function del(k){var m=Object.assign({},map);delete m[k];pr.onSave(m);}
+  var nameOpts=names.map(function(n){return e('option',{key:n,value:n});});
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)pr.onClose();},style:{position:'fixed',inset:0,background:'rgba(15,23,42,0.55)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',fontFamily:'Inter,sans-serif'}},
     e('div',{style:{background:'#fff',width:'100%',maxWidth:'720px',maxHeight:'85vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
       e('div',{style:{padding:'16px 22px',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}},
         e('div',null,e('div',{style:{fontSize:'16px',fontWeight:700,color:'#0f172a'}},'Merge party names'),e('div',{style:{fontSize:'11px',color:'#64748b',marginTop:'2px'}},'Map an old/variant name to the current name so a renamed party merges everywhere (shared for all users).')),
         e('button',{onClick:pr.onClose,style:{background:'#f1f5f9',border:'1px solid #cbd5e1',color:'#475569',padding:'5px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕')),
       e('div',{style:{padding:'14px 22px',borderBottom:'1px solid #e2e8f0',display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
-        e('input',{type:'text',value:va,placeholder:'Old / variant name (e.g. A K Trading Paper Pvt Ltd)',onChange:function(ev){sVa(ev.target.value);},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
+        e('datalist',{id:'__cdcNameList'},nameOpts),
+        e('input',{type:'text',list:'__cdcNameList',value:va,placeholder:'Old / variant name — pick or type',onChange:function(ev){sVa(ev.target.value);},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
         e('span',{style:{color:'#94a3b8'}},'→'),
-        e('input',{type:'text',value:ca,placeholder:'Current name (e.g. A.K. Trading Paper Pvt. Ltd)',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
+        e('input',{type:'text',list:'__cdcNameList',value:ca,placeholder:'Current name — pick or type',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
         e('button',{onClick:add,style:{background:'#0891b2',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:600}},'Add')),
       e('div',{style:{overflowY:'auto',flex:1,padding:'8px 0'}},
         keys.length===0?e('div',{style:{padding:'30px',textAlign:'center',color:'#94a3b8',fontSize:'13px'}},'No merges yet.')
