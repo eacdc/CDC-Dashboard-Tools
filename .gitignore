@@ -5,3 +5,6 @@ pipeline/tally_export/
 pipeline/logs/
 *.log
 browser_test.png
+
+# Session scratchpad (temp files, not for commit)
+scratchpad/
