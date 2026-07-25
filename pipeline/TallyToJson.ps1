@@ -499,7 +499,7 @@ $ledgerPayload = @"
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerList" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <FETCH>NAME,PARENT,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL</FETCH>
+        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -528,11 +528,16 @@ $groupPayload = @"
 $ledgerToGroup = @{}   # ledger name -> immediate group
 $groupToParent = @{}   # group name  -> parent group (or "" at root)
 $ledgerContacts = @{}  # ledger name -> @{ name; email; mobile }  (party contact block)
+$ledgerIds = @{}       # ledger name -> stable Tally GUID (survives renames)
 
 [xml]$lx = Post-Tally $ledgerPayload
 foreach ($l in $lx.SelectNodes("//LEDGER")) {
     $name = xval $l.NAME; if (-not $name) { continue }
     $ledgerToGroup[$name] = xval $l.PARENT
+    # Stable ledger identity: GUID (falls back to MASTERID). Lets the dashboard merge
+    # a party across a name change (Tally keeps the GUID when a ledger is renamed).
+    $lguid = xval $l.GUID; if (-not $lguid) { $lguid = xval $l.MASTERID }
+    if ($lguid) { $ledgerIds[$name] = $lguid }
     # Contact person / email / mobile live on the Ledger master, not on the voucher,
     # so the printable invoice's Bill-to contact block is sourced from here.
     $cName   = xval $l.LEDGERCONTACT
@@ -604,7 +609,9 @@ foreach ($gn in ($groupToParent.Keys | Sort-Object)) {
 }
 $mContacts = [ordered]@{}
 foreach ($ln in ($ledgerContacts.Keys | Sort-Object)) { $mContacts[$ln] = $ledgerContacts[$ln] }
-$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts }
+$mIds = [ordered]@{}
+foreach ($ln in ($ledgerIds.Keys | Sort-Object)) { $mIds[$ln] = $ledgerIds[$ln] }
+$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

@@ -114,6 +114,8 @@ async function ingest(payload) {
     const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
     const contacts = cleanContacts(payload.master.contacts);
     if (contacts) set.contacts = contacts;
+    // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
+    if (payload.master.ids && typeof payload.master.ids === 'object') set.ids = payload.master.ids;
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }
@@ -187,6 +189,8 @@ async function syncIncremental(payload) {
     const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
     const contacts = cleanContacts(payload.master.contacts);
     if (contacts) set.contacts = contacts;
+    // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
+    if (payload.master.ids && typeof payload.master.ids === 'object') set.ids = payload.master.ids;
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }

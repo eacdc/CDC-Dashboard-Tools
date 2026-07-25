@@ -56,15 +56,30 @@ var SKIP_ROOTS={'Capital Account':1,'Revenue Account':1};
 var CASH_VCH={'Bank Receipt':1,'Bank Payments':1,'Bank Payment':1,'Cash Paynent':1,'Cash Payment':1,'Cash Voucher':1,'Receipt':1,'Payment':1,'Contra':1};
 var GRID_COL1=320;
 
-function parseHierarchy(text){var j=JSON.parse(text);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
+function parseHierarchy(text){var j=JSON.parse(text);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l,ids:j.ids||{}};}
 
 function mergeHierarchies(h1,h2){
-  var g={},l={};
+  var g={},l={},id={};
   var k;for(k in h1.groups)g[k]=h1.groups[k];for(k in h2.groups)if(!g.hasOwnProperty(k))g[k]=h2.groups[k];
   for(k in h1.ledgers)l[k]=h1.ledgers[k];for(k in h2.ledgers)if(!l.hasOwnProperty(k))l[k]=h2.ledgers[k];
+  for(k in (h1.ids||{}))id[k]=h1.ids[k];for(k in (h2.ids||{}))if(!id.hasOwnProperty(k))id[k]=h2.ids[k];
   for(k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];
-  return{groups:g,ledgers:l};
+  return{groups:g,ledgers:l,ids:id};
 }
+
+// Canonicalize ledger/party names so a party renamed in Tally is merged everywhere.
+// Identity = the ledger's stable GUID (xd.ids: name->guid). A manual alias map
+// (window.__cdcAliases: variant->canonical) bridges an OLD name (gone from the
+// current master, so it has no guid) to its current name. Mutates vouchers/bills
+// in place; returns the canonicalizer for reuse.
+window.__cdcCanon=function(xd,vouchers,bills){
+  var aliases=window.__cdcAliases||{};var ids=(xd&&xd.ids)||{};var g2n={};for(var n in ids)if(!g2n[ids[n]])g2n[ids[n]]=n;
+  function cn(name){if(!name)return name;var a=aliases[name]||name;var g=ids[a];return (g&&g2n[g])?g2n[g]:a;}
+  function rk(obj){if(!obj)return obj;var o={};for(var k in obj){var ck=cn(k);o[ck]=(o[ck]||0)+obj[k];}return o;}
+  if(vouchers)for(var i=0;i<vouchers.length;i++){var v=vouchers[i];if(v.party)v.party=cn(v.party);if(v.party_ledgers)v.party_ledgers=rk(v.party_ledgers);if(v.ledgers)v.ledgers=rk(v.ledgers);}
+  if(bills)for(var j=0;j<bills.length;j++){if(bills[j]&&bills[j].party)bills[j].party=cn(bills[j].party);}
+  return cn;
+};
 
 function findIBLedgers(xd){
   var ib={};
@@ -695,6 +710,7 @@ function App(){var s=useState(null),d=s[0],setD=s[1];return d?e(Dash,{data:d,set
     var kV=JSON.parse(t.kolVouch); for(var i=0;i<kV.length;i++)kV[i]._branch='kol';
     var aV=JSON.parse(t.ahmVouch); for(var j=0;j<aV.length;j++)aV[j]._branch='ahm';
     var vouchers=kV.concat(aV);
+    try{window.__cdcCanon(xd,vouchers,null);}catch(e){}
     var stock=stockText?parseStock(stockText):null;
     var data=processData(vouchers,xd,stock,ibLedgers,12,0,'all');
     data.branchStats={kol:kV.length,ahm:aV.length,ibElim:Object.keys(ibLedgers).length};
@@ -709,8 +725,8 @@ var APP_VERSION='v1.12';var APP_BUILD='14-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
-function parseHierarchy(t){var j=JSON.parse(t);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l};}
-function mergeH(h1,h2){var g={},l={};for(var k in h1.groups)g[k]=h1.groups[k];for(var k in h2.groups)if(!g[k])g[k]=h2.groups[k];for(var k in h1.ledgers)l[k]=h1.ledgers[k];for(var k in h2.ledgers)if(!l[k])l[k]=h2.ledgers[k];for(var k in TPG)if(!g[k])g[k]=TPG[k];return{groups:g,ledgers:l};}
+function parseHierarchy(t){var j=JSON.parse(t);var g=j.groups||{};var l=j.ledgers||{};for(var k in TPG)if(!g.hasOwnProperty(k))g[k]=TPG[k];return{groups:g,ledgers:l,ids:j.ids||{}};}
+function mergeH(h1,h2){var g={},l={},id={};for(var k in h1.groups)g[k]=h1.groups[k];for(var k in h2.groups)if(!g[k])g[k]=h2.groups[k];for(var k in h1.ledgers)l[k]=h1.ledgers[k];for(var k in h2.ledgers)if(!l[k])l[k]=h2.ledgers[k];for(var k in (h1.ids||{}))id[k]=h1.ids[k];for(var k in (h2.ids||{}))if(!id[k])id[k]=h2.ids[k];for(var k in TPG)if(!g[k])g[k]=TPG[k];return{groups:g,ledgers:l,ids:id};}
 function getChain(n,xd){var p=xd.ledgers[n];if(!p){if(xd.groups[n])p=n;else{for(var ln in xd.ledgers)if(ln.toLowerCase()===n.toLowerCase()){p=xd.ledgers[ln];break;}}}if(!p)return['Unclassified'];var ch=[p],sn={};while(p&&xd.groups[p]&&!sn[p]){sn[p]=1;p=xd.groups[p];if(p)ch.unshift(p);}return ch;}
 function chainHas(n,xd,kws){var cs=getChain(n,xd).join('>').toLowerCase();for(var i=0;i<kws.length;i++)if(cs.indexOf(kws[i])>=0)return true;return false;}
 function findIB(xd){var ib={};for(var ln in xd.ledgers)if(chainHas(ln,xd,['branch / divisions']))ib[ln]=1;return ib;}
@@ -1696,6 +1712,9 @@ EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style
     // Keep the bill sets branch-separated (kol receivable, kol payable, ahm payable)
     // so the Projected view can switch between KOL / AHM / Consolidated.
     var rbKol=parseBillsCSV(t.kolBillsRecv||''), pbKol=parseBillsCSV(t.kolBillsPay||''), pbAhm=t.ahmBillsPay?parseBillsCSV(t.ahmBillsPay):[];
+    // Canonicalize party names on vouchers AND opening bills so renamed parties merge
+    // (opening bills carry the OLD name, current vouchers the new one -> same party).
+    try{window.__cdcCanon(xd,kV,rbKol.concat(pbKol,pbAhm));window.__cdcCanon(xd,aV,null);}catch(e){}
     var raw={kV:kV,aV:aV,xd:xd,ib:ib,rbKol:rbKol,pbKol:pbKol,pbAhm:pbAhm,asOfStr:asOfStr};
     return window.CDC_PROJ.buildForBranch(raw,'all');
   },
@@ -1737,6 +1756,8 @@ function Portal(){
   var sProj=useState(null),projData=sProj[0],setProjData=sProj[1];
   var sPB=useState('all'),projBranch=sPB[0],setProjBranch=sPB[1];// Projected view branch: all|kol|ahm
   var sProjOvr=useState(null),projOverrides=sProjOvr[0],setProjOverrides=sProjOvr[1];// shared overrides from MongoDB
+  var sAliases=useState({}),aliases=sAliases[0],setAliases=sAliases[1];// shared party name-merge map
+  var sAliasUI=useState(false),aliasUI=sAliasUI[0],setAliasUI=sAliasUI[1];// alias editor modal open
   var sErr=useState(null),err=sErr[0],setErr=sErr[1];
   var sLd=useState(false),ld=sLd[0],setLd=sLd[1];
   var sMode=useState('mongo'),mode=sMode[0],setMode=sMode[1];
@@ -1785,6 +1806,8 @@ function Portal(){
       // then the dataset — set overrides state BEFORE 'built' so the projection Dash seeds
       // from the shared values on first mount.
       var ovrProm=fetch(base+'/api/overrides').then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+      // Shared party-alias map — set on window BEFORE build so canonicalization applies.
+      var aliProm=fetch(base+'/api/aliases').then(function(r){return r.ok?r.json():null;}).then(function(a){try{window.__cdcAliases=(a&&a.map)||{};setAliases(window.__cdcAliases);}catch(e){}}).catch(function(){});
       fetch(url).then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();}).then(function(d){
         var b=d.branches||{},kol=b.kol||{},ahm=b.ahm||{};
         setLastUpd({kol:kol.lastUpdatedAt||null,ahm:ahm.lastUpdatedAt||null});
@@ -1798,8 +1821,8 @@ function Portal(){
           kolBillsRecv:br[0],kolBillsPay:br[1],ahmBillsPay:br[2]
         };
         var stockText=br[3];
-        ovrProm.then(function(ov){
-          if(ov)setProjOverrides(ov);
+        Promise.all([ovrProm,aliProm]).then(function(rr){
+          if(rr[0])setProjOverrides(rr[0]);
           setTimeout(function(){try{
             var cd=window.CDC_CONSOL.build(texts,stockText);
             var pd=window.CDC_PROJ.build(texts,toD);
@@ -1811,6 +1834,10 @@ function Portal(){
   }
   function rebuildProj(newAsOf){setAsOf(newAsOf);if(built){try{var full=window.CDC_PROJ.build(built.texts,newAsOf);var pd=(projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full;setProjData(pd);}catch(ex){}}}
   function chooseProjBranch(b){setProjBranch(b);if(projData&&projData._projRaw){try{setProjData(window.CDC_PROJ.buildForBranch(projData._projRaw,b));}catch(ex){}}}
+  // Save the shared alias map, then rebuild both views so the merge takes effect at once.
+  function saveAliases(newMap){window.__cdcAliases=newMap;setAliases(newMap);
+    try{if(window.__cdcFromApi)fetch((window.__cdcApiBase||'')+'/api/aliases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:newMap})}).catch(function(){});}catch(e){}
+    if(built){try{var cd=window.CDC_CONSOL.build(built.texts,built.stockText);var pd0=window.CDC_PROJ.build(built.texts,asOf);var pd=(projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(pd0._projRaw,projBranch):pd0;setConsolData(cd);setProjData(pd);}catch(ex){}}}
   function reset(){setBuilt(null);setConsolData(null);setProjData(null);setFiles({});setProjBranch('all');}
 
   if(!built){
@@ -1874,8 +1901,34 @@ function Portal(){
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
       active==='proj'?e('div',{style:{display:'flex',gap:'2px',marginLeft:'2px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){if(projBranch!==__b)chooseProjBranch(__b);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:projBranch===__b?'#be185d':'#f1f5f9',color:projBranch===__b?'#fff':'#475569'}},__lbl);})):null,
       updBadge(),
-      e('button',{onClick:reset,style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
-    e('div',{key:active},activeEl));
+      e('button',{onClick:function(){setAliasUI(true);},title:'Merge parties renamed in Tally',style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'🔗 Merge names'+(Object.keys(aliases||{}).length?' ('+Object.keys(aliases).length+')':'')),
+      e('button',{onClick:reset,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
+    e('div',{key:active},activeEl),
+    aliasUI&&e(AliasModal,{aliases:aliases,onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
+}
+// Editor for the shared party name-merge map: "variant/old name" -> "canonical/current name".
+function AliasModal(pr){
+  var s1=useState(''),va=s1[0],sVa=s1[1];var s2=useState(''),ca=s2[0],sCa=s2[1];
+  var map=pr.aliases||{};var keys=Object.keys(map).sort();
+  function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(m);sVa('');sCa('');}
+  function del(k){var m=Object.assign({},map);delete m[k];pr.onSave(m);}
+  return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)pr.onClose();},style:{position:'fixed',inset:0,background:'rgba(15,23,42,0.55)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',fontFamily:'Inter,sans-serif'}},
+    e('div',{style:{background:'#fff',width:'100%',maxWidth:'720px',maxHeight:'85vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
+      e('div',{style:{padding:'16px 22px',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+        e('div',null,e('div',{style:{fontSize:'16px',fontWeight:700,color:'#0f172a'}},'Merge party names'),e('div',{style:{fontSize:'11px',color:'#64748b',marginTop:'2px'}},'Map an old/variant name to the current name so a renamed party merges everywhere (shared for all users).')),
+        e('button',{onClick:pr.onClose,style:{background:'#f1f5f9',border:'1px solid #cbd5e1',color:'#475569',padding:'5px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕')),
+      e('div',{style:{padding:'14px 22px',borderBottom:'1px solid #e2e8f0',display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
+        e('input',{type:'text',value:va,placeholder:'Old / variant name (e.g. A K Trading Paper Pvt Ltd)',onChange:function(ev){sVa(ev.target.value);},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
+        e('span',{style:{color:'#94a3b8'}},'→'),
+        e('input',{type:'text',value:ca,placeholder:'Current name (e.g. A.K. Trading Paper Pvt. Ltd)',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
+        e('button',{onClick:add,style:{background:'#0891b2',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:600}},'Add')),
+      e('div',{style:{overflowY:'auto',flex:1,padding:'8px 0'}},
+        keys.length===0?e('div',{style:{padding:'30px',textAlign:'center',color:'#94a3b8',fontSize:'13px'}},'No merges yet.')
+        :keys.map(function(k,i){return e('div',{key:i,style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 22px',borderBottom:'1px solid #f1f5f9',fontSize:'12px',fontFamily:'monospace'}},
+          e('span',{style:{flex:1,color:'#64748b',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},k),
+          e('span',{style:{color:'#94a3b8'}},'→'),
+          e('span',{style:{flex:1,color:'#0f172a',fontWeight:600,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},map[k]),
+          e('button',{onClick:function(){del(k);},style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Remove'));}))));
 }
 ReactDOM.render(e(Portal),document.getElementById('root'));
 

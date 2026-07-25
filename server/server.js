@@ -103,7 +103,7 @@ app.get('/api/dataset', async (req, res) => {
         .sort({ date: 1 })
         .toArray();
       out.branches[branch] = {
-        hierarchy: master ? { ledgers: master.ledgers, groups: master.groups } : null,
+        hierarchy: master ? { ledgers: master.ledgers, groups: master.groups, ids: master.ids || {} } : null,
         vouchers,
         lastUpdatedAt,
       };
@@ -209,6 +209,33 @@ app.post('/api/overrides', async (req, res) => {
       { $set: { daysOverrides, excluded, updatedAt } },
       { upsert: true }
     );
+    res.json({ ok: true, updatedAt: updatedAt.toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---- party aliases (shared name-merge map) ---------------------------------
+// Maps a variant/old ledger name to its canonical (current) name, so a party
+// renamed in Tally is merged everywhere. One shared Mongo doc, editable from the UI.
+//   GET  /api/aliases          -> { map: {variant: canonical}, updatedAt }
+//   POST /api/aliases { map }   (full replace; upsert)
+app.get('/api/aliases', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('aliases').findOne({ _id: 'party' }, { projection: { _id: 0 } });
+    res.json(doc || { map: {}, updatedAt: null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+app.post('/api/aliases', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const map = (b.map && typeof b.map === 'object') ? b.map : {};
+    const db = await getDb();
+    const updatedAt = new Date();
+    await db.collection('aliases').updateOne({ _id: 'party' }, { $set: { map, updatedAt } }, { upsert: true });
     res.json({ ok: true, updatedAt: updatedAt.toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
