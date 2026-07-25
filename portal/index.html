@@ -1061,6 +1061,21 @@ function renderAgingTree(root,opts){
   return out;
 }
 
+// Memoize the projection recompute (recalc + buildPVA) so switching sub-tabs or
+// expanding rows doesn't re-run them. Keyed by the projection data object (stable
+// per build/branch) and the override maps; survives Dash remounts on tab switch.
+var __projMemo=new WeakMap();
+function projDerived(data,pr,dO,ex){
+  var m=__projMemo.get(data);if(!m){m={};__projMemo.set(data,m);}
+  var key=JSON.stringify(dO||{})+'|'+JSON.stringify(ex||{});
+  if(!m[key]){
+    var ed=recalc(data,dO,ex);var pva=null;
+    try{if(pr.data.vs&&pr.data.xd)pva=buildPVA(data,pr.data.vs,pr.data.xd,pr.data.ib||{},pr.data.rb||[],pr.data.pb||[],dO,ex);}catch(e){console.error('PVA error:',e);}
+    m[key]={ed:ed,pva:pva};
+  }
+  return m[key];
+}
+
 var GRID_COL1=320;function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
 
 function ProjRow(pr){var pn=pr.name,mo=pr.monthly,st=pr.stats,mc=pr.mc,ex=pr.excluded;
@@ -1219,8 +1234,7 @@ GRID_COL1=cW;
 function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null);return x;});}
 function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x);return x;});}
 function tG(k){sGOp(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;return x;});}
-var ed=recalc(data,dO,ex);
-try{if(rawVs&&rawXd)pva=buildPVA(data,rawVs,rawXd,rawIb||{},rawRb||[],pr.data.pb||[],dO,ex);}catch(e){console.error('PVA error:',e);}var mos=ed.projMonths;
+var __pd=projDerived(data,pr,dO,ex);var ed=__pd.ed;pva=__pd.pva;var mos=ed.projMonths;
 var tI=ed.projInM.reduce(function(a,b){return a+b;},0),tO=ed.projOutM.reduce(function(a,b){return a+b;},0),tIE=ed.projIndExp.reduce(function(a,b){return a+b;},0),tN=ed.projNetM.reduce(function(a,b){return a+b;},0);
 
 function gGC(p,ty){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});var rt=ty==='d'?'Sundry Debtors':'Sundry Creditors';

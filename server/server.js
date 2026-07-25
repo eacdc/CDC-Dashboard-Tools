@@ -6,6 +6,7 @@ require('./loadEnv');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const { getDb, close } = require('./db');
 const { ingest, getSyncState, syncIncremental } = require('./ingest');
 
@@ -14,6 +15,9 @@ const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
 const REPO_ROOT = path.join(__dirname, '..');
 
 const app = express();
+// gzip every response. The dataset JSON (~2 MB of vouchers) compresses ~8-10x,
+// so this is the single biggest win for the dashboard's initial load time.
+app.use(compression());
 app.use(cors());
 app.use(express.json({ limit: '64mb' })); // full-FY voucher payloads are a few MB
 
