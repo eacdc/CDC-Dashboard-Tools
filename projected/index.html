@@ -79,14 +79,18 @@ function isNonCashIE(p){var n=(p||'').toLowerCase();
 // Step 1: Collect invoices and receipts from vouchers
 // ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
 var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
+// Bill-wise allocations for a party posting on this voucher, filtered to the wanted
+// BILLTYPE(s). Returns [{ref,type,amt}] with positive amounts. Empty when the voucher
+// carries no bill data (older synced vouchers) -> engine falls back to date FIFO.
+function _bills(v,party,types){var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
 // IE diagnostics — open DevTools Console and read window.__ieDebug to see what was found / skipped.
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
-if(isSaleVt(vt))for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||''});}
-if(isPurchVt(vt))for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||''});}
-if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a});}
-if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a});}
+if(isSaleVt(vt))for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'])});}
+if(isPurchVt(vt))for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'])});}
+if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'])});}
+if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'])});}
 if(vt==='Journal'){var hLC=false;for(var ln in lds)if(lds[ln]<0&&isL(ln)){hLC=true;break;}
 if(hLC){for(var p in pls){if(!isD(p)||ib[p]||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
 else{var hB=false;for(var p in pls)if(ib[p]){hB=true;break;}if(hB)for(var p in pls){if(ib[p]||!isD(p)||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
@@ -111,34 +115,73 @@ if(__vIE){__ieDebug.totalVouchersWithIE++;__ieDebug.totalAmount+=__vIEAmt;
   else{__ieDebug.byVoucherType[vt]=(__ieDebug.byVoucherType[vt]||0)+1;if(__ieDebug.sampleHits.length<5)__ieDebug.sampleHits.push({date:v.date,vt:vt,amt:__vIEAmt,ledgers:__ieLs});}}
 if(!isPurchVt(vt)){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l)&&!isNonCashIE(l))ieByMonth[ymKey]=(ieByMonth[ymKey]||0)+lds[l];}}
 
-// Step 2: Combined FIFO — opening bills + this year's invoices vs receipts
+// Step 2: Combined bill-wise + FIFO — opening bills + this year's invoices vs receipts
 // Returns {avgDays, unpaid:[{date,amt,ref}], matchedAmt}
+//
+// Two passes:
+//   PASS 1 (bill-wise) — a receipt that names the bill it settles (Tally "Agst Ref")
+//     is applied to THAT exact bill, honouring how it was posted in Tally.
+//   PASS 2 (date FIFO) — anything left over (receipts with no bill reference, "On
+//     Account"/"Advance" money, or a reference we can't find) is matched oldest-bill
+//     first, exactly like the original engine. Leftover money accrues as an advance
+//     that absorbs remaining bills at 0-day payment cycle.
+// When a voucher carries no bill data (older synced vouchers), every receipt falls
+// through to PASS 2, so behaviour is identical to the previous pure-FIFO engine.
 function combinedFIFO(openBills,yearInvs,yearRcts){
-  var evs=[];
-  for(var i=0;i<openBills.length;i++){var b=openBills[i];
-    if(b.isAdvance){evs.push({d:b.date,a:b.amount,t:'r',ref:b.refNo||'ADV'});}// Advance = pre-payment
-    else{evs.push({d:b.date,a:b.amount,t:'i',ref:b.refNo||'OB'});}}
-  for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];evs.push({d:inv.date,a:inv.amt,t:'i',ref:inv.ref||'INV'});}
-  for(var i=0;i<(yearRcts||[]).length;i++){var r=yearRcts[i];evs.push({d:r.date,a:r.amt,t:'r',ref:'RCT'});}
-  evs.sort(function(a,b){return a.d<b.d?-1:a.d>b.d?1:(a.t==='i'?-1:1);});
-
-  var q=[],da=[],adv=0;
-  for(var i=0;i<evs.length;i++){var ev=evs[i];
-    if(ev.t==='i'){
-      var rem=ev.a;
-      if(adv>0){var ab=Math.min(adv,rem);adv-=ab;rem-=ab;if(ab>0.5)da.push({d:0,a:ab});}
-      if(rem>0.5)q.push({d:ev.d,r:rem,ref:ev.ref});
-    } else {
-      var ra=ev.a,rd=parseDate(ev.d);
-      for(var qi=0;qi<q.length&&ra>0.5;qi++){
-        if(q[qi].r<0.5)continue;
-        var mt=Math.min(q[qi].r,ra);q[qi].r-=mt;ra-=mt;
-        var dy=daysBtw(parseDate(q[qi].d),rd);
-        if(dy>=0)da.push({d:Math.min(dy,730),a:mt});// cap at 730 for avg calc
-      }
-      if(ra>0.5)adv+=ra;
-    }
+  var billMap={},anonInvs=[],da=[],rcts=[];
+  // Seed a bill (keyed by its Tally reference where available; otherwise anonymous
+  // so it can still be matched by date in PASS 2). Same ref twice -> merge, keep the
+  // earliest date so the credit period isn't understated.
+  function addBill(ref,d,amt){
+    if(amt<=0.5)return;
+    if(ref&&billMap.hasOwnProperty(ref)){if(d<billMap[ref].d)billMap[ref].d=d;billMap[ref].r+=amt;}
+    else if(ref){billMap[ref]={d:d,r:amt,ref:ref};}
+    else{anonInvs.push({d:d,r:amt,ref:'INV'});}
   }
+  for(var i=0;i<openBills.length;i++){var b=openBills[i];
+    if(b.isAdvance){rcts.push({date:b.date,amt:b.amount,alloc:null});}// Advance = pre-payment
+    else{addBill(b.refNo||'',b.date,b.amount);}}
+  for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];
+    var ib=inv.bills&&inv.bills.length?inv.bills:null;
+    if(ib){var at=0;for(var k=0;k<ib.length;k++){addBill(ib[k].ref,inv.date,ib[k].amt);at+=ib[k].amt;}
+      var rem=inv.amt-at;if(rem>0.5)anonInvs.push({d:inv.date,r:rem,ref:inv.ref||'INV'});}
+    else{anonInvs.push({d:inv.date,r:inv.amt,ref:inv.ref||'INV'});}}
+  for(var i=0;i<(yearRcts||[]).length;i++)rcts.push(yearRcts[i]);
+
+  // PASS 1 — settle each "Agst Ref" allocation against its named bill.
+  var fb=[];// leftover receipt money -> date FIFO
+  for(var i=0;i<rcts.length;i++){var rc=rcts[i],alloc=rc.alloc;
+    if(alloc&&alloc.length){var at=0;
+      for(var k=0;k<alloc.length;k++){var al=alloc[k],amt=al.amt,key=al.ref;at+=al.amt;
+        if(key&&billMap[key]&&billMap[key].r>0.5){
+          var mt=Math.min(billMap[key].r,amt);billMap[key].r-=mt;amt-=mt;
+          var dy=daysBtw(parseDate(billMap[key].d),parseDate(rc.date));if(dy>=0)da.push({d:Math.min(dy,730),a:mt});
+        }
+        if(amt>0.5)fb.push({date:rc.date,amt:amt});// referenced bill not found -> FIFO
+      }
+      var extra=rc.amt-at;if(extra>0.5)fb.push({date:rc.date,amt:extra});// unallocated remainder
+    } else {fb.push({date:rc.date,amt:rc.amt});}
+  }
+
+  // PASS 2 — date FIFO over whatever bills are still open.
+  var q=[];
+  for(var key in billMap){if(billMap[key].r>0.5)q.push({d:billMap[key].d,r:billMap[key].r,ref:billMap[key].ref});}
+  for(var i=0;i<anonInvs.length;i++){if(anonInvs[i].r>0.5)q.push({d:anonInvs[i].d,r:anonInvs[i].r,ref:anonInvs[i].ref});}
+  q.sort(function(a,b){return a.d<b.d?-1:a.d>b.d?1:0;});
+  fb.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  var adv=0;
+  for(var i=0;i<fb.length;i++){var ra=fb[i].amt,rd=parseDate(fb[i].date);
+    for(var qi=0;qi<q.length&&ra>0.5;qi++){
+      if(q[qi].r<0.5)continue;
+      if(parseDate(q[qi].d)>rd)break;// don't pre-pay a future-dated bill via FIFO; q is date-sorted
+      var mt=Math.min(q[qi].r,ra);q[qi].r-=mt;ra-=mt;
+      var dy=daysBtw(parseDate(q[qi].d),rd);if(dy>=0)da.push({d:Math.min(dy,730),a:mt});// cap at 730 for avg calc
+    }
+    if(ra>0.5)adv+=ra;// leftover = advance credit
+  }
+  // Advance absorbs remaining bills at 0-day cycle (a pre-payment against later bills).
+  for(var qi=0;qi<q.length&&adv>0.5;qi++){if(q[qi].r<0.5)continue;var ab=Math.min(adv,q[qi].r);q[qi].r-=ab;adv-=ab;if(ab>0.5)da.push({d:0,a:ab});}
+
   // Remaining unpaid
   var unpaid=[];
   for(var qi=0;qi<q.length;qi++){if(q[qi].r>0.5)unpaid.push({date:q[qi].d,amt:q[qi].r,ref:q[qi].ref});}
