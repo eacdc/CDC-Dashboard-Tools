@@ -1029,6 +1029,38 @@ var nOut={},nOutS={},nOutM=[0,0,0];for(var p in data.projOutflowStats){var st=da
 var net=data.projMonths.map(function(_,m){return nInM[m]-nOutM[m]-data.projIndExp[m];});
 return{projMonths:data.projMonths,xd:data.xd,asOfDate:data.asOfDate,projInflows:nIn,projInflowStats:nInS,projInM:nInM,projOutflows:nOut,projOutflowStats:nOutS,projOutM:nOutM,projIndExp:data.projIndExp,projNetM:net,companyAvgDays:data.companyAvgDays,debtorCount:Object.keys(nIn).length,creditorCount:Object.keys(nOut).length,totalOutstanding:data.totalOutstanding,excluded:data.excluded,excludedTotals:data.excludedTotals,allDebtorBills:data.allDebtorBills,debtorGroupAvgs:data.debtorGroupAvgs,allCreditorBills:data.allCreditorBills,creditorGroupAvgs:data.creditorGroupAvgs,debtorMonthly:data.debtorMonthly,creditorMonthly:data.creditorMonthly};}
 
+// Build a fully-nested aging tree from per-party records, keyed by each party's
+// Tally group chain below rootName (Sundry Debtors / Sundry Creditors). Each node
+// carries summed buckets[5], tot, billCnt (bills) and custCnt (leaf parties).
+// partyRecs = { party: { buckets:[5], bills:[], tot, grp, effDays } }.
+function buildAgingTree(partyRecs,xd,rootName){
+  var root={name:rootName,depth:0,buckets:[0,0,0,0,0],tot:0,billCnt:0,custCnt:0,children:{},isLeaf:false};
+  function acc(n,r){for(var k=0;k<5;k++)n.buckets[k]+=r.buckets[k];n.tot+=r.tot;n.billCnt+=r.bills.length;n.custCnt+=1;}
+  for(var p in partyRecs){var r=partyRecs[p];var ch=getChain(p,xd);var ri=ch.indexOf(rootName);var sub=ri>=0?ch.slice(ri+1):[];
+    acc(root,r);var node=root;
+    for(var s=0;s<sub.length;s++){var g=sub[s];if(!node.children[g])node.children[g]={name:g,depth:node.depth+1,buckets:[0,0,0,0,0],tot:0,billCnt:0,custCnt:0,children:{},isLeaf:false};node=node.children[g];acc(node,r);}
+    if(!node.children[p])node.children[p]={name:p,depth:node.depth+1,buckets:r.buckets.slice(),tot:r.tot,billCnt:r.bills.length,custCnt:1,children:{},isLeaf:true,party:p,grp:r.grp,effDays:r.effDays,bills:r.bills};}
+  (function ta(n){var ks=Object.keys(n.children);n.childArr=ks.map(function(k){return ta(n.children[k]);});n.children=null;return n;})(root);
+  return root;
+}
+// Recursively render an aging tree into an array of grid rows. opts: grid, exp,
+// setExp, onLeaf(node), agMode ('bill'|'due' for bucket colours), sortKey.
+function renderAgingTree(root,opts){
+  var out=[];var grid=opts.grid;
+  function bcol(bi){return (opts.agMode==='due'&&bi===0)?'var(--green)':(bi>=3?'var(--red)':'var(--text2)');}
+  function cmp(a,b){var sk=opts.sortKey;if(sk==='tot_asc')return a.tot-b.tot;if(sk==='sp_asc')return a.name.localeCompare(b.name);if(sk==='sp_desc')return b.name.localeCompare(a.name);if(sk==='cust_desc')return b.custCnt-a.custCnt;if(sk==='bill_desc')return b.billCnt-a.billCnt;if(/^b[0-4]_desc$/.test(sk||''))return b.buckets[parseInt(sk[1])]-a.buckets[parseInt(sk[1])];return b.tot-a.tot;}
+  function walk(node,path,depth){var kids=node.childArr||[];var hasKids=kids.length>0;var open=(path in opts.exp)?opts.exp[path]:(depth===0);var indent=24+depth*15;
+    var cells=[e('div',{key:'n',style:{padding:'7px 8px 7px '+indent+'px',fontSize:(depth===0?12:11)+'px',fontWeight:node.isLeaf?400:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'5px',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',textDecoration:node.isLeaf?'underline dotted var(--border2)':'none'}},hasKids?e('span',{style:{fontSize:'9px',color:'var(--text3)',flexShrink:0}},open?'▼':'▶'):e('span',{style:{width:'9px',flexShrink:0}}),e('span',{style:{overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},node.name),node.isLeaf&&node.grp?e('span',{style:{color:'var(--text3)',marginLeft:'6px',fontSize:'9px'}},'· '+node.effDays+'d'):null),
+      e('div',{key:'cu',style:{padding:'7px 6px',fontSize:'11px',color:node.isLeaf?'var(--dimnum)':'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},node.isLeaf?'—':node.custCnt),
+      e('div',{key:'bl',style:{padding:'7px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},node.billCnt)];
+    for(var bi=0;bi<5;bi++){cells.push(e('div',{key:'b'+bi,style:{padding:'7px 8px',fontSize:'11px',color:node.buckets[bi]>0?bcol(bi):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},node.buckets[bi]>0?fmt(node.buckets[bi]):'-'));}
+    cells.push(e('div',{key:'t',style:{padding:'7px 10px',fontSize:(depth===0?12:11)+'px',fontWeight:node.isLeaf?600:700,color:node.isLeaf?'var(--text1)':'var(--amber)',fontFamily:'var(--mono)',textAlign:'right'}},fmt(node.tot)));
+    out.push(e('div',{key:path,onClick:node.isLeaf?function(){opts.onLeaf(node);}:(hasKids?function(){var ne=Object.assign({},opts.exp);ne[path]=!open;opts.setExp(ne);}:null),style:{display:'grid',gridTemplateColumns:grid,borderBottom:'1px solid var(--border)',background:depth===0?'var(--bg3)':(node.isLeaf?'transparent':'var(--bg2)'),cursor:(node.isLeaf||hasKids)?'pointer':'default'}},cells));
+    if(hasKids&&open){var sk=kids.slice().sort(cmp);for(var i=0;i<sk.length;i++)walk(sk[i],path+'/'+sk[i].name,depth+1);}}
+  walk(root,(opts.keyPfx||'')+root.name,0);
+  return out;
+}
+
 var GRID_COL1=320;function gtc(mc){return GRID_COL1+'px repeat('+mc+',1fr) minmax(100px,1fr)';}
 
 function ProjRow(pr){var pn=pr.name,mo=pr.monthly,st=pr.stats,mc=pr.mc,ex=pr.excluded;
@@ -1362,40 +1394,24 @@ function parseDt(ds){if(!ds||ds.length<8)return new Date(2025,3,1);return new Da
 function bucketIdx(age){if(recAg==='due'){if(age<0)return 0;if(age<30)return 1;if(age<60)return 2;if(age<90)return 3;return 4;}else{if(age<30)return 0;if(age<60)return 1;if(age<90)return 2;if(age<180)return 3;return 4;}}
 var bucketLabels=recAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
 // Aggregate all unpaid bills per salesperson \u2192 per customer, with aging buckets.
-var allBills=ed.allDebtorBills||{};var bySp={};
+var allBills=ed.allDebtorBills||{};var partyRecs={};
 for(var p in allBills){var pd=allBills[p];if(!pd||!pd.unpaid)continue;
-  var sp=getSp(p);var grp=getCustGrp(p);var ed_=effDays(p);
+  var grp=getCustGrp(p);var ed_=effDays(p);var rec={buckets:[0,0,0,0,0],bills:[],tot:0,grp:grp,effDays:ed_};
   for(var bi=0;bi<pd.unpaid.length;bi++){var bl=pd.unpaid[bi];if(bl.amt<5000)continue;
-    var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);
-    var age=recAg==='due'?(bAge-ed_):bAge;var bk=bucketIdx(age);
-    if(!bySp[sp])bySp[sp]={sp:sp,custs:{},tot:0,billCnt:0,buckets:[0,0,0,0,0]};
-    if(!bySp[sp].custs[p])bySp[sp].custs[p]={party:p,grp:grp,effDays:ed_,bills:[],tot:0,buckets:[0,0,0,0,0]};
-    bySp[sp].custs[p].bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});
-    bySp[sp].custs[p].tot+=bl.amt;bySp[sp].custs[p].buckets[bk]+=bl.amt;
-    bySp[sp].tot+=bl.amt;bySp[sp].billCnt++;bySp[sp].buckets[bk]+=bl.amt;}
-}
-var spRows=Object.keys(bySp).map(function(k){var v=bySp[k];var custArr=Object.keys(v.custs).map(function(ck){return v.custs[ck];});v.custArr=custArr;v.custCnt=custArr.length;return v;});
+    var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);var age=recAg==='due'?(bAge-ed_):bAge;var bk=bucketIdx(age);
+    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}
+  if(rec.bills.length)partyRecs[p]=rec;}
 // Search filter — narrow customers too, and recompute salesperson totals from filtered list.
-if(sr){var srl=sr.toLowerCase();spRows=spRows.map(function(s){
-  if(s.sp.toLowerCase().indexOf(srl)>=0)return s;// salesperson name matches → keep everything
-  var fc=s.custArr.filter(function(c){return c.party.toLowerCase().indexOf(srl)>=0;});
-  if(fc.length===0)return null;
-  var ns={sp:s.sp,custArr:fc,custCnt:fc.length,billCnt:0,tot:0,buckets:[0,0,0,0,0]};
-  fc.forEach(function(c){ns.tot+=c.tot;ns.billCnt+=c.bills.length;for(var k=0;k<5;k++)ns.buckets[k]+=c.buckets[k];});
-  return ns;
-}).filter(function(s){return s!==null;});}
-// Sort
-var sortFnsRec={tot_desc:function(a,b){return b.tot-a.tot;},tot_asc:function(a,b){return a.tot-b.tot;},sp_asc:function(a,b){return a.sp.localeCompare(b.sp);},sp_desc:function(a,b){return b.sp.localeCompare(a.sp);},cust_desc:function(a,b){return b.custCnt-a.custCnt;},bill_desc:function(a,b){return b.billCnt-a.billCnt;}};
-spRows.sort(sortFnsRec[recSort]||sortFnsRec.tot_desc);
+if(sr){var srl=sr.toLowerCase();var fpr={};for(var p in partyRecs){var keep=p.toLowerCase().indexOf(srl)>=0;if(!keep){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});for(var ci=0;ci<ch.length;ci++)if((ch[ci]||'').toLowerCase().indexOf(srl)>=0){keep=true;break;}}if(keep)fpr[p]=partyRecs[p];}partyRecs=fpr;}
+var agingRoot=buildAgingTree(partyRecs,ed.xd||{groups:{},ledgers:{}},'Sundry Debtors');
 function recTh(label,col){var asc=col+'_asc',desc=col+'_desc';var nxt=recSort===asc?desc:asc;var arrow=recSort===asc?' \u2191':recSort===desc?' \u2193':'';return e('span',{onClick:function(){setRecSort(nxt);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
-function recThBkt(idx,label){var key='b'+idx+'_desc';var arrow=recSort===key?' \u2193':'';return e('span',{onClick:function(){var fn={};fn[key]=function(a,b){return b.buckets[idx]-a.buckets[idx];};sortFnsRec[key]=fn[key];setRecSort(key);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
-// Totals across all visible salesperson rows
-var totTot=0,totBills=0,totCust=0,totBkts=[0,0,0,0,0];
-spRows.forEach(function(s){totTot+=s.tot;totBills+=s.billCnt;totCust+=s.custCnt;for(var k=0;k<5;k++)totBkts[k]+=s.buckets[k];});
+function recThBkt(idx,label){var key='b'+idx+'_desc';var arrow=recSort===key?' \u2193':'';return e('span',{onClick:function(){setRecSort(key);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
+// Totals from the tree root.
+var totTot=agingRoot.tot,totBills=agingRoot.billCnt,totCust=agingRoot.custCnt,totBkts=agingRoot.buckets;
 function exportRecXLS(){
-  var hdr=['Salesperson','Customer Group','Customer','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
-  var rows=[];spRows.forEach(function(s){s.custArr.forEach(function(c){c.bills.forEach(function(b){rows.push([s.sp,c.grp,c.party,c.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabels[b.bucket],Math.round(b.amt)]);});});});
-  var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
+  var hdr=['Customer Group','Customer','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
+  var rows=[];for(var p in partyRecs){var rec=partyRecs[p];rec.bills.forEach(function(b){rows.push([rec.grp,p,rec.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabels[b.bucket],Math.round(b.amt)]);});}
+  var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Receivables');XLSX.writeFile(wb,'CDC_Receivables_'+(recAg==='due'?'DueDate':'BillDate')+'.xlsx');
 }
 return e('div',{style:{padding:'0'}},
@@ -1441,28 +1457,13 @@ recMode==='monthly'&&(function(){
 })(),
 recMode==='aging'&&e('div',{style:{overflowY:'auto'}},
 e('div',{style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
-e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},recTh('SALESPERSON / CUSTOMER','sp')),
+e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},recTh('LEDGER GROUP / PARTY','sp')),
 e('div',{style:{padding:'8px 6px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},recTh('# CUST','cust')),
 e('div',{style:{padding:'8px 6px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},recTh('# BILLS','bill')),
 [0,1,2,3,4].map(function(__i){return e('div',{key:'h'+__i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:__i===0&&recAg==='due'?'var(--green)':'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},recThBkt(__i,bucketLabels[__i]));}),
 e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--amber)',fontFamily:'var(--mono)',textAlign:'right'}},recTh('TOTAL','tot'))),
-spRows.length===0?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No receivables above \u20B95,000 found.')
-:spRows.map(function(s,si){
-  var rows=[e('div',{key:'sp'+si,onClick:function(){var ne=Object.assign({},recExp);if(ne[s.sp])delete ne[s.sp];else ne[s.sp]=true;setRecExp(ne);},style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},(recExp[s.sp]||sr)?'\u25BC':'\u25B6'),s.sp),
-    e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.custCnt),
-    e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.billCnt),
-    [0,1,2,3,4].map(function(__bi){return e('div',{key:'b'+__bi,style:{padding:'8px 8px',fontSize:'11px',color:s.buckets[__bi]>0?(recAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},s.buckets[__bi]>0?fmt(s.buckets[__bi]):'-');}),
-    e('div',{style:{padding:'8px 10px',fontSize:'12px',color:'var(--amber)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:700}},fmt(s.tot)))];
-  if(recExp[s.sp]||sr){var custs=s.custArr.slice().sort(function(a,b){return b.tot-a.tot;});
-    custs.forEach(function(c,ci){rows.push(e('div',{key:'sp'+si+'c'+ci,onClick:function(){setRecModal({party:c.party,grp:c.grp,sp:s.sp,effDays:c.effDays,bills:c.bills});},style:{display:'grid',gridTemplateColumns:REC_GRID,borderBottom:'1px solid var(--border)',cursor:'pointer'}},
-      e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textDecoration:'underline dotted var(--border2)'}},c.party,e('span',{style:{color:'var(--text3)',marginLeft:'8px',fontSize:'9px'}},'\u00B7 '+c.grp+' \u00B7 '+c.effDays+'d')),
-      e('div',{style:{padding:'7px 6px',fontSize:'10px',color:'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},'\u2014'),
-      e('div',{style:{padding:'7px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},c.bills.length),
-      [0,1,2,3,4].map(function(__bi){return e('div',{key:'cb'+__bi,style:{padding:'7px 8px',fontSize:'10px',color:c.buckets[__bi]>0?(recAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},c.buckets[__bi]>0?fmt(c.buckets[__bi]):'-');}),
-      e('div',{style:{padding:'7px 10px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:600}},fmt(c.tot))));});}
-  return rows;
-}),
+(!agingRoot.childArr||agingRoot.childArr.length===0)?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No receivables above \u20B95,000 found.')
+:renderAgingTree(agingRoot,{grid:REC_GRID,exp:recExp,setExp:setRecExp,onLeaf:function(node){setRecModal({party:node.party,grp:node.grp,sp:node.grp,effDays:node.effDays,bills:node.bills});},agMode:recAg,sortKey:recSort,keyPfx:'r/'}),
 // Total row
 e('div',{style:{display:'grid',gridTemplateColumns:REC_GRID,borderTop:'2px solid var(--border)',background:'var(--bg2)',position:'sticky',bottom:0}},
 e('div',{style:{padding:'10px 24px',fontSize:'13px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'}},'TOTAL'),
@@ -1517,37 +1518,22 @@ function effDaysP(p){if(dO&&dO.hasOwnProperty(p))return dO[p];var s=(ed.allCredi
 function parseDt(ds){if(!ds||ds.length<8)return new Date(2025,3,1);return new Date(parseInt(ds.substring(0,4)),parseInt(ds.substring(4,6))-1,parseInt(ds.substring(6,8)));}
 function bucketIdxP(age){if(payAg==='due'){if(age<0)return 0;if(age<30)return 1;if(age<60)return 2;if(age<90)return 3;return 4;}else{if(age<30)return 0;if(age<60)return 1;if(age<90)return 2;if(age<180)return 3;return 4;}}
 var bucketLabelsP=payAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
-var allBills=ed.allCreditorBills||{};var byCat={};
+var allBills=ed.allCreditorBills||{};var partyRecsP={};
 for(var p in allBills){var pd=allBills[p];if(!pd||!pd.unpaid)continue;
-  var cat=getCat(p);var grp=getVendGrp(p);var ed_=effDaysP(p);
+  var grp=getVendGrp(p);var ed_=effDaysP(p);var rec={buckets:[0,0,0,0,0],bills:[],tot:0,grp:grp,effDays:ed_};
   for(var bi=0;bi<pd.unpaid.length;bi++){var bl=pd.unpaid[bi];if(bl.amt<5000)continue;
-    var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);
-    var age=payAg==='due'?(bAge-ed_):bAge;var bk=bucketIdxP(age);
-    if(!byCat[cat])byCat[cat]={sp:cat,custs:{},tot:0,billCnt:0,buckets:[0,0,0,0,0]};
-    if(!byCat[cat].custs[p])byCat[cat].custs[p]={party:p,grp:grp,effDays:ed_,bills:[],tot:0,buckets:[0,0,0,0,0]};
-    byCat[cat].custs[p].bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});
-    byCat[cat].custs[p].tot+=bl.amt;byCat[cat].custs[p].buckets[bk]+=bl.amt;
-    byCat[cat].tot+=bl.amt;byCat[cat].billCnt++;byCat[cat].buckets[bk]+=bl.amt;}
-}
-var catRows=Object.keys(byCat).map(function(k){var v=byCat[k];var custArr=Object.keys(v.custs).map(function(ck){return v.custs[ck];});v.custArr=custArr;v.custCnt=custArr.length;return v;});
-if(sr){var srl=sr.toLowerCase();catRows=catRows.map(function(s){
-  if(s.sp.toLowerCase().indexOf(srl)>=0)return s;
-  var fc=s.custArr.filter(function(c){return c.party.toLowerCase().indexOf(srl)>=0;});
-  if(fc.length===0)return null;
-  var ns={sp:s.sp,custArr:fc,custCnt:fc.length,billCnt:0,tot:0,buckets:[0,0,0,0,0]};
-  fc.forEach(function(c){ns.tot+=c.tot;ns.billCnt+=c.bills.length;for(var k=0;k<5;k++)ns.buckets[k]+=c.buckets[k];});
-  return ns;
-}).filter(function(s){return s!==null;});}
-var payFnsRec={tot_desc:function(a,b){return b.tot-a.tot;},tot_asc:function(a,b){return a.tot-b.tot;},sp_asc:function(a,b){return a.sp.localeCompare(b.sp);},sp_desc:function(a,b){return b.sp.localeCompare(a.sp);},cust_desc:function(a,b){return b.custCnt-a.custCnt;},bill_desc:function(a,b){return b.billCnt-a.billCnt;}};
-catRows.sort(payFnsRec[paySort]||payFnsRec.tot_desc);
+    var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);var age=payAg==='due'?(bAge-ed_):bAge;var bk=bucketIdxP(age);
+    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}
+  if(rec.bills.length)partyRecsP[p]=rec;}
+if(sr){var srl=sr.toLowerCase();var fpr={};for(var p in partyRecsP){var keep=p.toLowerCase().indexOf(srl)>=0;if(!keep){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});for(var ci=0;ci<ch.length;ci++)if((ch[ci]||'').toLowerCase().indexOf(srl)>=0){keep=true;break;}}if(keep)fpr[p]=partyRecsP[p];}partyRecsP=fpr;}
+var agingRootP=buildAgingTree(partyRecsP,ed.xd||{groups:{},ledgers:{}},'Sundry Creditors');
 function payTh(label,col){var asc=col+'_asc',desc=col+'_desc';var nxt=paySort===asc?desc:asc;var arrow=paySort===asc?' \u2191':paySort===desc?' \u2193':'';return e('span',{onClick:function(){setPaySort(nxt);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
-function payThBkt(idx,label){var key='b'+idx+'_desc';var arrow=paySort===key?' \u2193':'';return e('span',{onClick:function(){payFnsRec[key]=function(a,b){return b.buckets[idx]-a.buckets[idx];};setPaySort(key);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
-var totTot=0,totBills=0,totCust=0,totBkts=[0,0,0,0,0];
-catRows.forEach(function(s){totTot+=s.tot;totBills+=s.billCnt;totCust+=s.custCnt;for(var k=0;k<5;k++)totBkts[k]+=s.buckets[k];});
+function payThBkt(idx,label){var key='b'+idx+'_desc';var arrow=paySort===key?' \u2193':'';return e('span',{onClick:function(){setPaySort(key);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
+var totTot=agingRootP.tot,totBills=agingRootP.billCnt,totCust=agingRootP.custCnt,totBkts=agingRootP.buckets;
 function exportPayXLS(){
-  var hdr=['Category','Vendor Group','Vendor','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
-  var rows=[];catRows.forEach(function(s){s.custArr.forEach(function(c){c.bills.forEach(function(b){rows.push([s.sp,c.grp,c.party,c.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabelsP[b.bucket],Math.round(b.amt)]);});});});
-  var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
+  var hdr=['Vendor Group','Vendor','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
+  var rows=[];for(var p in partyRecsP){var rec=partyRecsP[p];rec.bills.forEach(function(b){rows.push([rec.grp,p,rec.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabelsP[b.bucket],Math.round(b.amt)]);});}
+  var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
   var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Payables');XLSX.writeFile(wb,'CDC_Payables_'+(payAg==='due'?'DueDate':'BillDate')+'.xlsx');
 }
 return e('div',{style:{padding:'0'}},
@@ -1592,28 +1578,13 @@ payMode==='monthly'&&(function(){
 })(),
 payMode==='aging'&&e('div',{style:{overflowY:'auto'}},
 e('div',{style:{display:'grid',gridTemplateColumns:PAY_GRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
-e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},payTh('CATEGORY / VENDOR','sp')),
+e('div',{style:{padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},payTh('LEDGER GROUP / VENDOR','sp')),
 e('div',{style:{padding:'8px 6px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},payTh('# VEND','cust')),
 e('div',{style:{padding:'8px 6px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},payTh('# BILLS','bill')),
 [0,1,2,3,4].map(function(__i){return e('div',{key:'h'+__i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:__i===0&&payAg==='due'?'var(--green)':'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},payThBkt(__i,bucketLabelsP[__i]));}),
 e('div',{style:{padding:'8px 10px',fontSize:'10px',fontWeight:700,color:'var(--pink)',fontFamily:'var(--mono)',textAlign:'right'}},payTh('TOTAL','tot'))),
-catRows.length===0?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No payables above \u20B95,000 found.')
-:catRows.map(function(s,si){
-  var rows=[e('div',{key:'sp'+si,onClick:function(){var ne=Object.assign({},payExp);if(ne[s.sp])delete ne[s.sp];else ne[s.sp]=true;setPayExp(ne);},style:{display:'grid',gridTemplateColumns:PAY_GRID,borderBottom:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'12px',fontWeight:600,color:'var(--text1)',fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:'6px'}},e('span',{style:{fontSize:'9px',color:'var(--text3)'}},(payExp[s.sp]||sr)?'\u25BC':'\u25B6'),s.sp),
-    e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.custCnt),
-    e('div',{style:{padding:'8px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},s.billCnt),
-    [0,1,2,3,4].map(function(__bi){return e('div',{key:'b'+__bi,style:{padding:'8px 8px',fontSize:'11px',color:s.buckets[__bi]>0?(payAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},s.buckets[__bi]>0?fmt(s.buckets[__bi]):'-');}),
-    e('div',{style:{padding:'8px 10px',fontSize:'12px',color:'var(--pink)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:700}},fmt(s.tot)))];
-  if(payExp[s.sp]||sr){var custs=s.custArr.slice().sort(function(a,b){return b.tot-a.tot;});
-    custs.forEach(function(c,ci){rows.push(e('div',{key:'sp'+si+'c'+ci,onClick:function(){setPayModal({party:c.party,grp:c.grp,sp:s.sp,effDays:c.effDays,bills:c.bills});},style:{display:'grid',gridTemplateColumns:PAY_GRID,borderBottom:'1px solid var(--border)',cursor:'pointer'}},
-      e('div',{style:{padding:'7px 24px 7px 50px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textDecoration:'underline dotted var(--border2)'}},c.party,e('span',{style:{color:'var(--text3)',marginLeft:'8px',fontSize:'9px'}},'\u00B7 '+c.grp+' \u00B7 '+c.effDays+'d')),
-      e('div',{style:{padding:'7px 6px',fontSize:'10px',color:'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},'\u2014'),
-      e('div',{style:{padding:'7px 6px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},c.bills.length),
-      [0,1,2,3,4].map(function(__bi){return e('div',{key:'cb'+__bi,style:{padding:'7px 8px',fontSize:'10px',color:c.buckets[__bi]>0?(payAg==='due'&&__bi===0?'var(--green)':__bi>=3?'var(--red)':'var(--text2)'):'var(--dimnum)',fontFamily:'var(--mono)',textAlign:'right'}},c.buckets[__bi]>0?fmt(c.buckets[__bi]):'-');}),
-      e('div',{style:{padding:'7px 10px',fontSize:'11px',color:'var(--text1)',fontFamily:'var(--mono)',textAlign:'right',fontWeight:600}},fmt(c.tot))));});}
-  return rows;
-}),
+(!agingRootP.childArr||agingRootP.childArr.length===0)?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No payables above \u20B95,000 found.')
+:renderAgingTree(agingRootP,{grid:PAY_GRID,exp:payExp,setExp:setPayExp,onLeaf:function(node){setPayModal({party:node.party,grp:node.grp,sp:node.grp,effDays:node.effDays,bills:node.bills});},agMode:payAg,sortKey:paySort,keyPfx:'p/'}),
 e('div',{style:{display:'grid',gridTemplateColumns:PAY_GRID,borderTop:'2px solid var(--border)',background:'var(--bg2)',position:'sticky',bottom:0}},
 e('div',{style:{padding:'10px 24px',fontSize:'13px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'}},'TOTAL'),
 e('div',{style:{padding:'10px 6px',fontSize:'11px',fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)',textAlign:'right'}},totCust),
