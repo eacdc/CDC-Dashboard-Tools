@@ -281,20 +281,42 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   // The party map is then run through buildTree (which nests by the party's Tally
   // group chain) and we lift out the "Sundry Debtors"/"Sundry Creditors" subtree,
   // so that node becomes the section's topmost group.
-  var saSalesNet={},saSalesGross={},saPurchNet={},saPurchGross={};
-  function __saAdd(map,key,mi,amt){if(!map[key])map[key]=Array(monthCount).fill(0);map[key][mi]+=amt;}
-  for(var savi=0;savi<vouchers.length;savi++){var sav=vouchers[savi];var sami=monthKey(sav.date,startFY);if(sami<0||sami>=monthCount)continue;
-    var saNetR=0,saNetP=0;for(var sal in (sav.ledgers||{})){if(ibLedgers[sal])continue;var sac=classify(sal,xd,lu,ovr);if(sac==='revenue')saNetR+=sav.ledgers[sal];else if(sac==='purchase')saNetP+=sav.ledgers[sal];}
-    var saDebG=0,saCredG=0,saDomD=null,saDomDAbs=0,saDomC=null,saDomCAbs=0;
-    for(var sap in (sav.party_ledgers||{})){if(ibLedgers[sap])continue;var saAv=Math.abs(sav.party_ledgers[sap]);
-      if(chainHas(sap,['sundry debtors'])){saDebG+=saAv;if(saAv>saDomDAbs){saDomDAbs=saAv;saDomD=sap;}}
-      else if(chainHas(sap,['sundry creditors'])){saCredG+=saAv;if(saAv>saDomCAbs){saDomCAbs=saAv;saDomC=sap;}}}
-    if(saNetR!==0&&saDomD){__saAdd(saSalesNet,saDomD,sami,Math.abs(saNetR));__saAdd(saSalesGross,saDomD,sami,saDebG);}
-    if(saNetP!==0&&saDomC){__saAdd(saPurchNet,saDomC,sami,Math.abs(saNetP));__saAdd(saPurchGross,saDomC,sami,saCredG);}}
   function __saFind(nodes,name){for(var i=0;i<nodes.length;i++){var n=nodes[i];if(n.name===name)return n;if(n.children){var f=__saFind(n.children,name);if(f)return f;}}return null;}
   function __saRebase(n,delta){n.depth=(n.depth||0)-delta;if(n.children)n.children.forEach(function(c){__saRebase(c,delta);});if(n.ledgers)n.ledgers.forEach(function(c){__saRebase(c,delta);});}
-  function __saSection(map,rootName){var full=buildTree(map,xd,lu,monthCount);var node=__saFind(full,rootName);if(!node)return null;__saRebase(node,(node.depth||1));return node;}
-  var saObj={salesNet:__saSection(saSalesNet,'Sundry Debtors'),salesGross:__saSection(saSalesGross,'Sundry Debtors'),purchNet:__saSection(saPurchNet,'Sundry Creditors'),purchGross:__saSection(saPurchGross,'Sundry Creditors')};
+  function __saSection(map,rootName,nB){var full=buildTree(map,xd,lu,nB);var node=__saFind(full,rootName);if(!node)return null;__saRebase(node,(node.depth||1));return node;}
+  // Attribute each sale/purchase voucher to its dominant debtor/creditor party and
+  // bucket it by the given period function; then build the nested Sundry-rooted trees.
+  function __saBuild(bucketOf,nB,labels){
+    var sN={},sG={},pN={},pG={};
+    function ad(m,k,bi,a){if(!m[k])m[k]=Array(nB).fill(0);m[k][bi]+=a;}
+    for(var vi2=0;vi2<vouchers.length;vi2++){var v=vouchers[vi2];var bi=bucketOf(v.date);if(bi<0||bi>=nB)continue;
+      var nr=0,np=0;for(var ln in (v.ledgers||{})){if(ibLedgers[ln])continue;var c=classify(ln,xd,lu,ovr);if(c==='revenue')nr+=v.ledgers[ln];else if(c==='purchase')np+=v.ledgers[ln];}
+      var dg=0,cg=0,dd=null,dda=0,dc=null,dca=0;
+      for(var pl in (v.party_ledgers||{})){if(ibLedgers[pl])continue;var av=Math.abs(v.party_ledgers[pl]);
+        if(chainHas(pl,['sundry debtors'])){dg+=av;if(av>dda){dda=av;dd=pl;}}
+        else if(chainHas(pl,['sundry creditors'])){cg+=av;if(av>dca){dca=av;dc=pl;}}}
+      if(nr!==0&&dd){ad(sN,dd,bi,Math.abs(nr));ad(sG,dd,bi,dg);}
+      if(np!==0&&dc){ad(pN,dc,bi,Math.abs(np));ad(pG,dc,bi,cg);}}
+    return {labels:labels,salesNet:__saSection(sN,'Sundry Debtors',nB),salesGross:__saSection(sG,'Sundry Debtors',nB),purchNet:__saSection(pN,'Sundry Creditors',nB),purchGross:__saSection(pG,'Sundry Creditors',nB)};
+  }
+  // Date helpers for daily/weekly windows (anchored on the latest voucher date).
+  function __ymdDate(s){return new Date(parseInt(s.substring(0,4)),parseInt(s.substring(4,6))-1,parseInt(s.substring(6,8)));}
+  function __dayDiff(a,b){return Math.round((__ymdDate(a).getTime()-b.getTime())/86400000);}
+  var __CMN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function __lblOf(dt){return (dt.getDate()<10?'0':'')+dt.getDate()+'-'+__CMN[dt.getMonth()];}
+  var __maxD=null;for(var __vd=0;__vd<vouchers.length;__vd++){var __dd2=vouchers[__vd].date;if(!__maxD||__dd2>__maxD)__maxD=__dd2;}
+  function __ymdOf(dt){return String(dt.getFullYear())+(dt.getMonth()+1<10?'0':'')+(dt.getMonth()+1)+(dt.getDate()<10?'0':'')+dt.getDate();}
+  var saObj={};
+  saObj.month=__saBuild(function(d){return monthKey(d,startFY);},monthCount,months);saObj.month.gran='month';
+  if(__maxD){
+    var __endD=__ymdDate(__maxD);
+    // Daily: last 15 days ending on the latest voucher date.
+    var __dayStart=new Date(__endD.getTime()-14*86400000);var __dayLbls=[],__dayStarts=[];for(var __i=0;__i<15;__i++){var __dt=new Date(__dayStart.getTime()+__i*86400000);__dayLbls.push(__lblOf(__dt));__dayStarts.push(__ymdOf(__dt));}
+    saObj.day=__saBuild(function(d){return __dayDiff(d,__dayStart);},15,__dayLbls);saObj.day.starts=__dayStarts;saObj.day.span=1;saObj.day.gran='day';
+    // Weekly: last 12 weeks (7-day buckets) ending on the latest voucher date.
+    var __wkStart=new Date(__endD.getTime()-(12*7-1)*86400000);var __wkLbls=[],__wkStarts=[];for(var __i=0;__i<12;__i++){var __wt=new Date(__wkStart.getTime()+__i*7*86400000);__wkLbls.push(__lblOf(__wt));__wkStarts.push(__ymdOf(__wt));}
+    saObj.week=__saBuild(function(d){return Math.floor(__dayDiff(d,__wkStart)/7);},12,__wkLbls);saObj.week.starts=__wkStarts;saObj.week.span=7;saObj.week.gran='week';
+  }
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
   return{months:months,fy:fyLabel,sa:saObj,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
 }
@@ -404,15 +426,24 @@ function Dash(props){
   // Collect every leaf ledger/party name nested under a node (a group aggregates
   // all its descendants; a leaf is just itself).
   function collectLeaves(n,out){if(!n)return out;if(n.type==='ledger'||(!n.children&&!n.ledgers)){out[n.name]=true;return out;}if(n.children)for(var i=0;i<n.children.length;i++)collectLeaves(n.children[i],out);if(n.ledgers)for(var j=0;j<n.ledgers.length;j++)collectLeaves(n.ledgers[j],out);return out;}
-  function openDrill(node,mi){var isLeaf=node.type==='ledger'||(!node.children&&!node.ledgers);setDrill({ledger:node.name,monthIdx:mi,ledgers:isLeaf?null:Object.keys(collectLeaves(node,{})),isGroup:!isLeaf});}
+  function openDrill(node,mi){var isLeaf=node.type==='ledger'||(!node.children&&!node.ledgers);
+    var t={ledger:node.name,monthIdx:mi,ledgers:isLeaf?null:Object.keys(collectLeaves(node,{})),isGroup:!isLeaf};
+    // Sales Analysis daily/weekly: a clicked cell maps to a date window, not a month.
+    if(view==='sales'&&saSel&&saSel.starts&&mi>=0&&saSel.starts[mi]){var __s=saSel.starts[mi];var __sd=new Date(parseInt(__s.substring(0,4)),parseInt(__s.substring(4,6))-1,parseInt(__s.substring(6,8)));var __ed2=new Date(__sd.getTime()+((saSel.span||1)-1)*86400000);function __y(dt){return String(dt.getFullYear())+(dt.getMonth()+1<10?'0':'')+(dt.getMonth()+1)+(dt.getDate()<10?'0':'')+dt.getDate();}t.dateFrom=__s;t.dateTo=__y(__ed2);t.periodLabel=(saSel.labels[mi]||'')+(saSel.span>1?' (week)':'');t.monthIdx=-1;}
+    setDrill(t);}
   GRID_COL1=colW;
   // Rebuild the invoice-number match set for the current search term. A ledger/party qualifies
   // when the typed text appears anywhere in one of its booked invoice numbers.
   (function(){var sl=(search||'').toLowerCase();if(!sl){INV_MATCH=null;return;}var idx=data.invLedgerIndex||{};var m={};for(var k in idx){var arr=idx[k];for(var j=0;j<arr.length;j++){if(arr[j].indexOf(sl)>=0){m[k]=true;break;}}}INV_MATCH=m;})();
   var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
-  var hCells=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];months.forEach(function(m,i){hCells.push(e('div',{key:'m'+i,style:hs},m));});hCells.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
   var s1=useState(true),revO=s1[0],setRevO=s1[1];var s2=useState(true),purO=s2[0],setPurO=s2[1];var s3=useState(true),deO=s3[0],setDeO=s3[1];var s4=useState(true),ieO=s4[0],setIeO=s4[1];var s5=useState(false),exO=s5[0],setExO=s5[1];var s6=useState(true),ciO=s6[0],setCiO=s6[1];var s7=useState(true),coO=s7[0],setCoO=s7[1];
   var sSaS=useState(true),saSalesO=sSaS[0],setSaSalesO=sSaS[1];var sSaP=useState(true),saPurchO=sSaP[0],setSaPurchO=sSaP[1];var sGross=useState(false),gross=sGross[0],setGross=sGross[1];
+  var sSaGran=useState('month'),saGran=sSaGran[0],setSaGran=sSaGran[1];// Sales Analysis period: month|week|day
+  // The Sales Analysis view can use daily (15) / weekly (12) / monthly columns, so
+  // the shared column header adapts to the selected period when that view is active.
+  var saSel=(data.sa&&data.sa[saGran])?data.sa[saGran]:(data.sa&&data.sa.month);
+  var vLabels=(view==='sales'&&saSel)?saSel.labels:months;var vMc=vLabels.length;
+  var hCells=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];vLabels.forEach(function(m,i){hCells.push(e('div',{key:'m'+i,style:hs},m));});hCells.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
   function sumArr(a){return a?a.reduce(function(s,v){return s+v;},0):0;}
   var tRev=sumArr(pl.revM),tPur=sumArr(pl.purchM),tGP=sumArr(pl.gpM),tNP=sumArr(pl.npM),tIn=sumArr(cf.inM),tOut=sumArr(cf.outM),tNet=sumArr(cf.netM);
   var bs=data.branchStats||{};
@@ -437,15 +468,15 @@ function Dash(props){
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tIn))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tOut))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tNet>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tNet>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tNet))),
-        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(view==='sales'?' active':''),onClick:function(){setView('sales');}},'\ud83d\udcc8 Sales Analysis'),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['net','Net'],['gross','Gross']].map(function(g){var on=(g[0]==='gross')===gross;return e('span',{key:g[0],onClick:function(){setGross(g[0]==='gross');},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
+        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(view==='sales'?' active':''),onClick:function(){setView('sales');}},'\ud83d\udcc8 Sales Analysis'),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['net','Net'],['gross','Gross']].map(function(g){var on=(g[0]==='gross')===gross;return e('span',{key:g[0],onClick:function(){setGross(g[0]==='gross');},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['day','Daily'],['week','Weekly'],['month','Monthly']].map(function(g){var on=saGran===g[0];return e('span',{key:g[0],onClick:function(){setSaGran(g[0]);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--purple)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
 // FY toggle: switches between Current FY (fyOffset=0) and Prior FY (fyOffset=-1), 12 months each.
 e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
 e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},__lbl);})),
 e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegistry);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
     e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search name or invoice no...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'260px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
-    e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+mc*105+115)+'px'}},
-      e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hCells),
+    e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+vMc*105+115)+'px'}},
+      e('div',{style:{display:'grid',gridTemplateColumns:gtc(vMc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hCells),
       view==='pl'&&e('div',null,
         e(SectionRow,{label:'REVENUE',monthly:pl.revM,total:tRev,color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:revO,onToggle:function(){setRevO(!revO);},mc:mc}),revO&&e(TreeRows,{nodes:pl.revTree,mc:mc,sortByValue:sortV,prefix:'pl_rev',search:search,onDrill:openDrill}),
         e(SectionRow,{label:'LESS: PURCHASES (COGS)',monthly:pl.purchM,total:tPur,color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:purO,onToggle:function(){setPurO(!purO);},mc:mc}),purO&&e(TreeRows,{nodes:pl.purchTree,mc:mc,sortByValue:sortV,prefix:'pl_pur',search:search,onDrill:openDrill}),
@@ -461,14 +492,15 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
         e(TotalRow,{label:'NET CASHFLOW',monthly:cf.netM,mc:mc}),
       ),
       view==='audit'&&e(AuditView,{data:data,onOverrideChange:function(){var raw=data._raw;if(!raw)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,data.monthCount||12,data.fyOffset||0,data.branch||'all');nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);}}),
-      view==='sales'&&(function(){var sa=data.sa||{};var salesNode=gross?sa.salesGross:sa.salesNet;var purchNode=gross?sa.purchGross:sa.purchNet;
+      view==='sales'&&(function(){var sa=saSel||{};var salesNode=gross?sa.salesGross:sa.salesNet;var purchNode=gross?sa.purchGross:sa.purchNet;
         function saNodes(n){return n?((n.children||[]).concat(n.ledgers||[])):[];}
-        function saM(n){return n?n.monthly:Array(mc).fill(0);}
+        function saM(n){return n?n.monthly:Array(vMc).fill(0);}
+        var perLbl=saGran==='day'?'last 15 days':saGran==='week'?'last 12 weeks':'monthly';
         return e('div',null,
-          e(SectionRow,{label:'SALES \u00B7 SUNDRY DEBTORS ('+(gross?'Gross incl GST':'Net excl GST')+')',monthly:saM(salesNode),total:sumArr(saM(salesNode)),color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:saSalesO,onToggle:function(){setSaSalesO(!saSalesO);},mc:mc}),
-          saSalesO&&(salesNode?e(TreeRows,{nodes:saNodes(salesNode),mc:mc,sortByValue:sortV,prefix:'sa_sales',search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No sales attributable to a Sundry Debtor party in this range.')),
-          e(SectionRow,{label:'PURCHASES \u00B7 SUNDRY CREDITORS ('+(gross?'Gross incl GST':'Net excl GST')+')',monthly:saM(purchNode),total:sumArr(saM(purchNode)),color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:saPurchO,onToggle:function(){setSaPurchO(!saPurchO);},mc:mc}),
-          saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:mc,sortByValue:sortV,prefix:'sa_purch',search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
+          e(SectionRow,{label:'SALES \u00B7 SUNDRY DEBTORS ('+(gross?'Gross incl GST':'Net excl GST')+' \u00B7 '+perLbl+')',monthly:saM(salesNode),total:sumArr(saM(salesNode)),color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:saSalesO,onToggle:function(){setSaSalesO(!saSalesO);},mc:vMc}),
+          saSalesO&&(salesNode?e(TreeRows,{nodes:saNodes(salesNode),mc:vMc,sortByValue:sortV,prefix:'sa_sales_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No sales attributable to a Sundry Debtor party in this range.')),
+          e(SectionRow,{label:'PURCHASES \u00B7 SUNDRY CREDITORS ('+(gross?'Gross incl GST':'Net excl GST')+' \u00B7 '+perLbl+')',monthly:saM(purchNode),total:sumArr(saM(purchNode)),color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:saPurchO,onToggle:function(){setSaPurchO(!saPurchO);},mc:vMc}),
+          saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:vMc,sortByValue:sortV,prefix:'sa_purch_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
       })())),
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'),
     drill&&e(DrillModal,{target:drill,data:data,initialSearch:search,onClose:function(){setDrill(null);}}));
@@ -578,7 +610,8 @@ function DrillModal(props){
   for(var i=0;i<raw.vouchers.length;i++){var v=raw.vouchers[i];
     if(branch!=='all'&&v._branch&&v._branch!==branch)continue;
     if(v.date<fyStart||v.date>=fyEnd)continue;
-    if(t.monthIdx>=0){var mi=monthKey(v.date,startFY);if(mi!==t.monthIdx)continue;}
+    if(t.dateFrom&&t.dateTo){if(v.date<t.dateFrom||v.date>t.dateTo)continue;}
+    else if(t.monthIdx>=0){var mi=monthKey(v.date,startFY);if(mi!==t.monthIdx)continue;}
     var amt=0,foundIn=null;
     var key=vchKey(v);var ovrAcct=invOvr[key]||null;
     for(var ln in (v.ledgers||{})){
@@ -611,7 +644,7 @@ function DrillModal(props){
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)props.onClose();},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
     e('div',{style:{background:'#fff',width:'100%',maxWidth:'1100px',maxHeight:'90vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
       e('div',{style:{padding:'16px 22px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'12px'}},
-        e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'DRILL DOWN'+(t.monthIdx>=0?' · '+(data.months[t.monthIdx]||''):' · all months')),e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},t.ledger),e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},contributing.length+' vouchers · ',e('span',{className:'num',style:{fontWeight:600,color:sumAmt>=0?'var(--text)':'var(--red)'}},'₹'+fmt(sumAmt)))),
+        e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'DRILL DOWN'+(t.periodLabel?' · '+t.periodLabel:(t.monthIdx>=0?' · '+(data.months[t.monthIdx]||''):' · all months'))),e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},t.ledger),e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},contributing.length+' vouchers · ',e('span',{className:'num',style:{fontWeight:600,color:sumAmt>=0?'var(--text)':'var(--red)'}},'₹'+fmt(sumAmt)))),
         e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
           e('select',{value:sortBy,onChange:function(ev){setSortBy(ev.target.value);},style:{padding:'5px 8px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'11px',fontFamily:'var(--mono)',background:'var(--bg)',cursor:'pointer'}},
             e('option',{value:'date_asc'},'Date ↑ (oldest)'),
