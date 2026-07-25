@@ -1908,15 +1908,22 @@ function Portal(){
       e('button',{onClick:function(){setAliasUI(true);},title:'Merge parties renamed in Tally',style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'🔗 Merge names'+(Object.keys(aliases||{}).length?' ('+Object.keys(aliases).length+')':'')),
       e('button',{onClick:reset,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),
     e('div',{key:active},activeEl),
-    aliasUI&&e(AliasModal,{aliases:aliases,names:(projData&&projData.partyNames)||[],onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
+    aliasUI&&e(AliasModal,{aliases:aliases,names:(projData&&projData.partyNames)||[],outstanding:(function(){var o={};var pj=projData&&(projData.proj||projData);if(pj){var acb=pj.allCreditorBills||{},adb=pj.allDebtorBills||{};for(var p in acb)o[p]=(o[p]||0)+(acb[p].outstanding||0);for(var p in adb)o[p]=(o[p]||0)+(adb[p].outstanding||0);}return o;})(),onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
 }
 // Editor for the shared party name-merge map: "variant/old name" -> "canonical/current name".
 function AliasModal(pr){
   var s1=useState(''),va=s1[0],sVa=s1[1];var s2=useState(''),ca=s2[0],sCa=s2[1];
-  var map=pr.aliases||{};var keys=Object.keys(map).sort();var names=pr.names||[];
-  function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(m);sVa('');sCa('');}
+  var map=pr.aliases||{};var keys=Object.keys(map).sort();var names=pr.names||[];var nameSet={};names.forEach(function(n){nameSet[n]=1;});
+  function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;if(v===c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(m);sVa('');sCa('');}
   function del(k){var m=Object.assign({},map);delete m[k];pr.onSave(m);}
   var nameOpts=names.map(function(n){return e('option',{key:n,value:n});});
+  // The canonical (right) MUST be an exact existing name, else this year's
+  // payments/invoices won't land on it and old bills never clear.
+  var canonBad=ca.trim()&&!nameSet[ca.trim()];var varBad=va.trim()&&!nameSet[va.trim()];
+  var out=pr.outstanding||{};
+  function fmtC(n){var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
+  var s3=useState(''),look=s3[0],sLook=s3[1];
+  var matches=[];if(look.trim().length>=2){var lq=look.trim().toLowerCase();for(var mi=0;mi<names.length&&matches.length<40;mi++){if(names[mi].toLowerCase().indexOf(lq)>=0)matches.push(names[mi]);}matches.sort(function(a,b){return (out[b]||0)-(out[a]||0);});}
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)pr.onClose();},style:{position:'fixed',inset:0,background:'rgba(15,23,42,0.55)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',fontFamily:'Inter,sans-serif'}},
     e('div',{style:{background:'#fff',width:'100%',maxWidth:'720px',maxHeight:'85vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
       e('div',{style:{padding:'16px 22px',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}},
@@ -1928,6 +1935,15 @@ function AliasModal(pr){
         e('span',{style:{color:'#94a3b8'}},'→'),
         e('input',{type:'text',list:'__cdcNameList',value:ca,placeholder:'Current name — pick or type',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
         e('button',{onClick:add,style:{background:'#0891b2',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:600}},'Add')),
+      (canonBad||varBad)&&e('div',{style:{padding:'0 22px 12px',fontSize:'10.5px',color:'#b45309',fontFamily:'monospace'}},'⚠ '+((varBad?'Left name ':'')+(varBad&&canonBad?'and right name ':canonBad?'Right (current) name ':''))+'not found in the data — pick the EXACT name from the dropdown. The right side must be the party’s current name (the one carrying this year’s payments), or old bills won’t clear.'),
+      e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0',background:'#f8fafc'}},
+        e('div',{style:{fontSize:'10px',color:'#64748b',fontFamily:'monospace',marginBottom:'4px'}},'Find variants — type part of a name to see every matching party and its current outstanding (highest first). Use → to set the one with the CORRECT amount as the current name; ← to add each other variant.'),
+        e('input',{type:'text',value:look,placeholder:'e.g. trading paper',onChange:function(ev){sLook(ev.target.value);},style:{width:'100%',padding:'7px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
+        matches.length>0&&e('div',{style:{marginTop:'6px',maxHeight:'150px',overflowY:'auto',border:'1px solid #e2e8f0',borderRadius:'6px',background:'#fff'}},matches.map(function(n,i){return e('div',{key:i,style:{display:'flex',alignItems:'center',gap:'8px',padding:'5px 10px',borderBottom:'1px solid #f1f5f9',fontSize:'11px',fontFamily:'monospace'}},
+          e('span',{style:{flex:1,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},n),
+          e('span',{style:{width:'80px',textAlign:'right',color:(out[n]||0)>0?'#be185d':'#94a3b8'}},out[n]?fmtC(out[n]):'—'),
+          e('button',{onClick:function(){sVa(n);},title:'set as OLD/variant name',style:{background:'#f1f5f9',border:'1px solid #cbd5e1',borderRadius:'4px',cursor:'pointer',fontSize:'10px',padding:'2px 6px'}},'← old'),
+          e('button',{onClick:function(){sCa(n);},title:'set as CURRENT name',style:{background:'#ecfeff',border:'1px solid #a5f3fc',color:'#0891b2',borderRadius:'4px',cursor:'pointer',fontSize:'10px',padding:'2px 6px'}},'→ current'));}))),
       e('div',{style:{overflowY:'auto',flex:1,padding:'8px 0'}},
         keys.length===0?e('div',{style:{padding:'30px',textAlign:'center',color:'#94a3b8',fontSize:'13px'}},'No merges yet.')
         :keys.map(function(k,i){return e('div',{key:i,style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 22px',borderBottom:'1px solid #f1f5f9',fontSize:'12px',fontFamily:'monospace'}},
