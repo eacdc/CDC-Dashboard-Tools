@@ -313,8 +313,12 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
     // Daily: last 15 days ending on the latest voucher date.
     var __dayStart=new Date(__endD.getTime()-14*86400000);var __dayLbls=[],__dayStarts=[];for(var __i=0;__i<15;__i++){var __dt=new Date(__dayStart.getTime()+__i*86400000);__dayLbls.push(__lblOf(__dt));__dayStarts.push(__ymdOf(__dt));}
     saObj.day=__saBuild(function(d){return __dayDiff(d,__dayStart);},15,__dayLbls);saObj.day.starts=__dayStarts;saObj.day.span=1;saObj.day.gran='day';
-    // Weekly: last 12 weeks (7-day buckets) ending on the latest voucher date.
-    var __wkStart=new Date(__endD.getTime()-(12*7-1)*86400000);var __wkLbls=[],__wkStarts=[];for(var __i=0;__i<12;__i++){var __wt=new Date(__wkStart.getTime()+__i*7*86400000);__wkLbls.push(__lblOf(__wt));__wkStarts.push(__ymdOf(__wt));}
+    // Weekly: last 12 CALENDAR weeks (Monday-start), the newest being the week
+    // that contains the latest voucher date — not a rolling 7-day window.
+    var __sinceMon=(__endD.getDay()+6)%7;// days since Monday (0=Sun..6=Sat -> 6,0,1,..5)
+    var __endMon=new Date(__endD.getTime()-__sinceMon*86400000);// Monday of the latest week
+    var __wkStart=new Date(__endMon.getTime()-11*7*86400000);// Monday 12 weeks back
+    var __wkLbls=[],__wkStarts=[];for(var __i=0;__i<12;__i++){var __wt=new Date(__wkStart.getTime()+__i*7*86400000);__wkLbls.push(__lblOf(__wt));__wkStarts.push(__ymdOf(__wt));}
     saObj.week=__saBuild(function(d){return Math.floor(__dayDiff(d,__wkStart)/7);},12,__wkLbls);saObj.week.starts=__wkStarts;saObj.week.span=7;saObj.week.gran='week';
   }
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
