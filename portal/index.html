@@ -1014,7 +1014,35 @@ for(var k=1;k<=3;k++){
 var ieAvg=lM.length>0?lM.reduce(function(a,b){return a+b;},0)/lM.length:0;
 var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[m]-pIE[m];});
 
+// ---- Diagnostics: expose the raw FIFO inputs per party so a rename/double-pay
+// issue can be inspected in the console via window.cdcDiag('<party name>').
+try{var __dg={debtors:{},creditors:{}};
+  for(var __p in dStats){__dg.debtors[__p]={opening:obByD[__p]||[],invoices:dInv[__p]||[],receipts:dRct[__p]||[],matchedAmt:dStats[__p].matchedAmt,outstanding:dStats[__p].outstanding,unpaid:dStats[__p].unpaid,avgDays:dStats[__p].avgDays};}
+  for(var __p in cStats){__dg.creditors[__p]={opening:obByC[__p]||[],invoices:cInv[__p]||[],payments:cPay[__p]||[],matchedAmt:cStats[__p].matchedAmt,outstanding:cStats[__p].outstanding,unpaid:cStats[__p].unpaid,avgDays:cStats[__p].avgDays};}
+  window.__cdcDiag=__dg;}catch(e){}
+
 return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA,debtorMonthly:debtorMonthly,creditorMonthly:creditorMonthly};};
+
+// Console diagnostic: window.cdcDiag('A.K. Trading Paper Pvt. Ltd')
+// Prints the exact FIFO inputs (opening bills, this-year invoices, payments) and
+// the resulting outstanding for a party, so a wrong/duplicated figure is visible.
+try{window.cdcDiag=function(name){
+  var d=window.__cdcDiag||{};var rec=null,side=null;
+  if(d.creditors&&d.creditors[name]){side='PAYABLE';rec=d.creditors[name];}
+  else if(d.debtors&&d.debtors[name]){side='RECEIVABLE';rec=d.debtors[name];}
+  if(!rec){var q=(name||'').toLowerCase();var all=Object.keys(d.creditors||{}).concat(Object.keys(d.debtors||{}));var hits=all.filter(function(n){return n.toLowerCase().indexOf(q)>=0;}).slice(0,30);console.log('No exact party "'+name+'". Close matches:',hits);return hits;}
+  function sum(a){return Math.round((a||[]).reduce(function(s,x){return s+(x.amt||0);},0));}
+  var pays=rec.payments||rec.receipts||[];var openT=sum(rec.opening),invT=sum(rec.invoices),payT=sum(pays);
+  console.log('%c'+side+' — '+name,'font-weight:bold;color:#0891b2;font-size:14px');
+  console.log('Opening bills   :',openT,'('+(rec.opening||[]).length+' bills)',rec.opening);
+  console.log('This-yr invoices:',invT,'('+(rec.invoices||[]).length+')',rec.invoices);
+  console.log('This-yr '+(side==='PAYABLE'?'payments ':'receipts ')+':',payT,'('+pays.length+')',pays);
+  console.log('Expected net (opening + invoices - paid):',openT+invT-payT);
+  console.log('FIFO outstanding:',Math.round(rec.outstanding),'| matched(cleared):',Math.round(rec.matchedAmt||0),'| avg days:',rec.avgDays);
+  if(payT>openT+invT)console.log('%c⚠ Paid ('+payT+') exceeds opening+invoices ('+(openT+invT)+') by '+(payT-(openT+invT))+' — over-payment/advance or a missing invoice.','color:#b45309');
+  console.log('Remaining unpaid bills:',rec.unpaid);
+  return rec;
+};}catch(e){}
 
 // ============ PREDICTION VS ACTUAL ============
 function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
@@ -1556,6 +1584,7 @@ return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)setRecModal
         e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},recModal.party),
         e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--amber)'}},fmt(total)),' \u00B7 predicted due '+recModal.effDays+' days')),
       e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+        e('button',{onClick:function(){try{window.cdcDiag(recModal.party);alert('Diagnostic printed to the browser console (F12 \u2192 Console) for:\n'+recModal.party);}catch(e){}},style:{background:'#7c3aed',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDD2C Diagnose'),
         e('button',{onClick:exportModal,style:{background:'var(--green)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
         e('button',{onClick:function(){setRecModal(null);},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'\u2715'))),
     e('div',{style:{overflowY:'auto',flex:1}},
@@ -1676,6 +1705,7 @@ return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)setPayModal
         e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},payModal.party),
         e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--pink)'}},fmt(total)),' \u00B7 predicted due '+payModal.effDays+' days')),
       e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+        e('button',{onClick:function(){try{window.cdcDiag(payModal.party);alert('Diagnostic printed to the browser console (F12 \u2192 Console) for:\n'+payModal.party);}catch(e){}},style:{background:'#7c3aed',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDD2C Diagnose'),
         e('button',{onClick:exportModal,style:{background:'var(--green)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
         e('button',{onClick:function(){setPayModal(null);},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'\u2715'))),
     e('div',{style:{overflowY:'auto',flex:1}},
