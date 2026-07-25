@@ -1130,12 +1130,21 @@ var sPayAg=useState('bill'),payAg=sPayAg[0],setPayAg=sPayAg[1];
 var sPayExp=useState({}),payExp=sPayExp[0],setPayExp=sPayExp[1];
 var sPaySort=useState('tot_desc'),paySort=sPaySort[0],setPaySort=sPaySort[1];
 var sPayModal=useState(null),payModal=sPayModal[0],setPayModal=sPayModal[1];
-var sDO=useState(savedOvr&&savedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
-var sEx=useState(savedOvr&&savedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
+// Seed from the shared MongoDB overrides (pr.overrides) when available, else fall
+// back to this browser's localStorage (offline / file-upload mode).
+var __seedOvr=(pr.overrides&&(pr.overrides.daysOverrides||pr.overrides.excluded))?pr.overrides:savedOvr;
+var sDO=useState(__seedOvr&&__seedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
+var sEx=useState(__seedOvr&&__seedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
 var sGO=useState(savedOvr&&savedOvr.groupOpen||{}),gO=sGO[0],sGOp=sGO[1];
-// Auto-save to localStorage on any change
+// Persist on any change: to the shared Mongo store (so everyone sees the same
+// data) when API-backed, and always to localStorage as an offline fallback.
+function saveOverridesToServer(newDO,newEx){
+  try{if(window.__cdcFromApi&&window.__cdcApiBase!==undefined){
+    fetch((window.__cdcApiBase||'')+'/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex})}).catch(function(){});
+  }}catch(e){}}
 function persistOverrides(newDO,newEx){
-  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,savedAt:new Date().toISOString()}));}}catch(e){}}
+  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,savedAt:new Date().toISOString()}));}}catch(e){}
+  saveOverridesToServer(newDO,newEx);}
 // Save overrides as downloadable JSON
 function saveOverridesJSON(){
   var obj={daysOverrides:dO,excluded:ex,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
@@ -1651,6 +1660,7 @@ function Portal(){
   var sConsol=useState(null),consolData=sConsol[0],setConsolData=sConsol[1];
   var sProj=useState(null),projData=sProj[0],setProjData=sProj[1];
   var sPB=useState('all'),projBranch=sPB[0],setProjBranch=sPB[1];// Projected view branch: all|kol|ahm
+  var sProjOvr=useState(null),projOverrides=sProjOvr[0],setProjOverrides=sProjOvr[1];// shared overrides from MongoDB
   var sErr=useState(null),err=sErr[0],setErr=sErr[1];
   var sLd=useState(false),ld=sLd[0],setLd=sLd[1];
   var sMode=useState('mongo'),mode=sMode[0],setMode=sMode[1];
@@ -1695,6 +1705,10 @@ function Portal(){
       // Persist any NEWLY uploaded bill/stock file so it is reused on later runs
       // (these 4 fixed files only change occasionally — upload once, retained until re-uploaded).
       bkeys.forEach(function(k,idx){if(files[k]&&br[idx])lcSet(k,br[idx]);});
+      // Load the shared projection overrides from MongoDB (so everyone sees the same edits),
+      // then the dataset — set overrides state BEFORE 'built' so the projection Dash seeds
+      // from the shared values on first mount.
+      var ovrProm=fetch(base+'/api/overrides').then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
       fetch(url).then(function(r){if(!r.ok)throw new Error('API '+r.status+' '+r.statusText);return r.json();}).then(function(d){
         var b=d.branches||{},kol=b.kol||{},ahm=b.ahm||{};
         setLastUpd({kol:kol.lastUpdatedAt||null,ahm:ahm.lastUpdatedAt||null});
@@ -1708,11 +1722,14 @@ function Portal(){
           kolBillsRecv:br[0],kolBillsPay:br[1],ahmBillsPay:br[2]
         };
         var stockText=br[3];
-        setTimeout(function(){try{
-          var cd=window.CDC_CONSOL.build(texts,stockText);
-          var pd=window.CDC_PROJ.build(texts,toD);
-          setConsolData(cd);setProjData(pd);setBuilt({texts:texts,stockText:stockText,asOf:toD});setLd(false);
-        }catch(ex){setErr((ex&&ex.message||ex)+'\n'+(ex&&ex.stack||''));setLd(false);}},30);
+        ovrProm.then(function(ov){
+          if(ov)setProjOverrides(ov);
+          setTimeout(function(){try{
+            var cd=window.CDC_CONSOL.build(texts,stockText);
+            var pd=window.CDC_PROJ.build(texts,toD);
+            setConsolData(cd);setProjData(pd);setBuilt({texts:texts,stockText:stockText,asOf:toD});setLd(false);
+          }catch(ex){setErr((ex&&ex.message||ex)+'\n'+(ex&&ex.stack||''));setLd(false);}},30);
+        });
       }).catch(function(ex){setErr('Fetch failed: '+ex.message);setLd(false);});
     });
   }
@@ -1772,7 +1789,7 @@ function Portal(){
       e('div',{style:{fontSize:'11px',fontWeight:700,color:lastUpd[bk]?'#0f172a':'#cbd5e1'}},fmtUpd(lastUpd[bk])));}));}
   var activeEl=active==='consol'
     ? e(window.CDC_CONSOL.Dash,{data:consolData,setData:setConsolData,onReset:reset})
-    : e(window.CDC_PROJ.Dash,{data:projData,onReset:reset});
+    : e(window.CDC_PROJ.Dash,{data:projData,onReset:reset,overrides:projOverrides});
   return e('div',{style:{minHeight:'100vh',background:'#fff'}},
     e('div',{style:{display:'flex',alignItems:'center',gap:'10px',padding:'10px 20px',borderBottom:'2px solid #e2e8f0',background:'#f8fafc',position:'sticky',top:0,zIndex:200,flexWrap:'wrap'}},
       e('span',{style:{fontSize:'11px',fontWeight:700,color:'#0f172a',fontFamily:'monospace',letterSpacing:'1px',marginRight:'6px'}},'CDC FINANCE'),

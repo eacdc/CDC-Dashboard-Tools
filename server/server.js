@@ -178,6 +178,39 @@ app.get('/api/meta', async (_req, res) => {
   }
 });
 
+// ---- projection overrides (shared across everyone) --------------------------
+// The Projected view lets users override per-party collection/payment days and
+// exclude parties. These used to live in each browser's localStorage; now they
+// live in one shared Mongo doc so every user sees the same numbers.
+//   GET  /api/overrides            -> { daysOverrides, excluded, updatedAt }
+//   POST /api/overrides { daysOverrides, excluded }  (full replace; upsert)
+app.get('/api/overrides', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('overrides').findOne({ _id: 'pcf' }, { projection: { _id: 0 } });
+    res.json(doc || { daysOverrides: {}, excluded: {}, updatedAt: null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+app.post('/api/overrides', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const daysOverrides = (b.daysOverrides && typeof b.daysOverrides === 'object') ? b.daysOverrides : {};
+    const excluded = (b.excluded && typeof b.excluded === 'object') ? b.excluded : {};
+    const db = await getDb();
+    const updatedAt = new Date();
+    await db.collection('overrides').updateOne(
+      { _id: 'pcf' },
+      { $set: { daysOverrides, excluded, updatedAt } },
+      { upsert: true }
+    );
+    res.json({ ok: true, updatedAt: updatedAt.toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ---- static dashboards ------------------------------------------------------
 // Served from the repo root so /consolidated, /projected, /dashboard work.
 app.use('/consolidated', express.static(path.join(REPO_ROOT, 'consolidated')));
