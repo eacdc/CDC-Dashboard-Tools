@@ -255,15 +255,16 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   var cfInTree=buildTree(cfInflows,xd,lu,monthCount),cfOutTree=buildTree(cfOutflows,xd,lu,monthCount);
   function sumTree(tree){var m=Array(monthCount).fill(0);tree.forEach(function(n){n.monthly.forEach(function(v,i){m[i]+=v;});});return m.map(function(v){return Math.round(v*100)/100;});}
   var revM=sumTree(revTree),purchM=sumTree(purchTree),dirExpM=sumTree(dirExpTree),indExpM=sumTree(indExpTree);
-  // Stock template is for the CURRENT FY only (12 entries Apr-Mar). Apply to the last 12
-  // bins of the monthCount-wide array — for 24-month view, the prior FY portion is left at 0.
+  // Stock template's 12 entries (Apr-Mar) belong to the CURRENT FY only. Map them onto
+  // the current FY's bins within the displayed window; a prior-FY view (or the prior-FY
+  // portion of a 24-month view) is left BLANK — the current stock is NOT reused for last
+  // year. Offset = where current-FY April sits in the window = (currentFY - startFY)*12.
   // Stock change for P&L = closing − opening (closing of month i = opening of month i+1).
-  // Positive means stock GREW → adds to profit (purchases sitting on shelf, not yet COGS).
-  // Negative means stock SHRANK → reduces profit (sold more than bought).
+  // Positive means stock GREW → adds to profit; negative means it SHRANK → reduces profit.
   // Trailing zeros in the template mean "no data yet", NOT "zero stock" — skip those months.
-  var stockM=Array(monthCount).fill(0);if(stock){var __off=monthCount-12;
+  var stockM=Array(monthCount).fill(0);if(stock){var __off=(currentFY-startFY)*12;
     var __lastWith=-1;for(var __k=11;__k>=0;__k--){if((stock[__k]||0)>0){__lastWith=__k;break;}}
-    for(var i=0;i<12;i++){var op=stock[i]||0;if(op===0)continue;if(i>=__lastWith)continue;var cl=stock[i+1]||0;if(cl===0)continue;stockM[__off+i]=Math.round((cl-op)*100)/100;}}
+    for(var i=0;i<12;i++){var __bin=__off+i;if(__bin<0||__bin>=monthCount)continue;var op=stock[i]||0;if(op===0)continue;if(i>=__lastWith)continue;var cl=stock[i+1]||0;if(cl===0)continue;stockM[__bin]=Math.round((cl-op)*100)/100;}}
   var gpM=months.map(function(_,i){return Math.round((revM[i]+purchM[i]+dirExpM[i]+stockM[i])*100)/100;});
   var npM=months.map(function(_,i){return Math.round((gpM[i]+indExpM[i])*100)/100;});
   var cfInM=sumTree(cfInTree),cfOutM=sumTree(cfOutTree);
@@ -1800,8 +1801,12 @@ function Portal(){
   var sTo=useState(new Date().toISOString().slice(0,10)),toD=sTo[0],setToD=sTo[1];
   var sUpd=useState(null),lastUpd=sUpd[0],setLastUpd=sUpd[1];// {kol,ahm} ISO strings of last DB update
   function setF(k){return function(file){var nf=Object.assign({},files);nf[k]=file;setFiles(nf);};}
-  // cached bills/stock text
+  // cached bills/stock text — from the shared MongoDB store (fetched once) with
+  // this browser's localStorage as a fallback.
+  var sSF=useState(null),serverFiles=sSF[0],setServerFiles=sSF[1];
+  var sfRef=useRef(false);if(!sfRef.current&&mode==='mongo'){sfRef.current=true;try{fetch(((apiBase||'').replace(/\/+$/,''))+'/api/files').then(function(r){return r.ok?r.json():{};}).then(function(sf){setServerFiles(sf||{});}).catch(function(){});}catch(e){}}
   var cachedTexts={};BILL_KEYS.forEach(function(k){var c=lcGet(k);if(c)cachedTexts[k]=c;});
+  if(serverFiles)BILL_KEYS.forEach(function(k){if(serverFiles[k]!=null)cachedTexts[k]=serverFiles[k];});
 
   function go(){
     setErr(null);setLd(true);
@@ -1831,11 +1836,15 @@ function Portal(){
     try{window.__cdcFromApi=true;window.__cdcApiBase=base;}catch(e){}
     var url=base+'/api/dataset?from='+ymdP(fromD)+'&to='+ymdP(toD)+'&branch=all';
     var bkeys=['kolBillsRecv','kolBillsPay','ahmBillsPay','stock'];
+    // Load the shared input files (bill CSVs + stock) from MongoDB. They take
+    // precedence over this browser's localStorage for these fixed inputs.
+    fetch(base+'/api/files').then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(__sf){__sf=__sf||{};
+    bkeys.forEach(function(k){if(__sf[k]!=null)cachedTexts[k]=__sf[k];});
     var billProms=bkeys.map(function(k){if(files[k])return files[k].text();if(cachedTexts[k])return Promise.resolve(cachedTexts[k]);return Promise.resolve(null);});
     Promise.all(billProms).then(function(br){
-      // Persist any NEWLY uploaded bill/stock file so it is reused on later runs
-      // (these 4 fixed files only change occasionally — upload once, retained until re-uploaded).
-      bkeys.forEach(function(k,idx){if(files[k]&&br[idx])lcSet(k,br[idx]);});
+      // Persist any NEWLY uploaded file to MongoDB (shared for everyone) + localStorage
+      // (offline fallback). These fixed files change rarely — upload once, retained.
+      bkeys.forEach(function(k,idx){if(files[k]&&br[idx]!=null){lcSet(k,br[idx]);try{fetch(base+'/api/files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k,content:br[idx]})}).catch(function(){});}catch(e){}}});
       // Load the shared projection overrides from MongoDB (so everyone sees the same edits),
       // then the dataset — set overrides state BEFORE 'built' so the projection Dash seeds
       // from the shared values on first mount.
@@ -1864,6 +1873,7 @@ function Portal(){
           }catch(ex){setErr((ex&&ex.message||ex)+'\n'+(ex&&ex.stack||''));setLd(false);}},30);
         });
       }).catch(function(ex){setErr('Fetch failed: '+ex.message);setLd(false);});
+    });
     });
   }
   function rebuildProj(newAsOf){setAsOf(newAsOf);if(built){try{var full=window.CDC_PROJ.build(built.texts,newAsOf);var pd=(projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full;setProjData(pd);}catch(ex){}}}

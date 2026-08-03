@@ -242,6 +242,37 @@ app.post('/api/aliases', async (req, res) => {
   }
 });
 
+// ---- shared input files (bill-wise CSVs + stock template) ------------------
+// These change rarely (opening bills once a year; stock ~monthly). Store them
+// once in Mongo so every user shares the same inputs instead of each browser
+// caching its own. Keys: kolBillsRecv, kolBillsPay, ahmBillsPay, stock.
+//   GET  /api/files            -> { kolBillsRecv, kolBillsPay, ahmBillsPay, stock, updatedAt }
+//   POST /api/files { key, content }   (upsert one file; content=null clears it)
+var FILE_KEYS = new Set(['kolBillsRecv', 'kolBillsPay', 'ahmBillsPay', 'stock']);
+app.get('/api/files', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('inputfiles').findOne({ _id: 'inputs' }, { projection: { _id: 0 } });
+    res.json(doc || {});
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+app.post('/api/files', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const key = String(b.key || '');
+    if (!FILE_KEYS.has(key)) return res.status(400).json({ error: 'key must be one of kolBillsRecv|kolBillsPay|ahmBillsPay|stock' });
+    const content = (b.content == null) ? null : String(b.content);
+    const db = await getDb();
+    const updatedAt = new Date();
+    await db.collection('inputfiles').updateOne({ _id: 'inputs' }, { $set: { [key]: content, [key + 'UpdatedAt']: updatedAt, updatedAt } }, { upsert: true });
+    res.json({ ok: true, key, updatedAt: updatedAt.toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ---- static dashboards ------------------------------------------------------
 // Served from the repo root so /consolidated, /projected, /dashboard work.
 app.use('/consolidated', express.static(path.join(REPO_ROOT, 'consolidated')));
