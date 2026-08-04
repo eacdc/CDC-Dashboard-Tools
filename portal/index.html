@@ -616,6 +616,13 @@ function DrillModal(props){
       '&date='+encodeURIComponent(r.date||'');
   }
   var sS=useState(props.initialSearch||''),srch=sS[0],setSrch=sS[1];
+  var svf=useState('__all'),vtFilter=svf[0],setVtFilter=svf[1];// voucher-type category filter
+  // Group Tally voucher types into a few useful buckets for the drill filter.
+  function vtCat(tp){var s=(tp||'').toLowerCase();
+    if(s.indexOf('journal')>=0)return 'Journal';
+    if(s.indexOf('receipt')>=0||s.indexOf('payment')>=0||s.indexOf('paynent')>=0||s.indexOf('contra')>=0||s.indexOf('cash')>=0||s.indexOf('bank')>=0)return 'Receipt / Payment';
+    if(s.indexOf('sale')>=0||s.indexOf('purchase')>=0||s.indexOf('export')>=0||s.indexOf('credit note')>=0||s.indexOf('debit note')>=0)return 'Sales / Purchase / Notes';
+    return 'Other';}
   var sSort=useState('date_asc'),sortBy=sSort[0],setSortBy=sSort[1];
   var xd=raw.xd||data.xd;var lu=data.lu;if(!lu&&xd)lu=buildLookups(xd);
   var ovr=data.overrides||{};var invOvr=data.invoiceOverrides||{};
@@ -656,6 +663,10 @@ function DrillModal(props){
     type_asc:function(a,b){return (a.type||'').localeCompare(b.type||'');}
   };
   contributing.sort(sortFns[sortBy]||sortFns.date_asc);
+  // Category counts (from the full set) power the type dropdown; then apply the filter.
+  var __catCounts={};contributing.forEach(function(r){var c=vtCat(r.type);__catCounts[c]=(__catCounts[c]||0)+1;});
+  var __cats=Object.keys(__catCounts).sort();
+  if(vtFilter&&vtFilter!=='__all')contributing=contributing.filter(function(r){return vtCat(r.type)===vtFilter;});
   if(srch){var sl=srch.toLowerCase();contributing=contributing.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.type||'').toLowerCase().indexOf(sl)>=0||(r.no||'').toLowerCase().indexOf(sl)>=0;});}
   var sumAmt=contributing.reduce(function(s,r){return s+r.amount;},0);
   function copyAsText(){var lines=['Date\tType\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+r.branch+'\t'+r.amount);});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
@@ -674,7 +685,9 @@ function DrillModal(props){
             e('option',{value:'amt_asc'},'Amount ↑ (lowest)'),
             e('option',{value:'party_asc'},'Party A-Z'),
             e('option',{value:'type_asc'},'Type A-Z')),
-          e('input',{type:'text',value:srch,placeholder:'🔍 party / type / voucher no',onChange:function(ev){setSrch(ev.target.value);},style:{width:'200px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'12px'}}),
+          e('select',{value:vtFilter,onChange:function(ev){setVtFilter(ev.target.value);},title:'Filter by voucher type',style:{padding:'5px 8px',border:'1px solid '+(vtFilter!=='__all'?'var(--cyan)':'var(--border)'),borderRadius:'5px',fontSize:'11px',fontFamily:'var(--mono)',background:vtFilter!=='__all'?'#ecfeff':'var(--bg)',cursor:'pointer',fontWeight:vtFilter!=='__all'?600:400}},
+            [e('option',{key:'__all',value:'__all'},'All types')].concat(__cats.map(function(c){return e('option',{key:c,value:c},c+' ('+__catCounts[c]+')');}))),
+          e('input',{type:'text',value:srch,placeholder:'🔍 party / type / voucher no',onChange:function(ev){setSrch(ev.target.value);},style:{width:'160px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'12px'}}),
           e('button',{onClick:copyAsText,style:{background:'var(--cyan)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'📋'),
           e('button',{onClick:props.onClose,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'✕'))),
       e('div',{style:{overflowY:'auto',flex:1}},
