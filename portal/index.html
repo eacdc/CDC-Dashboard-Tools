@@ -300,20 +300,28 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   function __saFind(nodes,name){for(var i=0;i<nodes.length;i++){var n=nodes[i];if(n.name===name)return n;if(n.children){var f=__saFind(n.children,name);if(f)return f;}}return null;}
   function __saRebase(n,delta){n.depth=(n.depth||0)-delta;if(n.children)n.children.forEach(function(c){__saRebase(c,delta);});if(n.ledgers)n.ledgers.forEach(function(c){__saRebase(c,delta);});}
   function __saSection(map,rootName,nB){var full=buildTree(map,xd,lu,nB);var node=__saFind(full,rootName);if(!node)return null;__saRebase(node,(node.depth||1));return node;}
+  // Precompute which ledgers sit under "Sales Accounts" / "Purchase Accounts" so the
+  // P&L-basis measure counts ONLY those (excluding shipping/freight/other Direct &
+  // Indirect Incomes that classify() also tags as 'revenue').
+  var __salesAcct={},__purchAcct={};
+  for(var __sln in xd.ledgers){var __sch=getChain(__sln,xd,lu);if(__sch.indexOf('Sales Accounts')>=0)__salesAcct[__sln]=1;else if(__sch.indexOf('Purchase Accounts')>=0)__purchAcct[__sln]=1;}
   // Attribute each sale/purchase voucher to its dominant debtor/creditor party and
   // bucket it by the given period function; then build the nested Sundry-rooted trees.
+  //   net   = all revenue/purchase legs (incl shipping & other incomes)
+  //   netPL = Sales/Purchase Accounts legs only (matches the P&L Sales/Purchase line)
+  //   gross = the party leg (incl GST)
   function __saBuild(bucketOf,nB,labels){
-    var sN={},sG={},pN={},pG={};
+    var sN={},sG={},sP={},pN={},pG={},pP={};
     function ad(m,k,bi,a){if(!m[k])m[k]=Array(nB).fill(0);m[k][bi]+=a;}
     for(var vi2=0;vi2<vouchers.length;vi2++){var v=vouchers[vi2];var bi=bucketOf(v.date);if(bi<0||bi>=nB)continue;
-      var nr=0,np=0;for(var ln in (v.ledgers||{})){if(ibLedgers[ln])continue;var c=classify(ln,xd,lu,ovr);if(c==='revenue')nr+=v.ledgers[ln];else if(c==='purchase')np+=v.ledgers[ln];}
+      var nr=0,np=0,nrPL=0,npPL=0;for(var ln in (v.ledgers||{})){if(ibLedgers[ln])continue;var c=classify(ln,xd,lu,ovr);if(c==='revenue'){nr+=v.ledgers[ln];if(__salesAcct[ln])nrPL+=v.ledgers[ln];}else if(c==='purchase'){np+=v.ledgers[ln];if(__purchAcct[ln])npPL+=v.ledgers[ln];}}
       var dg=0,cg=0,dd=null,dda=0,dc=null,dca=0;
       for(var pl in (v.party_ledgers||{})){if(ibLedgers[pl])continue;var av=Math.abs(v.party_ledgers[pl]);
         if(chainHas(pl,['sundry debtors'])){dg+=av;if(av>dda){dda=av;dd=pl;}}
         else if(chainHas(pl,['sundry creditors'])){cg+=av;if(av>dca){dca=av;dc=pl;}}}
-      if(nr!==0&&dd){ad(sN,dd,bi,Math.abs(nr));ad(sG,dd,bi,dg);}
-      if(np!==0&&dc){ad(pN,dc,bi,Math.abs(np));ad(pG,dc,bi,cg);}}
-    return {labels:labels,salesNet:__saSection(sN,'Sundry Debtors',nB),salesGross:__saSection(sG,'Sundry Debtors',nB),purchNet:__saSection(pN,'Sundry Creditors',nB),purchGross:__saSection(pG,'Sundry Creditors',nB)};
+      if(nr!==0&&dd){ad(sN,dd,bi,Math.abs(nr));ad(sG,dd,bi,dg);if(nrPL!==0)ad(sP,dd,bi,Math.abs(nrPL));}
+      if(np!==0&&dc){ad(pN,dc,bi,Math.abs(np));ad(pG,dc,bi,cg);if(npPL!==0)ad(pP,dc,bi,Math.abs(npPL));}}
+    return {labels:labels,salesNet:__saSection(sN,'Sundry Debtors',nB),salesGross:__saSection(sG,'Sundry Debtors',nB),salesNetPL:__saSection(sP,'Sundry Debtors',nB),purchNet:__saSection(pN,'Sundry Creditors',nB),purchGross:__saSection(pG,'Sundry Creditors',nB),purchNetPL:__saSection(pP,'Sundry Creditors',nB)};
   }
   // Date helpers for daily/weekly windows (anchored on the latest voucher date).
   function __ymdDate(s){return new Date(parseInt(s.substring(0,4)),parseInt(s.substring(4,6))-1,parseInt(s.substring(6,8)));}
@@ -457,7 +465,7 @@ function Dash(props){
   (function(){var sl=(search||'').toLowerCase();if(!sl){INV_MATCH=null;return;}var idx=data.invLedgerIndex||{};var m={};for(var k in idx){var arr=idx[k];for(var j=0;j<arr.length;j++){if(arr[j].indexOf(sl)>=0){m[k]=true;break;}}}INV_MATCH=m;})();
   var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
   var s1=useState(true),revO=s1[0],setRevO=s1[1];var s2=useState(true),purO=s2[0],setPurO=s2[1];var s3=useState(true),deO=s3[0],setDeO=s3[1];var s4=useState(true),ieO=s4[0],setIeO=s4[1];var s5=useState(false),exO=s5[0],setExO=s5[1];var s6=useState(true),ciO=s6[0],setCiO=s6[1];var s7=useState(true),coO=s7[0],setCoO=s7[1];
-  var sSaS=useState(true),saSalesO=sSaS[0],setSaSalesO=sSaS[1];var sSaP=useState(true),saPurchO=sSaP[0],setSaPurchO=sSaP[1];var sGross=useState(false),gross=sGross[0],setGross=sGross[1];
+  var sSaS=useState(true),saSalesO=sSaS[0],setSaSalesO=sSaS[1];var sSaP=useState(true),saPurchO=sSaP[0],setSaPurchO=sSaP[1];var sGross=useState('netpl'),saMeas=sGross[0],setSaMeas=sGross[1];// 'net'|'gross'|'netpl'
   var sSaGran=useState('month'),saGran=sSaGran[0],setSaGran=sSaGran[1];// Sales Analysis period: month|week|day
   // The Sales Analysis view can use daily (15) / weekly (12) / monthly columns, so
   // the shared column header adapts to the selected period when that view is active.
@@ -488,7 +496,7 @@ function Dash(props){
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tIn))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tOut))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tNet>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tNet>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tNet))),
-        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(view==='sales'?' active':''),onClick:function(){setView('sales');}},'\ud83d\udcc8 Sales Analysis'),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['net','Net'],['gross','Gross']].map(function(g){var on=(g[0]==='gross')===gross;return e('span',{key:g[0],onClick:function(){setGross(g[0]==='gross');},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['day','Daily'],['week','Weekly'],['month','Monthly']].map(function(g){var on=saGran===g[0];return e('span',{key:g[0],onClick:function(){setSaGran(g[0]);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--purple)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
+        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(view==='sales'?' active':''),onClick:function(){setView('sales');}},'\ud83d\udcc8 Sales Analysis'),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['netpl','Net (P&L)'],['net','Net + charges'],['gross','Gross']].map(function(g){var on=saMeas===g[0];return e('span',{key:g[0],onClick:function(){setSaMeas(g[0]);},title:g[0]==='netpl'?'Sales/Purchase Accounts only — matches the P&L':(g[0]==='net'?'Includes shipping/freight & other incomes':'Full invoice incl GST'),style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),view==='sales'&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},[['day','Daily'],['week','Weekly'],['month','Monthly']].map(function(g){var on=saGran===g[0];return e('span',{key:g[0],onClick:function(){setSaGran(g[0]);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--purple)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
 // FY toggle: switches between Current FY (fyOffset=0) and Prior FY (fyOffset=-1), 12 months each.
 e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
@@ -512,14 +520,15 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
         e(TotalRow,{label:'NET CASHFLOW',monthly:cf.netM,mc:mc}),
       ),
       view==='audit'&&e(AuditView,{data:data,onOverrideChange:function(){var raw=data._raw;if(!raw)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,data.monthCount||12,data.fyOffset||0,data.branch||'all');nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);}}),
-      view==='sales'&&(function(){var sa=saSel||{};var salesNode=gross?sa.salesGross:sa.salesNet;var purchNode=gross?sa.purchGross:sa.purchNet;
+      view==='sales'&&(function(){var sa=saSel||{};var __mlbl=saMeas==='gross'?'Gross incl GST':(saMeas==='netpl'?'Net · P&L basis':'Net incl charges');
+        var salesNode=saMeas==='gross'?sa.salesGross:(saMeas==='netpl'?sa.salesNetPL:sa.salesNet);var purchNode=saMeas==='gross'?sa.purchGross:(saMeas==='netpl'?sa.purchNetPL:sa.purchNet);
         function saNodes(n){return n?((n.children||[]).concat(n.ledgers||[])):[];}
         function saM(n){return n?n.monthly:Array(vMc).fill(0);}
         var perLbl=saGran==='day'?'last 15 days':saGran==='week'?'last 12 weeks':'monthly';
         return e('div',null,
-          e(SectionRow,{label:'SALES \u00B7 SUNDRY DEBTORS ('+(gross?'Gross incl GST':'Net excl GST')+' \u00B7 '+perLbl+')',monthly:saM(salesNode),total:sumArr(saM(salesNode)),color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:saSalesO,onToggle:function(){setSaSalesO(!saSalesO);},mc:vMc}),
+          e(SectionRow,{label:'SALES \u00B7 SUNDRY DEBTORS ('+__mlbl+' \u00B7 '+perLbl+')',monthly:saM(salesNode),total:sumArr(saM(salesNode)),color:'var(--cyan)',bg:'var(--sectionRevBg)',borderColor:'var(--sectionRevBorder)',open:saSalesO,onToggle:function(){setSaSalesO(!saSalesO);},mc:vMc}),
           saSalesO&&(salesNode?e(TreeRows,{nodes:saNodes(salesNode),mc:vMc,sortByValue:sortV,prefix:'sa_sales_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No sales attributable to a Sundry Debtor party in this range.')),
-          e(SectionRow,{label:'PURCHASES \u00B7 SUNDRY CREDITORS ('+(gross?'Gross incl GST':'Net excl GST')+' \u00B7 '+perLbl+')',monthly:saM(purchNode),total:sumArr(saM(purchNode)),color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:saPurchO,onToggle:function(){setSaPurchO(!saPurchO);},mc:vMc}),
+          e(SectionRow,{label:'PURCHASES \u00B7 SUNDRY CREDITORS ('+__mlbl+' \u00B7 '+perLbl+')',monthly:saM(purchNode),total:sumArr(saM(purchNode)),color:'var(--amber)',bg:'var(--sectionExpBg)',borderColor:'var(--sectionExpBorder)',open:saPurchO,onToggle:function(){setSaPurchO(!saPurchO);},mc:vMc}),
           saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:vMc,sortByValue:sortV,prefix:'sa_purch_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
       })())),
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'),
