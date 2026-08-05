@@ -532,7 +532,7 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
           saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:vMc,sortByValue:sortV,prefix:'sa_purch_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
       })())),
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'),
-    drill&&e(DrillModal,{target:drill,data:data,initialSearch:search,onClose:function(){setDrill(null);}}));
+    drill&&e(DrillModal,{target:drill,data:data,initialSearch:search,measure:(view==='sales'?saMeas:null),onClose:function(){setDrill(null);}}));
 }
 
 // Audit view — list INVOICES (individual Sales / Purchase vouchers) with abs(amount) >= threshold.
@@ -626,6 +626,8 @@ function DrillModal(props){
   }
   var sS=useState(props.initialSearch||''),srch=sS[0],setSrch=sS[1];
   var svf=useState('__all'),vtFilter=svf[0],setVtFilter=svf[1];// voucher-type category filter
+  var sMe=useState(props.measure||'gross'),meas=sMe[0],setMeas=sMe[1];// Net(P&L)|Net+charges|Gross (sales drill)
+  function rowVal(r){if(!props.measure)return r.amount;return meas==='gross'?r.mGross:(meas==='netpl'?r.mNetPL:r.mNet);}
   // Group Tally voucher types into a few useful buckets for the drill filter.
   function vtCat(tp){var s=(tp||'').toLowerCase();
     if(s.indexOf('journal')>=0)return 'Journal';
@@ -642,6 +644,8 @@ function DrillModal(props){
   // ledger/party nested beneath it (t.ledgers). matches(name) → in-set test.
   var matchSet=null;if(t.ledgers&&t.ledgers.length){matchSet={};for(var __mi2=0;__mi2<t.ledgers.length;__mi2++)matchSet[t.ledgers[__mi2]]=true;}
   function matches(nm){return matchSet?!!matchSet[nm]:(nm===t.ledger);}
+  // For the Net/Gross measures (Sales Analysis drill): which ledgers are Sales/Purchase Accounts.
+  var __saAcct={},__puAcct={};if(props.measure){for(var __xl in (xd.ledgers||{})){var __xc=getChain(__xl,xd,lu);if(__xc.indexOf('Sales Accounts')>=0)__saAcct[__xl]=1;else if(__xc.indexOf('Purchase Accounts')>=0)__puAcct[__xl]=1;}}
   var contributing=[];
   for(var i=0;i<raw.vouchers.length;i++){var v=raw.vouchers[i];
     if(branch!=='all'&&v._branch&&v._branch!==branch)continue;
@@ -658,16 +662,21 @@ function DrillModal(props){
     for(var ln2 in (v.party_ledgers||{})){if(matches(ln2)){amt+=v.party_ledgers[ln2];foundIn=foundIn||'party';}}
     if(foundIn){
       var dom=null,domAbs=0;for(var p in (v.party_ledgers||{})){var a=Math.abs(v.party_ledgers[p]);if(a>domAbs){domAbs=a;dom=p;}}
-      contributing.push({date:v.date,no:v.no||'',guid:v.guid||'',type:v.type,party:dom||'',amount:amt,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
+      var mNet=0,mNetPL=0,mGross=0;
+      if(props.measure){
+        for(var ln3 in (v.ledgers||{})){var c3=classify(ln3,xd,lu,ovr);if(c3==='revenue'||c3==='purchase'){mNet+=Math.abs(v.ledgers[ln3]);if(__saAcct[ln3]||__puAcct[ln3])mNetPL+=Math.abs(v.ledgers[ln3]);}}
+        for(var p3 in (v.party_ledgers||{})){var pch3=getChain(p3,xd,lu);if(pch3.indexOf('Sundry Debtors')>=0||pch3.indexOf('Sundry Creditors')>=0)mGross+=Math.abs(v.party_ledgers[p3]);}
+      }
+      contributing.push({date:v.date,no:v.no||'',guid:v.guid||'',type:v.type,party:dom||'',amount:amt,mNet:mNet,mNetPL:mNetPL,mGross:mGross,branch:v._branch||'',overridden:!!ovrAcct&&foundIn==='ledgers'});
     }
   }
   // Sort
   var sortFns={
     date_asc:function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;},
     date_desc:function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;},
-    amt_asc:function(a,b){return a.amount-b.amount;},
-    amt_desc:function(a,b){return b.amount-a.amount;},
-    abs_desc:function(a,b){return Math.abs(b.amount)-Math.abs(a.amount);},
+    amt_asc:function(a,b){return rowVal(a)-rowVal(b);},
+    amt_desc:function(a,b){return rowVal(b)-rowVal(a);},
+    abs_desc:function(a,b){return Math.abs(rowVal(b))-Math.abs(rowVal(a));},
     party_asc:function(a,b){return (a.party||'').localeCompare(b.party||'');},
     type_asc:function(a,b){return (a.type||'').localeCompare(b.type||'');}
   };
@@ -677,8 +686,8 @@ function DrillModal(props){
   var __cats=Object.keys(__catCounts).sort();
   if(vtFilter&&vtFilter!=='__all')contributing=contributing.filter(function(r){return vtCat(r.type)===vtFilter;});
   if(srch){var sl=srch.toLowerCase();contributing=contributing.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.type||'').toLowerCase().indexOf(sl)>=0||(r.no||'').toLowerCase().indexOf(sl)>=0;});}
-  var sumAmt=contributing.reduce(function(s,r){return s+r.amount;},0);
-  function copyAsText(){var lines=['Date\tType\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+r.branch+'\t'+r.amount);});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
+  var sumAmt=contributing.reduce(function(s,r){return s+rowVal(r);},0);
+  function copyAsText(){var lines=['Date\tType\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+r.branch+'\t'+rowVal(r));});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
   function thSort(label,col){var asc=col+'_asc',desc=col+'_desc';var nextSort=sortBy===asc?desc:asc;var arrow=sortBy===asc?' ↑':sortBy===desc?' ↓':'';return e('span',{onClick:function(){setSortBy(nextSort);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
   function thSortAmt(){var nxt;if(sortBy==='amt_desc')nxt='amt_asc';else if(sortBy==='amt_asc')nxt='abs_desc';else nxt='amt_desc';var arrow=sortBy==='amt_asc'?' ↑':sortBy==='amt_desc'?' ↓':sortBy==='abs_desc'?' |↓|':'';return e('span',{onClick:function(){setSortBy(nxt);},style:{cursor:'pointer',userSelect:'none'}},'AMOUNT'+arrow);}
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)props.onClose();},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
@@ -694,6 +703,7 @@ function DrillModal(props){
             e('option',{value:'amt_asc'},'Amount ↑ (lowest)'),
             e('option',{value:'party_asc'},'Party A-Z'),
             e('option',{value:'type_asc'},'Type A-Z')),
+          props.measure&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'5px',overflow:'hidden'}},[['netpl','Net (P&L)'],['net','Net+chg'],['gross','Gross']].map(function(g){var on=meas===g[0];return e('span',{key:g[0],onClick:function(){setMeas(g[0]);},title:g[0]==='netpl'?'Sales/Purchase Accounts only — matches P&L':(g[0]==='net'?'Incl shipping/other charges':'Full invoice incl GST'),style:{padding:'5px 8px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),
           e('select',{value:vtFilter,onChange:function(ev){setVtFilter(ev.target.value);},title:'Filter by voucher type',style:{padding:'5px 8px',border:'1px solid '+(vtFilter!=='__all'?'var(--cyan)':'var(--border)'),borderRadius:'5px',fontSize:'11px',fontFamily:'var(--mono)',background:vtFilter!=='__all'?'#ecfeff':'var(--bg)',cursor:'pointer',fontWeight:vtFilter!=='__all'?600:400}},
             [e('option',{key:'__all',value:'__all'},'All types')].concat(__cats.map(function(c){return e('option',{key:c,value:c},c+' ('+__catCounts[c]+')');}))),
           e('input',{type:'text',value:srch,placeholder:'🔍 party / type / voucher no',onChange:function(ev){setSrch(ev.target.value);},style:{width:'160px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'12px'}}),
@@ -714,7 +724,7 @@ function DrillModal(props){
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},r.type),
             e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(via override)')),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase'}},r.branch||'—'),
-            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:r.amount>=0?'var(--text)':'var(--red)'}},fmt(r.amount)),
+            e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:rowVal(r)>=0?'var(--text)':'var(--red)'}},fmt(rowVal(r))),
             e('div',{style:{padding:'6px 8px',textAlign:'center',display:'flex',gap:'6px',justifyContent:'center'}},
               vl?[
                 e('a',{key:'v',href:vl,target:'_blank',rel:'noopener',title:'Open this voucher on screen',style:{textDecoration:'none',background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'4px 9px',borderRadius:'5px',fontSize:'10px',fontWeight:600,fontFamily:'var(--mono)',whiteSpace:'nowrap'}},'👁 View'),
