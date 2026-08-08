@@ -451,6 +451,15 @@ function Dash(props){
   var data=props.data,onReset=props.onReset,months=data.months,mc=months.length,pl=data.pl,cf=data.cf;
   var sView=useState('pl'),view=sView[0],setView=sView[1];var sCW=useState(320),colW=sCW[0],setColW=sCW[1];var sSort=useState(true),sortV=sSort[0],setSortV=sSort[1];var sSearch=useState(''),search=sSearch[0],setSearch=sSearch[1];
   var sDr=useState(null),drill=sDr[0],setDrill=sDr[1];
+  var sGl=useState(''),glSrch=sGl[0],setGlSrch=sGl[1];// global ledger-history search box
+  // Every ledger/party name known to the dataset — powers the "search any ledger,
+  // wherever it lies" box (e.g. a freight-forwarder booked under Indirect Expenses).
+  var __allLedg=Object.keys(((data._raw&&data._raw.xd&&data._raw.xd.ledgers))||{}).sort();
+  var __allLedgSet={};for(var __al=0;__al<__allLedg.length;__al++)__allLedgSet[__allLedg[__al]]=1;
+  function openGlobalDrill(name){if(!name||!__allLedgSet[name])return;
+    var __xd=data._raw&&data._raw.xd;var __path='';
+    try{var __ch=getChain(name,__xd,buildLookups(__xd));if(__ch&&__ch.length)__path=__ch.slice(0,-1).join(' › ');}catch(e){}
+    setDrill({ledger:name,monthIdx:-1,ledgers:null,global:true,periodLabel:'full history'+(__path?' · '+__path:'')});setGlSrch('');}
   // Collect every leaf ledger/party name nested under a node (a group aggregates
   // all its descendants; a leaf is just itself).
   function collectLeaves(n,out){if(!n)return out;if(n.type==='ledger'||(!n.children&&!n.ledgers)){out[n.name]=true;return out;}if(n.children)for(var i=0;i<n.children.length;i++)collectLeaves(n.children[i],out);if(n.ledgers)for(var j=0;j<n.ledgers.length;j++)collectLeaves(n.ledgers[j],out);return out;}
@@ -502,7 +511,11 @@ e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
 e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},__lbl);})),
 e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegistry);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
-    e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search name or invoice no...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'260px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
+    e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search name or invoice no...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'260px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px'),
+      e('span',{style:{width:'1px',height:'20px',background:'var(--border2)',margin:'0 4px'}}),
+      e('input',{list:'cdc-all-ledgers',type:'text',placeholder:'🌐 Ledger history — any party / expense, wherever it sits...',value:glSrch,onChange:function(ev){var val=ev.target.value;setGlSrch(val);if(__allLedgSet[val])openGlobalDrill(val);},onKeyDown:function(ev){if(ev.key==='Enter'){var v=ev.target.value;if(__allLedgSet[v])openGlobalDrill(v);else{for(var k=0;k<__allLedg.length;k++){if(__allLedg[k].toLowerCase().indexOf(v.toLowerCase())>=0){openGlobalDrill(__allLedg[k]);break;}}}}},style:{width:'300px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--purple)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),
+      e('datalist',{id:'cdc-all-ledgers'},__allLedg.slice(0,5000).map(function(n){return e('option',{key:n,value:n});})),
+      e('span',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)'}},__allLedg.length+' ledgers')),
     e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+vMc*105+115)+'px'}},
       e('div',{style:{display:'grid',gridTemplateColumns:gtc(vMc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hCells),
       view==='pl'&&e('div',null,
@@ -532,7 +545,7 @@ e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegist
           saPurchO&&(purchNode?e(TreeRows,{nodes:saNodes(purchNode),mc:vMc,sortByValue:sortV,prefix:'sa_purch_'+saGran,search:search,onDrill:openDrill}):e('div',{style:{padding:'16px 24px',fontSize:'12px',color:'var(--text3)'}},'No purchases attributable to a Sundry Creditor party in this range.')));
       })())),
     e('div',{style:{padding:'10px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},data.stats.vouchers+' vouchers \u00B7 '+data.stats.cfInParties+' inflow \u00B7 '+data.stats.cfOutParties+' outflow parties'),
-    drill&&e(DrillModal,{target:drill,data:data,initialSearch:search,measure:(view==='sales'?saMeas:null),onClose:function(){setDrill(null);}}));
+    drill&&e(DrillModal,{target:drill,data:data,initialSearch:(drill.global?'':search),measure:(drill.global?'ledger':(view==='sales'?saMeas:null)),onClose:function(){setDrill(null);}}));
 }
 
 // Audit view — list INVOICES (individual Sales / Purchase vouchers) with abs(amount) >= threshold.
@@ -607,7 +620,7 @@ function AuditView(props){
 function DrillModal(props){
   var t=props.target;var data=props.data;var raw=data._raw;
   if(!raw)return null;
-  var DRILL_GRID='92px 96px minmax(180px,1fr) 78px 112px 132px';
+  var DRILL_GRID='92px 96px 96px minmax(180px,1fr) 78px 112px 132px';
   // Build the printable-voucher link for a drill row. Only available when the
   // data is API-backed (a live /voucher/ + /api/voucher exist on that origin)
   // and we have branch + voucher no. to identify it.
@@ -627,7 +640,7 @@ function DrillModal(props){
   var sS=useState(props.initialSearch||''),srch=sS[0],setSrch=sS[1];
   var svf=useState('__all'),vtFilter=svf[0],setVtFilter=svf[1];// voucher-type category filter
   var sMe=useState(props.measure||'gross'),meas=sMe[0],setMeas=sMe[1];// Net(P&L)|Net+charges|Gross (sales drill)
-  function rowVal(r){if(!props.measure)return r.amount;return meas==='gross'?r.mGross:(meas==='netpl'?r.mNetPL:r.mNet);}
+  function rowVal(r){if(!props.measure)return r.amount;return meas==='ledger'?r.amount:(meas==='gross'?r.mGross:(meas==='netpl'?r.mNetPL:r.mNet));}
   // Group Tally voucher types into a few useful buckets for the drill filter.
   function vtCat(tp){var s=(tp||'').toLowerCase();
     if(s.indexOf('journal')>=0)return 'Journal';
@@ -687,7 +700,7 @@ function DrillModal(props){
   if(vtFilter&&vtFilter!=='__all')contributing=contributing.filter(function(r){return vtCat(r.type)===vtFilter;});
   if(srch){var sl=srch.toLowerCase();contributing=contributing.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.type||'').toLowerCase().indexOf(sl)>=0||(r.no||'').toLowerCase().indexOf(sl)>=0;});}
   var sumAmt=contributing.reduce(function(s,r){return s+rowVal(r);},0);
-  function copyAsText(){var lines=['Date\tType\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+r.party+'\t'+r.branch+'\t'+rowVal(r));});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
+  function copyAsText(){var lines=['Date\tType\tInv/Vch No\tParty\tBranch\tAmount'];contributing.forEach(function(r){lines.push(fmtDate(r.date)+'\t'+r.type+'\t'+(r.no||'')+'\t'+r.party+'\t'+r.branch+'\t'+rowVal(r));});try{navigator.clipboard.writeText(lines.join('\n')).then(function(){alert('Copied '+contributing.length+' rows.');});}catch(e){alert('Copy failed.');}}
   function thSort(label,col){var asc=col+'_asc',desc=col+'_desc';var nextSort=sortBy===asc?desc:asc;var arrow=sortBy===asc?' ↑':sortBy===desc?' ↓':'';return e('span',{onClick:function(){setSortBy(nextSort);},style:{cursor:'pointer',userSelect:'none'}},label+arrow);}
   function thSortAmt(){var nxt;if(sortBy==='amt_desc')nxt='amt_asc';else if(sortBy==='amt_asc')nxt='abs_desc';else nxt='amt_desc';var arrow=sortBy==='amt_asc'?' ↑':sortBy==='amt_desc'?' ↓':sortBy==='abs_desc'?' |↓|':'';return e('span',{onClick:function(){setSortBy(nxt);},style:{cursor:'pointer',userSelect:'none'}},'AMOUNT'+arrow);}
   return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)props.onClose();},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
@@ -703,7 +716,7 @@ function DrillModal(props){
             e('option',{value:'amt_asc'},'Amount ↑ (lowest)'),
             e('option',{value:'party_asc'},'Party A-Z'),
             e('option',{value:'type_asc'},'Type A-Z')),
-          props.measure&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'5px',overflow:'hidden'}},[['netpl','Net (P&L)'],['net','Net+chg'],['gross','Gross']].map(function(g){var on=meas===g[0];return e('span',{key:g[0],onClick:function(){setMeas(g[0]);},title:g[0]==='netpl'?'Sales/Purchase Accounts only — matches P&L':(g[0]==='net'?'Incl shipping/other charges':'Full invoice incl GST'),style:{padding:'5px 8px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),
+          props.measure&&e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'5px',overflow:'hidden'}},[['ledger','Ledger'],['netpl','Net (P&L)'],['net','Net+chg'],['gross','Gross']].map(function(g){var on=meas===g[0];return e('span',{key:g[0],onClick:function(){setMeas(g[0]);},title:g[0]==='ledger'?'This ledger’s own leg (as booked)':(g[0]==='netpl'?'Sales/Purchase Accounts only — matches P&L':(g[0]==='net'?'Incl shipping/other charges':'Full invoice incl GST')),style:{padding:'5px 8px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--cyan)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),
           e('select',{value:vtFilter,onChange:function(ev){setVtFilter(ev.target.value);},title:'Filter by voucher type',style:{padding:'5px 8px',border:'1px solid '+(vtFilter!=='__all'?'var(--cyan)':'var(--border)'),borderRadius:'5px',fontSize:'11px',fontFamily:'var(--mono)',background:vtFilter!=='__all'?'#ecfeff':'var(--bg)',cursor:'pointer',fontWeight:vtFilter!=='__all'?600:400}},
             [e('option',{key:'__all',value:'__all'},'All types')].concat(__cats.map(function(c){return e('option',{key:c,value:c},c+' ('+__catCounts[c]+')');}))),
           e('input',{type:'text',value:srch,placeholder:'🔍 party / type / voucher no',onChange:function(ev){setSrch(ev.target.value);},style:{width:'160px',padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'5px',fontSize:'12px'}}),
@@ -713,6 +726,7 @@ function DrillModal(props){
         e('div',{style:{display:'grid',gridTemplateColumns:DRILL_GRID,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('DATE','date')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('TYPE','type')),
+          e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'INV / VCH NO'),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},thSort('PARTY','party')),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BRANCH'),
           e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},thSortAmt()),
@@ -722,6 +736,7 @@ function DrillModal(props){
           :contributing.map(function(r,i){var vl=voucherLink(r);return e('div',{key:i,style:{display:'grid',gridTemplateColumns:DRILL_GRID,alignItems:'center',borderBottom:'1px solid var(--border)',background:r.overridden?'#fffbeb':(i%2===0?'transparent':'var(--bg2)')}},
             e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(r.date)),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},r.type),
+            e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},r.no||'—'),
             e('div',{style:{padding:'8px 14px',fontSize:'12px',color:'var(--text)'}},r.party,r.overridden&&e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#d97706',fontFamily:'var(--mono)'}},'(via override)')),
             e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textTransform:'uppercase'}},r.branch||'—'),
             e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:rowVal(r)>=0?'var(--text)':'var(--red)'}},fmt(rowVal(r))),
