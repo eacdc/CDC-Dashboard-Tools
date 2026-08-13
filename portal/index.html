@@ -722,12 +722,32 @@ function DrillModal(props){
   if(pvType)contributing=contributing.filter(function(r){return (r.type||'')===pvType;});
   if(pvMi>=0)contributing=contributing.filter(function(r){return monthKey(r.date,startFY)===pvMi;});
   if(srch){var sl=srch.toLowerCase();contributing=contributing.filter(function(r){return (r.party||'').toLowerCase().indexOf(sl)>=0||(r.type||'').toLowerCase().indexOf(sl)>=0||(r.no||'').toLowerCase().indexOf(sl)>=0;});}
+  // Opening balance = net of this ledger's own legs on every voucher BEFORE the FY
+  // starts. Tally's master carries no opening balance, so this only reaches as far
+  // back as the loaded voucher history (__obFrom) — surfaced in the footnote.
+  var openBal=0,__obFrom='';
+  for(var __oi=0;__oi<raw.vouchers.length;__oi++){var __ov=raw.vouchers[__oi];
+    if(branch!=='all'&&__ov._branch&&__ov._branch!==branch)continue;
+    if(__ov.date&&(!__obFrom||__ov.date<__obFrom))__obFrom=__ov.date;
+    if(__ov.date>=fyStart)continue;
+    var __oa=0,__of=false;
+    for(var __ol in (__ov.ledgers||{})){if(matches(__ol)){__oa+=__ov.ledgers[__ol];__of=true;}}
+    for(var __op in (__ov.party_ledgers||{})){if(matches(__op)){__oa+=__ov.party_ledgers[__op];__of=true;}}
+    if(__of)openBal+=__oa;
+  }
+  // A balance only makes sense on the ledger's own leg — a "gross invoice value"
+  // opening balance would be meaningless, so hide the rows in those measures.
+  var __obOk=(!props.measure||meas==='ledger');
   // Monthly pivot: voucher type (rows) × FY month (cols) using the active measure.
   var __pvMonths=data.months||[];
   var __pv={};__baseRows.forEach(function(r){var ty=r.type||'(none)';if(!__pv[ty])__pv[ty]={m:[],t:0};var mi=monthKey(r.date,startFY);var val=rowVal(r);if(mi>=0&&mi<__pvMonths.length)__pv[ty].m[mi]=(__pv[ty].m[mi]||0)+val;__pv[ty].t+=val;});
   var __pvTypes=Object.keys(__pv).sort(function(a,b){return Math.abs(__pv[b].t)-Math.abs(__pv[a].t);});
   var __pvColTot=[];for(var __pc=0;__pc<__pvMonths.length;__pc++){var __s=0;__pvTypes.forEach(function(ty){__s+=(__pv[ty].m[__pc]||0);});__pvColTot.push(__s);}
   var __pvGrand=__pvColTot.reduce(function(s,v){return s+v;},0);
+  // Running balance: each month opens where the previous closed.
+  var __pvOpen=[],__pvClose=[],__run=__obOk?openBal:0;
+  for(var __rc=0;__rc<__pvMonths.length;__rc++){__pvOpen.push(__run);__run+=(__pvColTot[__rc]||0);__pvClose.push(__run);}
+  var __closeBal=__run;
   function pvDrill(ty,mi){setPvType(ty);setPvMi(mi);setVtFilter('__all');setDrillView('list');}
   function clearPvFilter(){setPvType('');setPvMi(-1);}
   var sumAmt=contributing.reduce(function(s,r){return s+rowVal(r);},0);
@@ -745,6 +765,7 @@ function DrillModal(props){
           e('span',{title:'Debit total (payments / outflow legs)'},'Dr ',e('span',{className:'num',style:{fontWeight:600,color:'var(--red)'}},'₹'+fmt(sumDr))),
           e('span',{title:'Credit total (purchases / inflow legs)'},'Cr ',e('span',{className:'num',style:{fontWeight:600,color:'var(--text)'}},'₹'+fmt(sumCr))),
           e('span',{title:'Net movement over the period',style:{borderLeft:'1px solid var(--border2)',paddingLeft:'10px'}},'Net ',e('span',{className:'num',style:{fontWeight:700,color:sumAmt>=0?'var(--text)':'var(--red)'}},'₹'+fmt(sumAmt))),
+          (__obOk&&drillView==='pivot')&&e('span',{title:'Opening balance + net movement for the FY',style:{borderLeft:'1px solid var(--border2)',paddingLeft:'10px'}},'Closing ',e('span',{className:'num',style:{fontWeight:700,color:__closeBal>=0?'var(--text)':'var(--red)'}},'₹'+fmt(__closeBal))),
           (pvType||pvMi>=0)&&e('span',{onClick:clearPvFilter,title:'Clear this filter',style:{cursor:'pointer',background:'var(--purple)',color:'#fff',padding:'2px 8px',borderRadius:'10px',fontSize:'10px',fontWeight:600}},'▸ '+(pvType||'')+(pvMi>=0?' · '+(__pvMonths[pvMi]||''):'')+' ✕'))),
         e('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end',flex:'1 1 auto'}},
           e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'5px',overflow:'hidden'}},[['list','📋 List'],['pivot','📅 Monthly']].map(function(g){var on=drillView===g[0];return e('span',{key:g[0],onClick:function(){setDrillView(g[0]);},title:g[0]==='pivot'?'Break down by voucher type × month':'Voucher-by-voucher list',style:{padding:'5px 9px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:on?'var(--purple)':'var(--bg3)',color:on?'#fff':'var(--text2)'}},g[1]);})),
@@ -769,16 +790,26 @@ function DrillModal(props){
               [e('div',{key:'h0',style:{padding:'8px 12px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',position:'sticky',left:0,background:'var(--bg3)',zIndex:2}},'VOUCHER TYPE')]
               .concat(__pvMonths.map(function(m,ci){return e('div',{key:'h'+ci,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},m);}))
               .concat([e('div',{key:'ht',style:{padding:'8px 12px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'TOTAL')])),
+            __obOk&&e('div',{style:{display:'grid',gridTemplateColumns:PVGRID,borderBottom:'2px solid var(--border2)',background:'#f8fafc'}},
+              [e('div',{key:'l',title:'Balance carried into each month (Tally has no stored opening, so this is netted from the loaded voucher history)',style:{padding:'8px 12px',fontSize:'12px',fontWeight:700,color:'var(--text2)',position:'sticky',left:0,background:'#f8fafc',zIndex:1,whiteSpace:'nowrap'}},'OPENING BALANCE')]
+              .concat(__pvOpen.map(function(v,ci){return e('div',{key:ci,className:'num',style:{padding:'8px 8px',fontSize:'11px',textAlign:'right',color:v<0?'var(--red)':'var(--text2)'}},v?fmt(v):'·');}))
+              .concat([e('div',{key:'t',title:'Opening balance at '+(data.months[0]||'FY start'),className:'num',style:{padding:'8px 12px',fontSize:'11px',fontWeight:700,textAlign:'right',color:openBal<0?'var(--red)':'var(--text2)'}},openBal?fmt(openBal):'·')])),
             __pvTypes.length===0?e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No transactions found.')
             :e('div',null,__pvTypes.map(function(ty,ri){var rbg=ri%2?'var(--bg2)':'#fff';return e('div',{key:ty,style:{display:'grid',gridTemplateColumns:PVGRID,borderBottom:'1px solid var(--border)',background:rbg}},
               [e('div',{key:'l',title:ty,style:{padding:'8px 12px',fontSize:'12px',fontWeight:600,color:'var(--text)',position:'sticky',left:0,background:rbg,zIndex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},ty)]
               .concat(__pvMonths.map(function(m,ci){var val=__pv[ty].m[ci]||0;return e('div',{key:ci,onClick:val?function(){pvDrill(ty,ci);}:null,className:'num',style:{padding:'8px 8px',fontSize:'11px',textAlign:'right',cursor:val?'pointer':'default',color:val<0?'var(--red)':(val?'var(--text)':'var(--text3)')}},val?fmt(val):'·');}))
               .concat([e('div',{key:'t',onClick:function(){pvDrill(ty,-1);},className:'num',style:{padding:'8px 12px',fontSize:'11px',fontWeight:700,textAlign:'right',cursor:'pointer',color:__pv[ty].t<0?'var(--red)':'var(--text)'}},fmt(__pv[ty].t))]));
             })),
-            __pvTypes.length>0&&e('div',{style:{display:'grid',gridTemplateColumns:PVGRID,borderTop:'2px solid var(--border2)',background:'var(--totalBg)',position:'sticky',bottom:0}},
-              [e('div',{key:'l',style:{padding:'8px 12px',fontSize:'12px',fontWeight:700,position:'sticky',left:0,background:'var(--totalBg)',zIndex:1}},'TOTAL')]
-              .concat(__pvColTot.map(function(v,ci){return e('div',{key:ci,className:'num',style:{padding:'8px 8px',fontSize:'11px',fontWeight:700,textAlign:'right',color:v<0?'var(--red)':'var(--text)'}},v?fmt(v):'·');}))
-              .concat([e('div',{key:'t',className:'num',style:{padding:'8px 12px',fontSize:'11px',fontWeight:800,textAlign:'right',color:__pvGrand<0?'var(--red)':'var(--text)'}},fmt(__pvGrand))]))));
+            __pvTypes.length>0&&e('div',{style:{position:'sticky',bottom:0}},
+              e('div',{style:{display:'grid',gridTemplateColumns:PVGRID,borderTop:'2px solid var(--border2)',background:'var(--totalBg)'}},
+                [e('div',{key:'l',title:__obOk?'Net of all vouchers in the month (credits − debits)':'',style:{padding:'8px 12px',fontSize:'12px',fontWeight:700,position:'sticky',left:0,background:'var(--totalBg)',zIndex:1,whiteSpace:'nowrap'}},__obOk?'NET MOVEMENT':'TOTAL')]
+                .concat(__pvColTot.map(function(v,ci){return e('div',{key:ci,className:'num',style:{padding:'8px 8px',fontSize:'11px',fontWeight:700,textAlign:'right',color:v<0?'var(--red)':'var(--text)'}},v?fmt(v):'·');}))
+                .concat([e('div',{key:'t',className:'num',style:{padding:'8px 12px',fontSize:'11px',fontWeight:800,textAlign:'right',color:__pvGrand<0?'var(--red)':'var(--text)'}},fmt(__pvGrand))])),
+              __obOk&&e('div',{style:{display:'grid',gridTemplateColumns:PVGRID,borderTop:'1px solid var(--border2)',background:'#ecfeff'}},
+                [e('div',{key:'l',title:'Opening balance + net movement, carried month to month',style:{padding:'8px 12px',fontSize:'12px',fontWeight:800,color:'var(--text)',position:'sticky',left:0,background:'#ecfeff',zIndex:1,whiteSpace:'nowrap'}},'CLOSING BALANCE')]
+                .concat(__pvClose.map(function(v,ci){return e('div',{key:ci,className:'num',style:{padding:'8px 8px',fontSize:'11px',fontWeight:700,textAlign:'right',color:v<0?'var(--red)':'var(--text)'}},v?fmt(v):'·');}))
+                .concat([e('div',{key:'t',title:'Closing balance at FY end',className:'num',style:{padding:'8px 12px',fontSize:'11px',fontWeight:800,textAlign:'right',color:__closeBal<0?'var(--red)':'var(--text)'}},fmt(__closeBal))]))),
+            __obOk&&e('div',{style:{padding:'8px 14px',fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Opening balance is netted from loaded voucher history'+(__obFrom&&__obFrom.length>=8?' (from '+fmtDate(__obFrom)+')':'')+' — Tally stores no opening figure, so anything booked before that date is not included.')));
         })()
         :e('div',null,
         e('div',{style:{display:'grid',gridTemplateColumns:DRILL_GRID,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
