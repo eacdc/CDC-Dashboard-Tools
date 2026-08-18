@@ -1169,7 +1169,7 @@ for(var p in partyOut){
 function __toArr(node){var ks=Object.keys(node.children);node.childArr=ks.map(function(k){return __toArr(node.children[k]);});node.children=null;return node;}
 __toArr(__root);
 var __MN2=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-var debtorMonthly={months:__moKeys.map(function(k){return __MN2[parseInt(k.substring(4,6))-1]+"'"+k.substring(2,4);}),root:__root};
+var debtorMonthly={months:__moKeys.map(function(k){return __MN2[parseInt(k.substring(4,6))-1]+"'"+k.substring(2,4);}),keys:__moKeys,root:__root};
 
 // Step 4: Process creditors (same logic)
 var obByC={};for(var i=0;i<payBills.length;i++){var b=payBills[i];(obByC[b.party]=obByC[b.party]||[]).push(b);}
@@ -1225,7 +1225,7 @@ for(var p in partyOutC){
   if(!__node.children[p])__node.children[p]={name:p,depth:__node.depth+1,out:partyOutC[p].slice(),sales:partyPurchC[p].slice(),children:{},isLeaf:true};
 }
 __toArr(__rootC);
-var creditorMonthly={months:debtorMonthly.months,root:__rootC};
+var creditorMonthly={months:debtorMonthly.months,keys:__moKeys,root:__rootC};
 
 // Indirect expenses — pick the 3 most recent COMPLETE calendar months before today.
 // Skip the current (partial) month so 8-day-into-June data doesn't pull the average down.
@@ -1336,6 +1336,40 @@ function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl,exBills){
 // projection without excluding the whole party. Amount is rounded so tiny float
 // drift between rebuilds can't orphan an exclusion.
 function billKey(party,b){return party+'|'+(b.ref||'')+'|'+(b.date||'')+'|'+Math.round(b.amt||0);}
+// Retroactive write-off for the monthly-outstanding matrix. A bill marked as never
+// collectable/payable is removed from the CLOSING BALANCE of every month from the
+// one it was raised in onward, so the outstanding trend (and the DSO/DPO derived
+// from it) reflects only money that could really have come in. Sales are left
+// untouched: the invoice was genuinely raised — writing it off kills the
+// receivable, not the sale.
+// The tree is a strict aggregation, so leaves are adjusted and every ancestor is
+// recomputed from its children. Returns a new tree; the original is not mutated.
+function woAdjustTree(root,keys,allBills,wOff){
+  if(!root||!keys||!keys.length||!wOff)return root;
+  var n=keys.length,any=false;for(var __k in wOff){any=true;break;}
+  if(!any)return root;
+  var idxOf={};for(var i=0;i<n;i++)idxOf[keys[i]]=i;
+  function deltaFor(party){
+    var pd=allBills[party];if(!pd||!pd.unpaid)return null;var d=null;
+    for(var j=0;j<pd.unpaid.length;j++){var b=pd.unpaid[j];if(!wOff[billKey(party,b)])continue;
+      if(!d){d=[];for(var z=0;z<n;z++)d.push(0);}
+      // Opening bills predate the matrix window -> subtract from the very first month.
+      var k=idxOf[String(b.date||'').substring(0,6)];if(k===undefined)k=0;
+      for(var z=k;z<n;z++)d[z]-=b.amt;}
+    return d;
+  }
+  function walk(nd){
+    var c={name:nd.name,depth:nd.depth,sales:nd.sales,isLeaf:nd.isLeaf,out:nd.out,childArr:null};
+    if(nd.childArr&&nd.childArr.length){
+      c.childArr=nd.childArr.map(walk);
+      var o=[];for(var i=0;i<n;i++){var s=0;for(var q=0;q<c.childArr.length;q++)s+=(c.childArr[q].out[i]||0);o.push(Math.round(s*100)/100);}
+      c.out=o;return c;}
+    var d=nd.isLeaf?deltaFor(nd.name):null;
+    if(d){var o2=[];for(var i=0;i<n;i++)o2.push(Math.round(((nd.out[i]||0)+d[i])*100)/100);c.out=o2;}
+    return c;
+  }
+  return walk(root);
+}
 function recalc(data,dOvr,excl,exB){var today=data.asOfDate||new Date();exB=exB||{};function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
 function rp(st,p){var od=dOvr.hasOwnProperty(p)?dOvr[p]:st.days;var sr=dOvr.hasOwnProperty(p)?'override':st.source;var ul=st.unpaidList||[];var pa=[0,0,0],tp=0,skipped=0;
 for(var i=0;i<ul.length;i++){if(exB[billKey(p,ul[i])]){skipped+=ul[i].amt;continue;}var pd=addDays(parseDate(ul[i].date),od);if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);if(mi<0)continue;pa[mi]+=ul[i].amt;tp+=ul[i].amt;}
@@ -1809,7 +1843,8 @@ e('span',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:
 e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'\u00B7 '+totCust+' customers \u00B7 '+totBills+' bills'),
 e('button',{onClick:exportRecXLS,style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'))),
 recMode==='monthly'&&(function(){
-  var dm=ed.debtorMonthly||{};var mos=dm.months||[];var root=dm.root;
+  var dm=ed.debtorMonthly||{};var mos=dm.months||[];
+  var root=woAdjustTree(dm.root,dm.keys,ed.allDebtorBills||{},wOff);
   if(!mos.length||!root)return e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No monthly data.');
   var MGRID='minmax(240px,1.6fr) repeat('+mos.length+',minmax(78px,1fr))';
   // Avg days outstanding (DSO) at month i = closing / trailing sales \u00D7 trailing days
@@ -1829,7 +1864,7 @@ recMode==='monthly'&&(function(){
     if(hasKids&&open){var sk=kids.slice().sort(function(a,b){return (b.out[b.out.length-1]||0)-(a.out[a.out.length-1]||0);});for(var i=0;i<sk.length;i++)walk(sk[i],path+'/'+sk[i].name,depth+1);}}
   walk(root,root.name,0);
   return e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(260+mos.length*84)+'px'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing outstanding at each month-end (opening + invoices \u2212 receipts, incl. CN/DN). Small figure = avg days outstanding (DSO, 3-mo). Rising DSO with steady sales \u21D2 collection slowing; flat DSO \u21D2 just higher sales. Click a group to drill down.'),
+    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing outstanding at each month-end (opening + invoices \u2212 receipts, incl. CN/DN). Small figure = avg days outstanding (DSO, 3-mo). Rising DSO with steady sales \u21D2 collection slowing; flat DSO \u21D2 just higher sales. Click a group to drill down.',woRecCnt?e('span',{style:{color:'#dc2626',fontWeight:600}},' \u00B7 Restated for '+woRecCnt+' written-off bill(s) (\u20B9'+fmt(woRecTot)+') from the month each was raised; sales unchanged.'):null),
     e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
       e('div',{style:{position:'sticky',left:0,zIndex:6,background:'var(--bg2)',padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'LEDGER GROUP / PARTY \u00B7 amount + DSO'),
       mos.map(function(m,i){return e('div',{key:'h'+i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right',borderLeft:'1px solid var(--border)'}},m);})),
@@ -1943,7 +1978,8 @@ e('span',{style:{fontSize:'14px',fontWeight:700,color:'var(--pink)',fontFamily:'
 e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'\u00B7 '+totCust+' vendors \u00B7 '+totBills+' bills'),
 e('button',{onClick:exportPayXLS,style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'))),
 payMode==='monthly'&&(function(){
-  var dm=ed.creditorMonthly||{};var mos=dm.months||[];var root=dm.root;
+  var dm=ed.creditorMonthly||{};var mos=dm.months||[];
+  var root=woAdjustTree(dm.root,dm.keys,ed.allCreditorBills||{},wOff);
   if(!mos.length||!root)return e('div',{style:{padding:'40px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}},'No monthly data.');
   var MGRID='minmax(240px,1.6fr) repeat('+mos.length+',minmax(78px,1fr))';
   // DPO at month i = closing payable / trailing purchases \u00D7 trailing days (\u22643 mo).
@@ -1962,7 +1998,7 @@ payMode==='monthly'&&(function(){
     if(hasKids&&open){var sk=kids.slice().sort(function(a,b){return (b.out[b.out.length-1]||0)-(a.out[a.out.length-1]||0);});for(var i=0;i<sk.length;i++)walk(sk[i],path+'/'+sk[i].name,depth+1);}}
   walk(root,root.name,0);
   return e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(260+mos.length*84)+'px'}},
-    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing payable at each month-end (opening + purchases \u2212 payments). Small figure = avg days payable (DPO, 3-mo). Rising DPO with steady purchases \u21D2 paying slower; flat DPO \u21D2 just higher buying. Click a group to drill down.'),
+    e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Closing payable at each month-end (opening + purchases \u2212 payments). Small figure = avg days payable (DPO, 3-mo). Rising DPO with steady purchases \u21D2 paying slower; flat DPO \u21D2 just higher buying. Click a group to drill down.',woPayCnt?e('span',{style:{color:'#dc2626',fontWeight:600}},' \u00B7 Restated for '+woPayCnt+' written-off bill(s) (\u20B9'+fmt(woPayTot)+') from the month each was raised; purchases unchanged.'):null),
     e('div',{style:{display:'grid',gridTemplateColumns:MGRID,borderBottom:'2px solid var(--border)',position:'sticky',top:0,background:'var(--bg2)',zIndex:5}},
       e('div',{style:{position:'sticky',left:0,zIndex:6,background:'var(--bg2)',padding:'8px 24px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'LEDGER GROUP / VENDOR \u00B7 amount + DPO'),
       mos.map(function(m,i){return e('div',{key:'h'+i,style:{padding:'8px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right',borderLeft:'1px solid var(--border)'}},m);})),
