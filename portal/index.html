@@ -1545,41 +1545,57 @@ var sPaySort=useState('tot_desc'),paySort=sPaySort[0],setPaySort=sPaySort[1];
 var sPayModal=useState(null),payModal=sPayModal[0],setPayModal=sPayModal[1];
 // Seed from the shared MongoDB overrides (pr.overrides) when available, else fall
 // back to this browser's localStorage (offline / file-upload mode).
-var __seedOvr=(pr.overrides&&(pr.overrides.daysOverrides||pr.overrides.excluded||pr.overrides.excludedBills))?pr.overrides:savedOvr;
+var __seedOvr=(pr.overrides&&(pr.overrides.daysOverrides||pr.overrides.excluded||pr.overrides.excludedBills||pr.overrides.writeOffs))?pr.overrides:savedOvr;
 var sDO=useState(__seedOvr&&__seedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
 var sEx=useState(__seedOvr&&__seedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
 // Per-bill exclusions: drop one invoice from the projection, party stays in.
 var sExB=useState(__seedOvr&&__seedOvr.excludedBills||{}),exB=sExB[0],sExB2=sExB[1];
+// Write-offs: bills we know will never be received/paid (bad debt, or a phantom
+// left behind by a name mismatch). Removed from receivables/payables AND the
+// projection. Value = reason string, so the list stays auditable.
+var sWO=useState(__seedOvr&&__seedOvr.writeOffs||{}),wOff=sWO[0],sWOf=sWO[1];
+var sShowWO=useState(false),showWO=sShowWO[0],setShowWO=sShowWO[1];// reveal written-off bills to restore them
 var sGO=useState(savedOvr&&savedOvr.groupOpen||{}),gO=sGO[0],sGOp=sGO[1];
 // Persist on any change: to the shared Mongo store (so everyone sees the same
 // data) when API-backed, and always to localStorage as an offline fallback.
-function saveOverridesToServer(newDO,newEx,newEB){
+function saveOverridesToServer(newDO,newEx,newEB,newWO){
   try{if(window.__cdcFromApi&&window.__cdcApiBase!==undefined){
-    fetch((window.__cdcApiBase||'')+'/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB})}).catch(function(){});
+    fetch((window.__cdcApiBase||'')+'/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB,writeOffs:newWO||wOff})}).catch(function(){});
   }}catch(e){}}
-function persistOverrides(newDO,newEx,newEB){
-  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB,savedAt:new Date().toISOString()}));}}catch(e){}
-  saveOverridesToServer(newDO,newEx,newEB);}
+function persistOverrides(newDO,newEx,newEB,newWO){
+  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB,writeOffs:newWO||wOff,savedAt:new Date().toISOString()}));}}catch(e){}
+  saveOverridesToServer(newDO,newEx,newEB,newWO);}
 // Save overrides as downloadable JSON
 function saveOverridesJSON(){
-  var obj={daysOverrides:dO,excluded:ex,excludedBills:exB,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
+  var obj={daysOverrides:dO,excluded:ex,excludedBills:exB,writeOffs:wOff,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
   var blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='cdc_pcf_overrides.json';a.click();URL.revokeObjectURL(url);}
 // Load overrides from uploaded JSON
 function loadOverridesJSON(file){
   file.text().then(function(t){try{var obj=JSON.parse(t);
     if(obj.excludedBills)sExB2(obj.excludedBills);
-    if(obj.daysOverrides){sDOv(obj.daysOverrides);persistOverrides(obj.daysOverrides,obj.excluded,obj.excludedBills);}
+    if(obj.writeOffs)sWOf(obj.writeOffs);
+    if(obj.daysOverrides){sDOv(obj.daysOverrides);persistOverrides(obj.daysOverrides,obj.excluded,obj.excludedBills,obj.writeOffs);}
     if(obj.excluded){sExp(obj.excluded);}
   }catch(e){alert('Invalid overrides file: '+e.message);}});}
 
 GRID_COL1=cW;
-function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null,null);return x;});}
-function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x,null);return x;});}
+function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null,null,null);return x;});}
+function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x,null,null);return x;});}
 // Toggle a single bill in/out of the projection.
-function onBillEx(k){sExB2(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;persistOverrides(null,null,x);return x;});}
+function onBillEx(k){sExB2(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;persistOverrides(null,null,x,null);return x;});}
+// Write off / restore a single bill. Asks for a reason so the list stays auditable.
+var WO_REASONS=['Bad debt','Not payable / disputed','Duplicate — name mismatch','Already settled elsewhere','Other'];
+function onWriteOff(k,label){
+  if(wOff[k]){sWOf(function(v){var x=Object.assign({},v);delete x[k];persistOverrides(null,null,null,x);return x;});return;}
+  var msg='Mark as NOT receivable/payable:\n\n'+(label||k)+'\n\nReason:\n'+WO_REASONS.map(function(r,i){return (i+1)+'. '+r;}).join('\n')+'\n\nEnter 1-'+WO_REASONS.length+' (or type your own):';
+  var ans=window.prompt(msg,'1');if(ans===null)return;ans=String(ans).trim();if(!ans)return;
+  var n=parseInt(ans,10);var reason=(!isNaN(n)&&n>=1&&n<=WO_REASONS.length)?WO_REASONS[n-1]:ans;
+  sWOf(function(v){var x=Object.assign({},v);x[k]=reason;persistOverrides(null,null,null,x);return x;});}
 function tG(k){sGOp(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;return x;});}
-var __pd=projDerived(data,pr,dO,ex,exB);var ed=__pd.ed;pva=__pd.pva;var mos=ed.projMonths;
+// A written-off bill is never coming in, so it also drops out of the projection.
+var __exBAll=Object.assign({},exB);for(var __wk in wOff)__exBAll[__wk]=true;
+var __pd=projDerived(data,pr,dO,ex,__exBAll);var ed=__pd.ed;pva=__pd.pva;var mos=ed.projMonths;
 var tI=ed.projInM.reduce(function(a,b){return a+b;},0),tO=ed.projOutM.reduce(function(a,b){return a+b;},0),tIE=ed.projIndExp.reduce(function(a,b){return a+b;},0),tN=ed.projNetM.reduce(function(a,b){return a+b;},0);
 
 function gGC(p,ty){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});var rt=ty==='d'?'Sundry Debtors':'Sundry Creditors';
@@ -1753,12 +1769,16 @@ function parseDt(ds){if(!ds||ds.length<8)return new Date(2025,3,1);return new Da
 function bucketIdx(age){if(recAg==='due'){if(age<0)return 0;if(age<30)return 1;if(age<60)return 2;if(age<90)return 3;return 4;}else{if(age<30)return 0;if(age<60)return 1;if(age<90)return 2;if(age<180)return 3;return 4;}}
 var bucketLabels=recAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
 // Aggregate all unpaid bills per salesperson \u2192 per customer, with aging buckets.
-var allBills=ed.allDebtorBills||{};var partyRecs={};
+var allBills=ed.allDebtorBills||{};var partyRecs={};var woRecTot=0,woRecCnt=0;
 for(var p in allBills){var pd=allBills[p];if(!pd||!pd.unpaid)continue;
   var grp=getCustGrp(p);var ed_=effDays(p);var rec={buckets:[0,0,0,0,0],bills:[],tot:0,grp:grp,effDays:ed_};
   for(var bi=0;bi<pd.unpaid.length;bi++){var bl=pd.unpaid[bi];if(bl.amt<5000)continue;
+    // Written-off bills leave the aging entirely (unless we're showing them to restore).
+    var __wk=billKey(p,bl),__wo=!!wOff[__wk];
+    if(__wo){woRecTot+=bl.amt;woRecCnt++;if(!showWO)continue;}
     var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);var age=recAg==='due'?(bAge-ed_):bAge;var bk=bucketIdx(age);
-    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}
+    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk,wo:__wo,woReason:__wo?wOff[__wk]:''});
+    if(!__wo){rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}}
   if(rec.bills.length)partyRecs[p]=rec;}
 // Search filter — narrow customers too, and recompute salesperson totals from filtered list.
 if(sr){var srl=sr.toLowerCase();var fpr={};for(var p in partyRecs){var keep=p.toLowerCase().indexOf(srl)>=0;if(!keep){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});for(var ci=0;ci<ch.length;ci++)if((ch[ci]||'').toLowerCase().indexOf(srl)>=0){keep=true;break;}}if(keep)fpr[p]=partyRecs[p];}partyRecs=fpr;}
@@ -1777,7 +1797,8 @@ return e('div',{style:{padding:'0'}},
 e('div',{style:{padding:'14px 24px',background:'var(--bg2)',borderBottom:'2px solid var(--amber)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'10px'}},
 e('div',null,
 e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:'var(--mono)'}},'RECEIVABLES \u00B7 as of '+(asOf.toLocaleDateString?asOf.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'today')),
-e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid bills \u2265 \u20B95,000 \u00B7 stale and excluded parties included \u00B7 Aging by '+(recAg==='due'?'predicted DUE DATE':'BILL DATE'))),
+e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid bills \u2265 \u20B95,000 \u00B7 stale and excluded parties included \u00B7 Aging by '+(recAg==='due'?'predicted DUE DATE':'BILL DATE'),
+  woRecCnt?e('span',{onClick:function(){setShowWO(!showWO);},title:'Bills marked NOT receivable (bad debt / phantom). Click to '+(showWO?'hide':'show and restore'),style:{marginLeft:'10px',cursor:'pointer',background:showWO?'#dc2626':'#fee2e2',color:showWO?'#fff':'#dc2626',padding:'2px 8px',borderRadius:'10px',fontSize:'10px',fontWeight:700}},(showWO?'\u25BE ':'\u25B8 ')+woRecCnt+' written off \u00B7 \u20B9'+fmt(woRecTot)):null)),
 e('div',{style:{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},
 [['aging','AGING'],['monthly','MONTHLY OUTSTANDING']].map(function(__m){return e('span',{key:__m[0],onClick:function(){setRecMode(__m[0]);},style:{padding:'5px 12px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:recMode===__m[0]?'var(--cyan)':'var(--bg3)',color:recMode===__m[0]?'#fff':'var(--text2)'}},__m[1]);})),
@@ -1839,31 +1860,38 @@ recModal?(function(){
   var bucketLabels2=recAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
   function bktColor(b){if(recAg==='due'&&b===0)return 'var(--green)';if(b>=3)return 'var(--red)';if(b===2)return 'var(--amber)';return 'var(--text2)';}
   function exportModal(){var hdr=['Date','Ref','Days Old/OD','Bucket','Amount'];var xrows=bls.map(function(b){return[fmtDate(b.date),b.ref,b.age,bucketLabels2[b.bucket],Math.round(b.amt)];});var ws=XLSX.utils.aoa_to_sheet([hdr].concat(xrows));ws['!cols']=[{wch:12},{wch:16},{wch:12},{wch:12},{wch:14}];var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Bills');XLSX.writeFile(wb,'CDC_Bills_'+recModal.party.replace(/[^A-Za-z0-9]/g,'_').slice(0,30)+'.xlsx');}
-  var total=bls.reduce(function(s,b){return s+b.amt;},0);
+  var RBG='110px minmax(140px,1.4fr) 96px 128px 120px 104px';
+  var total=bls.reduce(function(s,b){return s+(wOff[billKey(recModal.party,b)]?0:b.amt);},0);
+  var woT=bls.reduce(function(s,b){return s+(wOff[billKey(recModal.party,b)]?b.amt:0);},0);
 return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)setRecModal(null);},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
   e('div',{style:{background:'#fff',width:'100%',maxWidth:'900px',maxHeight:'90vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
     e('div',{style:{padding:'16px 22px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'12px'}},
       e('div',null,
         e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'BILLS \u00B7 '+recModal.sp+' \u00B7 '+recModal.grp),
         e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},recModal.party),
-        e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--amber)'}},fmt(total)),' \u00B7 predicted due '+recModal.effDays+' days')),
+        e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--amber)'}},fmt(total)),woT?e('span',{style:{color:'#dc2626',fontWeight:600}},' \u00B7 written off '+fmt(woT)):null,' \u00B7 predicted due '+recModal.effDays+' days')),
       e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
         e('button',{onClick:function(){try{window.cdcDiag(recModal.party);alert('Diagnostic printed to the browser console (F12 \u2192 Console) for:\n'+recModal.party);}catch(e){}},style:{background:'#7c3aed',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDD2C Diagnose'),
         e('button',{onClick:exportModal,style:{background:'var(--green)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
         e('button',{onClick:function(){setRecModal(null);},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'\u2715'))),
     e('div',{style:{overflowY:'auto',flex:1}},
-      e('div',{style:{display:'grid',gridTemplateColumns:'110px minmax(150px,1.5fr) 110px 130px 130px',background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
+      e('div',{style:{display:'grid',gridTemplateColumns:RBG,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'DATE'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'REF'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},recAg==='due'?'OVERDUE':'AGE'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BUCKET'),
-        e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AMOUNT')),
-      bls.map(function(b,i){return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'110px minmax(150px,1.5fr) 110px 130px 130px',borderBottom:'1px solid var(--border)',background:i%2===0?'transparent':'var(--bg2)'}},
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(b.date)),
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},b.ref||'\u2014'),
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:b.age<0?'var(--green)':b.age>90?'var(--red)':'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},(b.age<0?'in ':'')+Math.abs(b.age)+'d'),
-        e('div',{style:{padding:'8px 14px',fontSize:'10px',color:bktColor(b.bucket),fontFamily:'var(--mono)',fontWeight:600}},bucketLabels2[b.bucket]),
-        e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:'var(--text1)'}},fmt(b.amt)));}))));
+        e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AMOUNT'),
+        e('div',{style:{padding:'4px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'center'}},'RECEIVABLE?')),
+      bls.map(function(b,i){var wk=billKey(recModal.party,b);var off=!!wOff[wk];
+        return e('div',{key:i,style:{display:'grid',gridTemplateColumns:RBG,alignItems:'center',borderBottom:'1px solid var(--border)',background:off?'#fef2f2':(i%2===0?'transparent':'var(--bg2)'),opacity:off?0.65:1}},
+        e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)',textDecoration:off?'line-through':'none'}},fmtDate(b.date)),
+        e('div',{title:off?('Written off: '+(wOff[wk]||'')):'',style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textDecoration:off?'line-through':'none'}},b.ref||'\u2014'),
+        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:off?'var(--text3)':(b.age<0?'var(--green)':b.age>90?'var(--red)':'var(--text2)'),fontFamily:'var(--mono)',textAlign:'right'}},(b.age<0?'in ':'')+Math.abs(b.age)+'d'),
+        e('div',{style:{padding:'8px 14px',fontSize:'10px',color:off?'var(--text3)':bktColor(b.bucket),fontFamily:'var(--mono)',fontWeight:600}},off?(wOff[wk]||'WRITTEN OFF'):bucketLabels2[b.bucket]),
+        e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:off?'var(--text3)':'var(--text1)',textDecoration:off?'line-through':'none'}},fmt(b.amt)),
+        e('div',{style:{padding:'6px 8px',textAlign:'center'}},
+          e('span',{onClick:function(){onWriteOff(wk,recModal.party+' \u00b7 '+(b.ref||fmtDate(b.date))+' \u00b7 '+fmt(b.amt));},title:off?'Restore \u2014 treat as receivable again':'Mark as NOT receivable (bad debt / phantom entry)',style:{cursor:'pointer',fontSize:'9px',fontFamily:'var(--mono)',fontWeight:600,padding:'3px 8px',borderRadius:'4px',background:off?'#dc2626':'var(--bg3)',color:off?'#fff':'var(--text2)',border:'1px solid '+(off?'#dc2626':'var(--border2)'),whiteSpace:'nowrap'}},off?'\u21a9 Restore':'\u2715 Not recv')))
+        ;}))));
 })():null,
 
 // ============ PAYABLES VIEW ============
@@ -1878,12 +1906,15 @@ function effDaysP(p){if(dO&&dO.hasOwnProperty(p))return dO[p];var s=(ed.allCredi
 function parseDt(ds){if(!ds||ds.length<8)return new Date(2025,3,1);return new Date(parseInt(ds.substring(0,4)),parseInt(ds.substring(4,6))-1,parseInt(ds.substring(6,8)));}
 function bucketIdxP(age){if(payAg==='due'){if(age<0)return 0;if(age<30)return 1;if(age<60)return 2;if(age<90)return 3;return 4;}else{if(age<30)return 0;if(age<60)return 1;if(age<90)return 2;if(age<180)return 3;return 4;}}
 var bucketLabelsP=payAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
-var allBills=ed.allCreditorBills||{};var partyRecsP={};
+var allBills=ed.allCreditorBills||{};var partyRecsP={};var woPayTot=0,woPayCnt=0;
 for(var p in allBills){var pd=allBills[p];if(!pd||!pd.unpaid)continue;
   var grp=getVendGrp(p);var ed_=effDaysP(p);var rec={buckets:[0,0,0,0,0],bills:[],tot:0,grp:grp,effDays:ed_};
   for(var bi=0;bi<pd.unpaid.length;bi++){var bl=pd.unpaid[bi];if(bl.amt<5000)continue;
+    var __wk=billKey(p,bl),__wo=!!wOff[__wk];
+    if(__wo){woPayTot+=bl.amt;woPayCnt++;if(!showWO)continue;}
     var bAge=Math.floor((asOfMs-parseDt(bl.date).getTime())/86400000);var age=payAg==='due'?(bAge-ed_):bAge;var bk=bucketIdxP(age);
-    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk});rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}
+    rec.bills.push({date:bl.date,ref:bl.ref||'',amt:bl.amt,age:age,bucket:bk,wo:__wo,woReason:__wo?wOff[__wk]:''});
+    if(!__wo){rec.tot+=bl.amt;rec.buckets[bk]+=bl.amt;}}
   if(rec.bills.length)partyRecsP[p]=rec;}
 if(sr){var srl=sr.toLowerCase();var fpr={};for(var p in partyRecsP){var keep=p.toLowerCase().indexOf(srl)>=0;if(!keep){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});for(var ci=0;ci<ch.length;ci++)if((ch[ci]||'').toLowerCase().indexOf(srl)>=0){keep=true;break;}}if(keep)fpr[p]=partyRecsP[p];}partyRecsP=fpr;}
 var agingRootP=buildAgingTree(partyRecsP,ed.xd||{groups:{},ledgers:{}},'Sundry Creditors');
@@ -1900,7 +1931,8 @@ return e('div',{style:{padding:'0'}},
 e('div',{style:{padding:'14px 24px',background:'var(--bg2)',borderBottom:'2px solid var(--pink)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'10px'}},
 e('div',null,
 e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--pink)',fontFamily:'var(--mono)'}},'PAYABLES \u00B7 as of '+(asOf.toLocaleDateString?asOf.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'today')),
-e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid vendor bills \u2265 \u20B95,000 \u00B7 stale and excluded vendors included \u00B7 Aging by '+(payAg==='due'?'predicted DUE DATE':'BILL DATE'))),
+e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid vendor bills \u2265 \u20B95,000 \u00B7 stale and excluded vendors included \u00B7 Aging by '+(payAg==='due'?'predicted DUE DATE':'BILL DATE'),
+  woPayCnt?e('span',{onClick:function(){setShowWO(!showWO);},title:'Bills marked NOT payable (disputed / phantom). Click to '+(showWO?'hide':'show and restore'),style:{marginLeft:'10px',cursor:'pointer',background:showWO?'#dc2626':'#fee2e2',color:showWO?'#fff':'#dc2626',padding:'2px 8px',borderRadius:'10px',fontSize:'10px',fontWeight:700}},(showWO?'\u25BE ':'\u25B8 ')+woPayCnt+' written off \u00B7 \u20B9'+fmt(woPayTot)):null)),
 e('div',{style:{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},
 [['aging','AGING'],['monthly','MONTHLY OUTSTANDING']].map(function(__m){return e('span',{key:__m[0],onClick:function(){setPayMode(__m[0]);},style:{padding:'5px 12px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:payMode===__m[0]?'var(--cyan)':'var(--bg3)',color:payMode===__m[0]?'#fff':'var(--text2)'}},__m[1]);})),
@@ -1960,31 +1992,38 @@ payModal?(function(){
   var bucketLabels2=payAg==='due'?['NOT DUE','0-30 OD','30-60 OD','60-90 OD','90+ OD']:['0-30','30-60','60-90','90-180','180+'];
   function bktColor(b){if(payAg==='due'&&b===0)return 'var(--green)';if(b>=3)return 'var(--red)';if(b===2)return 'var(--amber)';return 'var(--text2)';}
   function exportModal(){var hdr=['Date','Ref','Days Old/OD','Bucket','Amount'];var xrows=bls.map(function(b){return[fmtDate(b.date),b.ref,b.age,bucketLabels2[b.bucket],Math.round(b.amt)];});var ws=XLSX.utils.aoa_to_sheet([hdr].concat(xrows));ws['!cols']=[{wch:12},{wch:16},{wch:12},{wch:12},{wch:14}];var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Bills');XLSX.writeFile(wb,'CDC_PayableBills_'+payModal.party.replace(/[^A-Za-z0-9]/g,'_').slice(0,30)+'.xlsx');}
-  var total=bls.reduce(function(s,b){return s+b.amt;},0);
+  var PBG='110px minmax(140px,1.4fr) 96px 128px 120px 104px';
+  var total=bls.reduce(function(s,b){return s+(wOff[billKey(payModal.party,b)]?0:b.amt);},0);
+  var woT=bls.reduce(function(s,b){return s+(wOff[billKey(payModal.party,b)]?b.amt:0);},0);
 return e('div',{onClick:function(ev){if(ev.target===ev.currentTarget)setPayModal(null);},style:{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(15,23,42,0.55)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
   e('div',{style:{background:'#fff',width:'100%',maxWidth:'900px',maxHeight:'90vh',borderRadius:'12px',display:'flex',flexDirection:'column',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
     e('div',{style:{padding:'16px 22px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'12px'}},
       e('div',null,
         e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'BILLS \u00B7 '+payModal.sp+' \u00B7 '+payModal.grp),
         e('div',{style:{fontSize:'17px',fontWeight:700,marginTop:'2px'}},payModal.party),
-        e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--pink)'}},fmt(total)),' \u00B7 predicted due '+payModal.effDays+' days')),
+        e('div',{style:{fontSize:'11px',color:'var(--text2)',marginTop:'4px',fontFamily:'var(--mono)'}},bls.length+' bills \u00B7 ',e('span',{style:{fontWeight:600,color:'var(--pink)'}},fmt(total)),woT?e('span',{style:{color:'#dc2626',fontWeight:600}},' \u00B7 written off '+fmt(woT)):null,' \u00B7 predicted due '+payModal.effDays+' days')),
       e('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
         e('button',{onClick:function(){try{window.cdcDiag(payModal.party);alert('Diagnostic printed to the browser console (F12 \u2192 Console) for:\n'+payModal.party);}catch(e){}},style:{background:'#7c3aed',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDD2C Diagnose'),
         e('button',{onClick:exportModal,style:{background:'var(--green)',border:'none',color:'#fff',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
         e('button',{onClick:function(){setPayModal(null);},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'5px 12px',borderRadius:'5px',cursor:'pointer',fontSize:'14px',fontWeight:600}},'\u2715'))),
     e('div',{style:{overflowY:'auto',flex:1}},
-      e('div',{style:{display:'grid',gridTemplateColumns:'110px minmax(150px,1.5fr) 110px 130px 130px',background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
+      e('div',{style:{display:'grid',gridTemplateColumns:PBG,background:'var(--bg3)',padding:'8px 0',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:1}},
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'DATE'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'REF'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},payAg==='due'?'OVERDUE':'AGE'),
         e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'BUCKET'),
-        e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AMOUNT')),
-      bls.map(function(b,i){return e('div',{key:i,style:{display:'grid',gridTemplateColumns:'110px minmax(150px,1.5fr) 110px 130px 130px',borderBottom:'1px solid var(--border)',background:i%2===0?'transparent':'var(--bg2)'}},
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)'}},fmtDate(b.date)),
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)'}},b.ref||'\u2014'),
-        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:b.age<0?'var(--green)':b.age>90?'var(--red)':'var(--text2)',fontFamily:'var(--mono)',textAlign:'right'}},(b.age<0?'in ':'')+Math.abs(b.age)+'d'),
-        e('div',{style:{padding:'8px 14px',fontSize:'10px',color:bktColor(b.bucket),fontFamily:'var(--mono)',fontWeight:600}},bucketLabels2[b.bucket]),
-        e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:'var(--text1)'}},fmt(b.amt)));}))));
+        e('div',{style:{padding:'4px 14px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right'}},'AMOUNT'),
+        e('div',{style:{padding:'4px 8px',fontSize:'10px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'center'}},'PAYABLE?')),
+      bls.map(function(b,i){var wk=billKey(payModal.party,b);var off=!!wOff[wk];
+        return e('div',{key:i,style:{display:'grid',gridTemplateColumns:PBG,alignItems:'center',borderBottom:'1px solid var(--border)',background:off?'#fef2f2':(i%2===0?'transparent':'var(--bg2)'),opacity:off?0.65:1}},
+        e('div',{style:{padding:'8px 14px',fontSize:'11px',fontFamily:'var(--mono)',color:'var(--text2)',textDecoration:off?'line-through':'none'}},fmtDate(b.date)),
+        e('div',{title:off?('Written off: '+(wOff[wk]||'')):'',style:{padding:'8px 14px',fontSize:'11px',color:'var(--text2)',fontFamily:'var(--mono)',textDecoration:off?'line-through':'none'}},b.ref||'\u2014'),
+        e('div',{style:{padding:'8px 14px',fontSize:'11px',color:off?'var(--text3)':(b.age<0?'var(--green)':b.age>90?'var(--red)':'var(--text2)'),fontFamily:'var(--mono)',textAlign:'right'}},(b.age<0?'in ':'')+Math.abs(b.age)+'d'),
+        e('div',{style:{padding:'8px 14px',fontSize:'10px',color:off?'var(--text3)':bktColor(b.bucket),fontFamily:'var(--mono)',fontWeight:600}},off?(wOff[wk]||'WRITTEN OFF'):bucketLabels2[b.bucket]),
+        e('div',{className:'num',style:{padding:'8px 14px',fontSize:'12px',fontWeight:600,textAlign:'right',color:off?'var(--text3)':'var(--text1)',textDecoration:off?'line-through':'none'}},fmt(b.amt)),
+        e('div',{style:{padding:'6px 8px',textAlign:'center'}},
+          e('span',{onClick:function(){onWriteOff(wk,payModal.party+' \u00b7 '+(b.ref||fmtDate(b.date))+' \u00b7 '+fmt(b.amt));},title:off?'Restore \u2014 treat as payable again':'Mark as NOT payable (disputed / phantom entry)',style:{cursor:'pointer',fontSize:'9px',fontFamily:'var(--mono)',fontWeight:600,padding:'3px 8px',borderRadius:'4px',background:off?'#dc2626':'var(--bg3)',color:off?'#fff':'var(--text2)',border:'1px solid '+(off?'#dc2626':'var(--border2)'),whiteSpace:'nowrap'}},off?'\u21a9 Restore':'\u2715 Not pay')))
+        ;}))));
 })():null,
 
 e('div',{style:{padding:'8px 24px',fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}},'Bill-wise FIFO \u00B7 360d cutoff \u00B7 Dr avg '+ed.companyAvgDays.debtor+'d \u00B7 Cr avg '+ed.companyAvgDays.creditor+'d'))))}
