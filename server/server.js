@@ -186,13 +186,15 @@ app.get('/api/meta', async (_req, res) => {
 // The Projected view lets users override per-party collection/payment days and
 // exclude parties. These used to live in each browser's localStorage; now they
 // live in one shared Mongo doc so every user sees the same numbers.
-//   GET  /api/overrides            -> { daysOverrides, excluded, updatedAt }
-//   POST /api/overrides { daysOverrides, excluded }  (full replace; upsert)
+//   GET  /api/overrides            -> { daysOverrides, excluded, excludedBills, updatedAt }
+//   POST /api/overrides { daysOverrides, excluded, excludedBills }  (full replace; upsert)
+// excludedBills drops a SINGLE unpaid bill from the projection (keyed
+// party|ref|date|amt), where `excluded` drops the whole party.
 app.get('/api/overrides', async (_req, res) => {
   try {
     const db = await getDb();
     const doc = await db.collection('overrides').findOne({ _id: 'pcf' }, { projection: { _id: 0 } });
-    res.json(doc || { daysOverrides: {}, excluded: {}, updatedAt: null });
+    res.json(doc || { daysOverrides: {}, excluded: {}, excludedBills: {}, updatedAt: null });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -202,11 +204,12 @@ app.post('/api/overrides', async (req, res) => {
     const b = req.body || {};
     const daysOverrides = (b.daysOverrides && typeof b.daysOverrides === 'object') ? b.daysOverrides : {};
     const excluded = (b.excluded && typeof b.excluded === 'object') ? b.excluded : {};
+    const excludedBills = (b.excludedBills && typeof b.excludedBills === 'object') ? b.excludedBills : {};
     const db = await getDb();
     const updatedAt = new Date();
     await db.collection('overrides').updateOne(
       { _id: 'pcf' },
-      { $set: { daysOverrides, excluded, updatedAt } },
+      { $set: { daysOverrides, excluded, excludedBills, updatedAt } },
       { upsert: true }
     );
     res.json({ ok: true, updatedAt: updatedAt.toISOString() });

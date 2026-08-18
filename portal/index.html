@@ -1276,8 +1276,8 @@ try{window.cdcDiag=function(name){
 };}catch(e){}
 
 // ============ PREDICTION VS ACTUAL ============
-function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
-  dOvr=dOvr||{};excl=excl||{};
+function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl,exBills){
+  dOvr=dOvr||{};excl=excl||{};exBills=exBills||{};
   var today=data.asOfDate||new Date();
   var lmEnd=new Date(today.getFullYear(),today.getMonth(),0);
   var lmStart=new Date(lmEnd.getFullYear(),lmEnd.getMonth(),1);
@@ -1293,7 +1293,7 @@ function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
   // Step 1: Re-run buildProjection as of 1st of last month
   var predData=buildProjection(vouchers,xd,ib,recBills,payBills2||[],lmStart);
   // Apply overrides via recalc (same as main dashboard)
-  var predRecalc=recalc(predData,dOvr,excl);
+  var predRecalc=recalc(predData,dOvr,excl,exBills);
   // Month 0 of that projection = predicted amounts for last month
   var predicted={};
   for(var p in predRecalc.projInflowStats){
@@ -1332,12 +1332,16 @@ function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl){
   return{month:lmLabel,rows:rows,salespersons:salespersons,tP:tP,tA:tA,tV:tA-tP};
 }
 
-function recalc(data,dOvr,excl){var today=data.asOfDate||new Date();function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
-function rp(st,p){var od=dOvr.hasOwnProperty(p)?dOvr[p]:st.days;var sr=dOvr.hasOwnProperty(p)?'override':st.source;var ul=st.unpaidList||[];var pa=[0,0,0],tp=0;
-for(var i=0;i<ul.length;i++){var pd=addDays(parseDate(ul[i].date),od);if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);if(mi<0)continue;pa[mi]+=ul[i].amt;tp+=ul[i].amt;}
-return{pa:pa,tp:tp,d:od,s:sr};}
-var nIn={},nInS={},nInM=[0,0,0];for(var p in data.projInflowStats){var st=data.projInflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nIn[p]=r.pa;nInS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nInM[m]+=r.pa[m];}}
-var nOut={},nOutS={},nOutM=[0,0,0];for(var p in data.projOutflowStats){var st=data.projOutflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0){nOut[p]=r.pa;nOutS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[]};if(!excl[p])for(var m=0;m<3;m++)nOutM[m]+=r.pa[m];}}
+// Stable identity for one unpaid bill, so a single invoice can be dropped from the
+// projection without excluding the whole party. Amount is rounded so tiny float
+// drift between rebuilds can't orphan an exclusion.
+function billKey(party,b){return party+'|'+(b.ref||'')+'|'+(b.date||'')+'|'+Math.round(b.amt||0);}
+function recalc(data,dOvr,excl,exB){var today=data.asOfDate||new Date();exB=exB||{};function pmi(d){for(var m=0;m<3;m++){var md=new Date(today.getFullYear(),today.getMonth()+m,1);if(d.getMonth()===md.getMonth()&&d.getFullYear()===md.getFullYear())return m;}return-1;}
+function rp(st,p){var od=dOvr.hasOwnProperty(p)?dOvr[p]:st.days;var sr=dOvr.hasOwnProperty(p)?'override':st.source;var ul=st.unpaidList||[];var pa=[0,0,0],tp=0,skipped=0;
+for(var i=0;i<ul.length;i++){if(exB[billKey(p,ul[i])]){skipped+=ul[i].amt;continue;}var pd=addDays(parseDate(ul[i].date),od);if(!pd||isNaN(pd.getTime())||pd<today)pd=new Date(today.getTime());var mi=pmi(pd);if(mi<0)continue;pa[mi]+=ul[i].amt;tp+=ul[i].amt;}
+return{pa:pa,tp:tp,d:od,s:sr,skipped:skipped};}
+var nIn={},nInS={},nInM=[0,0,0];for(var p in data.projInflowStats){var st=data.projInflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0||r.skipped>0){nIn[p]=r.pa;nInS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[],skippedBills:r.skipped};if(!excl[p])for(var m=0;m<3;m++)nInM[m]+=r.pa[m];}}
+var nOut={},nOutS={},nOutM=[0,0,0];for(var p in data.projOutflowStats){var st=data.projOutflowStats[p];if(!st)continue;var r=rp(st,p);if(r.tp>0||r.skipped>0){nOut[p]=r.pa;nOutS[p]={days:r.d,source:r.s,outstanding:st.outstanding,projected:r.tp,group:st.group,unpaidList:st.unpaidList||[],skippedBills:r.skipped};if(!excl[p])for(var m=0;m<3;m++)nOutM[m]+=r.pa[m];}}
 var net=data.projMonths.map(function(_,m){return nInM[m]-nOutM[m]-data.projIndExp[m];});
 return{projMonths:data.projMonths,xd:data.xd,asOfDate:data.asOfDate,projInflows:nIn,projInflowStats:nInS,projInM:nInM,projOutflows:nOut,projOutflowStats:nOutS,projOutM:nOutM,projIndExp:data.projIndExp,projNetM:net,companyAvgDays:data.companyAvgDays,debtorCount:Object.keys(nIn).length,creditorCount:Object.keys(nOut).length,totalOutstanding:data.totalOutstanding,excluded:data.excluded,excludedTotals:data.excludedTotals,allDebtorBills:data.allDebtorBills,debtorGroupAvgs:data.debtorGroupAvgs,allCreditorBills:data.allCreditorBills,creditorGroupAvgs:data.creditorGroupAvgs,debtorMonthly:data.debtorMonthly,creditorMonthly:data.creditorMonthly};}
 
@@ -1377,12 +1381,12 @@ function renderAgingTree(root,opts){
 // expanding rows doesn't re-run them. Keyed by the projection data object (stable
 // per build/branch) and the override maps; survives Dash remounts on tab switch.
 var __projMemo=new WeakMap();
-function projDerived(data,pr,dO,ex){
+function projDerived(data,pr,dO,ex,exB){
   var m=__projMemo.get(data);if(!m){m={};__projMemo.set(data,m);}
-  var key=JSON.stringify(dO||{})+'|'+JSON.stringify(ex||{});
+  var key=JSON.stringify(dO||{})+'|'+JSON.stringify(ex||{})+'|'+JSON.stringify(exB||{});
   if(!m[key]){
-    var ed=recalc(data,dO,ex);var pva=null;
-    try{if(pr.data.vs&&pr.data.xd)pva=buildPVA(data,pr.data.vs,pr.data.xd,pr.data.ib||{},pr.data.rb||[],pr.data.pb||[],dO,ex);}catch(e){console.error('PVA error:',e);}
+    var ed=recalc(data,dO,ex,exB);var pva=null;
+    try{if(pr.data.vs&&pr.data.xd)pva=buildPVA(data,pr.data.vs,pr.data.xd,pr.data.ib||{},pr.data.rb||[],pr.data.pb||[],dO,ex,exB);}catch(e){console.error('PVA error:',e);}
     m[key]={ed:ed,pva:pva};
   }
   return m[key];
@@ -1395,11 +1399,35 @@ var sE=useState(false),ed=sE[0],sEd=sE[1];var sV=useState(''),ev=sV[0],sEv=sV[1]
 var tot=mo.reduce(function(a,b){return a+b;},0);var dm=ex?[0,0,0]:mo;var dt=ex?0:tot;
 function commit(){var n=parseInt(ev);if(!isNaN(n)&&n>=0&&n<999&&pr.onDC)pr.onDC(pn,n);sEd(false);}
 var badge=st?(ed?e('input',{type:'number',value:ev,onChange:function(v){sEv(v.target.value);},onBlur:commit,onKeyDown:function(v){if(v.key==='Enter')commit();if(v.key==='Escape')sEd(false);},autoFocus:true,style:{width:'40px',fontSize:'9px',padding:'1px 3px',border:'1px solid var(--cyan)',borderRadius:'3px',fontFamily:'var(--mono)',outline:'none'}}):e('span',{onClick:function(v){v.stopPropagation();sEd(true);sEv(String(st.days));},style:{fontSize:'9px',padding:'1px 5px',borderRadius:'3px',marginLeft:'6px',fontFamily:'var(--mono)',cursor:'pointer',background:st.source==='own'?'#dbeafe':st.source==='group'?'#fef3c7':st.source==='override'?'#d1fae5':'#f3e8ff',color:st.source==='own'?'#1e40af':st.source==='group'?'#92400e':st.source==='override'?'#065f46':'#6b21a8'}},st.days+'d')):null;
-var xBtn=e('span',{onClick:function(v){v.stopPropagation();if(pr.onTE)pr.onTE(pn);},style:{fontSize:'9px',padding:'1px 4px',borderRadius:'3px',marginLeft:'4px',cursor:'pointer',fontFamily:'var(--mono)',background:ex?'#fecaca':'transparent',color:ex?'#dc2626':'var(--text3)',border:'1px solid '+(ex?'#fca5a5':'var(--border)')}},ex?'\u2715':'\u2212');
-var cells=[e('div',{key:'n',style:{padding:'8px 12px',display:'flex',alignItems:'center',gap:'4px',borderRight:'1px solid var(--border)',minWidth:0,fontSize:'12px',color:ex?'var(--text3)':'var(--text2)',textDecoration:ex?'line-through':'none'}},e('span',{style:{overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},pn),badge,xBtn)];
+var xBtn=e('span',{onClick:function(v){v.stopPropagation();if(pr.onTE)pr.onTE(pn);},title:ex?'Party excluded \u2014 click to include':'Exclude this whole party from the projection',style:{fontSize:'9px',padding:'1px 4px',borderRadius:'3px',marginLeft:'4px',cursor:'pointer',fontFamily:'var(--mono)',background:ex?'#fecaca':'transparent',color:ex?'#dc2626':'var(--text3)',border:'1px solid '+(ex?'#fca5a5':'var(--border)')}},ex?'\u2715':'\u2212');
+// Bill-level exclusion: expand the party to drop individual invoices.
+var bills=(st&&st.unpaidList)||[];var exB=pr.exBills||{};
+var nExB=0;for(var __b=0;__b<bills.length;__b++){if(exB[billKey(pn,bills[__b])])nExB++;}
+var sBl=useState(false),blOpen=sBl[0],sBlO=sBl[1];
+var caret=bills.length?e('span',{onClick:function(v){v.stopPropagation();sBlO(!blOpen);},title:bills.length+' unpaid bill(s) \u2014 expand to exclude individual invoices',style:{fontSize:'9px',cursor:'pointer',color:'var(--text3)',marginRight:'2px',userSelect:'none',display:'inline-block',transform:blOpen?'rotate(90deg)':'',transition:'transform .15s'}},'\u25b6'):null;
+var exBadge=nExB?e('span',{title:nExB+' bill(s) excluded from this party',style:{fontSize:'8px',padding:'1px 4px',borderRadius:'3px',marginLeft:'4px',fontFamily:'var(--mono)',background:'#fef3c7',color:'#92400e',fontWeight:600}},nExB+' bill excl'):null;
+var cells=[e('div',{key:'n',style:{padding:'8px 12px',display:'flex',alignItems:'center',gap:'4px',borderRight:'1px solid var(--border)',minWidth:0,fontSize:'12px',color:ex?'var(--text3)':'var(--text2)',textDecoration:ex?'line-through':'none'}},caret,e('span',{style:{overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},pn),badge,exBadge,xBtn)];
 for(var i=0;i<mc;i++)cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'8px 10px',textAlign:'right',fontSize:'12.5px',color:dm[i]===0?'var(--dimnum)':ex?'var(--text3)':'var(--text2)',borderRight:'1px solid var(--border)',textDecoration:ex?'line-through':'none'}},fmt(dm[i])));
 cells.push(e('div',{key:'t',className:'num',style:{padding:'8px 10px',textAlign:'right',fontSize:'12.5px',fontWeight:600,color:dt===0?'var(--dimnum)':ex?'var(--text3)':'var(--text)',background:'var(--totalBg)',textDecoration:ex?'line-through':'none'}},fmt(dt)));
-return e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)',opacity:ex?0.5:1},onMouseEnter:function(v){v.currentTarget.style.background='var(--rowHover)';},onMouseLeave:function(v){v.currentTarget.style.background='transparent';}},cells);}
+var row=e('div',{key:'r',style:{display:'grid',gridTemplateColumns:gtc(mc),borderBottom:'1px solid var(--border)',opacity:ex?0.5:1},onMouseEnter:function(v){v.currentTarget.style.background='var(--rowHover)';},onMouseLeave:function(v){v.currentTarget.style.background='transparent';}},cells);
+if(!blOpen||!bills.length)return row;
+function fmtD(d){if(!d||d.length<8)return d||'';return d.substring(6,8)+'-'+d.substring(4,6)+'-'+d.substring(0,4);}
+var sorted=bills.slice().sort(function(a,b){return (a.date<b.date?-1:a.date>b.date?1:0);});
+var billRows=sorted.map(function(b,bi){var k=billKey(pn,b);var off=!!exB[k];
+  return e('div',{key:'b'+bi,style:{display:'grid',gridTemplateColumns:'28px 96px minmax(120px,1fr) 120px',alignItems:'center',borderBottom:'1px solid var(--border)',background:off?'#fef2f2':(bi%2?'var(--bg2)':'var(--bg)'),paddingLeft:'26px',opacity:off?0.6:1}},
+    e('div',{onClick:function(){if(pr.onBillEx)pr.onBillEx(k);},title:off?'Excluded from projection \u2014 click to include':'Exclude just this invoice from the projection',style:{cursor:'pointer',textAlign:'center',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:700,color:off?'#dc2626':'var(--text3)'}},off?'\u2715':'\u2212'),
+    e('div',{style:{fontSize:'10px',fontFamily:'var(--mono)',color:'var(--text3)',padding:'5px 0'}},fmtD(b.date)),
+    e('div',{title:b.ref||'',style:{fontSize:'11px',color:off?'var(--text3)':'var(--text2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',paddingRight:'8px',textDecoration:off?'line-through':'none'}},b.ref||'(no ref)'),
+    e('div',{className:'num',style:{fontSize:'11px',textAlign:'right',paddingRight:'12px',fontWeight:600,color:off?'var(--text3)':'var(--text2)',textDecoration:off?'line-through':'none'}},fmt(b.amt)));
+});
+return e('div',{key:'w'},row,e('div',{style:{background:'var(--bg2)',borderBottom:'2px solid var(--border2)'}},
+  e('div',{style:{display:'grid',gridTemplateColumns:'28px 96px minmax(120px,1fr) 120px',paddingLeft:'26px',background:'var(--bg3)',borderBottom:'1px solid var(--border)'}},
+    e('div',null,''),
+    e('div',{style:{fontSize:'9px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',padding:'4px 0'}},'BILL DATE'),
+    e('div',{style:{fontSize:'9px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)'}},'INVOICE / REF'),
+    e('div',{style:{fontSize:'9px',fontWeight:700,color:'var(--text3)',fontFamily:'var(--mono)',textAlign:'right',paddingRight:'12px'}},'AMOUNT')),
+  billRows,
+  nExB?e('div',{style:{padding:'5px 26px',fontSize:'9px',fontFamily:'var(--mono)',color:'#92400e',background:'#fffbeb'}},nExB+' of '+bills.length+' bills excluded \u00b7 \u20b9'+fmt(st.skippedBills||0)+' removed from this party\u2019s projection'):null));}
 
 function SecH(pr){var cells=[e('div',{key:'n',style:{padding:'10px 16px',display:'flex',alignItems:'center',gap:'8px',borderRight:'1px solid var(--border)',fontSize:'13px',fontWeight:700,color:pr.color}},e('span',{style:{fontSize:'10px',transform:pr.open?'rotate(90deg)':'',transition:'transform 0.15s',display:'inline-block'}},'\u25B6'),pr.label)];
 for(var i=0;i<pr.mc;i++)cells.push(e('div',{key:'m'+i,className:'num',style:{padding:'10px 10px',textAlign:'right',fontSize:'13px',fontWeight:700,color:pr.color,borderRight:'1px solid var(--border)'}},fmt(pr.monthly[i])));
@@ -1517,36 +1545,41 @@ var sPaySort=useState('tot_desc'),paySort=sPaySort[0],setPaySort=sPaySort[1];
 var sPayModal=useState(null),payModal=sPayModal[0],setPayModal=sPayModal[1];
 // Seed from the shared MongoDB overrides (pr.overrides) when available, else fall
 // back to this browser's localStorage (offline / file-upload mode).
-var __seedOvr=(pr.overrides&&(pr.overrides.daysOverrides||pr.overrides.excluded))?pr.overrides:savedOvr;
+var __seedOvr=(pr.overrides&&(pr.overrides.daysOverrides||pr.overrides.excluded||pr.overrides.excludedBills))?pr.overrides:savedOvr;
 var sDO=useState(__seedOvr&&__seedOvr.daysOverrides||{}),dO=sDO[0],sDOv=sDO[1];
 var sEx=useState(__seedOvr&&__seedOvr.excluded||{}),ex=sEx[0],sExp=sEx[1];
+// Per-bill exclusions: drop one invoice from the projection, party stays in.
+var sExB=useState(__seedOvr&&__seedOvr.excludedBills||{}),exB=sExB[0],sExB2=sExB[1];
 var sGO=useState(savedOvr&&savedOvr.groupOpen||{}),gO=sGO[0],sGOp=sGO[1];
 // Persist on any change: to the shared Mongo store (so everyone sees the same
 // data) when API-backed, and always to localStorage as an offline fallback.
-function saveOverridesToServer(newDO,newEx){
+function saveOverridesToServer(newDO,newEx,newEB){
   try{if(window.__cdcFromApi&&window.__cdcApiBase!==undefined){
-    fetch((window.__cdcApiBase||'')+'/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex})}).catch(function(){});
+    fetch((window.__cdcApiBase||'')+'/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB})}).catch(function(){});
   }}catch(e){}}
-function persistOverrides(newDO,newEx){
-  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,savedAt:new Date().toISOString()}));}}catch(e){}
-  saveOverridesToServer(newDO,newEx);}
+function persistOverrides(newDO,newEx,newEB){
+  try{if(window.localStorage){localStorage.setItem('cdc_pcf_overrides',JSON.stringify({daysOverrides:newDO||dO,excluded:newEx||ex,excludedBills:newEB||exB,savedAt:new Date().toISOString()}));}}catch(e){}
+  saveOverridesToServer(newDO,newEx,newEB);}
 // Save overrides as downloadable JSON
 function saveOverridesJSON(){
-  var obj={daysOverrides:dO,excluded:ex,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
+  var obj={daysOverrides:dO,excluded:ex,excludedBills:exB,savedAt:new Date().toISOString(),asOfDate:data.asOfDate?data.asOfDate.toISOString():null};
   var blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download='cdc_pcf_overrides.json';a.click();URL.revokeObjectURL(url);}
 // Load overrides from uploaded JSON
 function loadOverridesJSON(file){
   file.text().then(function(t){try{var obj=JSON.parse(t);
-    if(obj.daysOverrides){sDOv(obj.daysOverrides);persistOverrides(obj.daysOverrides,obj.excluded);}
+    if(obj.excludedBills)sExB2(obj.excludedBills);
+    if(obj.daysOverrides){sDOv(obj.daysOverrides);persistOverrides(obj.daysOverrides,obj.excluded,obj.excludedBills);}
     if(obj.excluded){sExp(obj.excluded);}
   }catch(e){alert('Invalid overrides file: '+e.message);}});}
 
 GRID_COL1=cW;
-function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null);return x;});}
-function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x);return x;});}
+function onDC(p,n){sDOv(function(v){var x=Object.assign({},v);x[p]=n;persistOverrides(x,null,null);return x;});}
+function onTE(p){sExp(function(v){var x=Object.assign({},v);if(x[p])delete x[p];else x[p]=true;persistOverrides(null,x,null);return x;});}
+// Toggle a single bill in/out of the projection.
+function onBillEx(k){sExB2(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;persistOverrides(null,null,x);return x;});}
 function tG(k){sGOp(function(v){var x=Object.assign({},v);if(x[k])delete x[k];else x[k]=true;return x;});}
-var __pd=projDerived(data,pr,dO,ex);var ed=__pd.ed;pva=__pd.pva;var mos=ed.projMonths;
+var __pd=projDerived(data,pr,dO,ex,exB);var ed=__pd.ed;pva=__pd.pva;var mos=ed.projMonths;
 var tI=ed.projInM.reduce(function(a,b){return a+b;},0),tO=ed.projOutM.reduce(function(a,b){return a+b;},0),tIE=ed.projIndExp.reduce(function(a,b){return a+b;},0),tN=ed.projNetM.reduce(function(a,b){return a+b;},0);
 
 function gGC(p,ty){var ch=getChain(p,ed.xd||{groups:{},ledgers:{}});var rt=ty==='d'?'Sundry Debtors':'Sundry Creditors';
@@ -1570,7 +1603,7 @@ e('div',{style:{padding:'7px 12px 7px '+ind+'px',display:'flex',alignItems:'cent
 c.mo.map(function(v,i){return e('div',{key:'m'+i,className:'num',style:{padding:'7px 10px',textAlign:'right',fontSize:'11.5px',fontWeight:600,color:v===0?'var(--dimnum)':clr,borderRight:'1px solid var(--border)'}},fmt(v));}),
 e('div',{className:'num',style:{padding:'7px 10px',textAlign:'right',fontSize:'11.5px',fontWeight:600,color:gt===0?'var(--dimnum)':clr,background:'var(--totalBg)'}},fmt(gt))));
 if(go)rows=rows.concat(rGN(c,gk,dep+1,clr,bg,af,as,isSr));});
-sp.forEach(function(p){rows.push(e(ProjRow,{key:pfx+'_p_'+p,name:p,monthly:af[p]||[0,0,0],stats:as[p],mc:mc,excluded:!!ex[p],onDC:onDC,onTE:onTE}));});return rows;}
+sp.forEach(function(p){rows.push(e(ProjRow,{key:pfx+'_p_'+p,name:p,monthly:af[p]||[0,0,0],stats:as[p],mc:mc,excluded:!!ex[p],exBills:exB,onDC:onDC,onTE:onTE,onBillEx:onBillEx}));});return rows;}
 
 var exDC=Object.keys(ed.excluded.debtors).length,exCC=Object.keys(ed.excluded.creditors).length;
 var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(--mono)',fontWeight:600,color:'var(--text3)',borderRight:'1px solid var(--border)',borderBottom:'2px solid var(--border2)'};
