@@ -22,6 +22,16 @@
                    -FromDate 20250401 -ToDate 20260716 -Branch ahm `
                    -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26"
 
+    RUN (which companies/years does this Tally hold?):
+        powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -ListCompanies
+
+    RUN (back-fill ONE old financial year - note -Historical):
+        powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
+                   -Historical -FromDate 20150401 -ToDate 20160331 -Branch kol `
+                   -Company "CDC PRINTERS 2015-16" `
+                   -IngestUrl "https://your-api.onrender.com" -IngestToken "SECRET"
+        (for every year in one go, use run_backfill.ps1 instead)
+
     RUN (daily incremental - just yesterday/today, appended into Mongo):
         powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
                    -FromDate 20260716 -ToDate 20260716 -Branch ahm `
@@ -39,6 +49,9 @@ param(
     [string]$IngestToken = "",           # shared secret; sent as x-ingest-token header
     [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
+    [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
+                                         #   instead of replacing the live one (see run_backfill.ps1)
+    [switch]$ListCompanies,              # print the companies this Tally knows about, then exit
     [switch]$DryRun,                     # incremental: print the plan, don't pull detail or post
     [int]$MinLedgers = 50,               # safety floor: abort if the company returns fewer ledgers
     [string]$VoucherNos = ""             #   (means it isn't loaded in this Tally). Set 0 to disable.
@@ -47,6 +60,16 @@ param(
                                          # each one's date, re-pulls just those, upserts via -IngestUrl.
 
 $ErrorActionPreference = "Stop"
+
+# ---- guard: historical pulls must never drive the incremental machinery ----
+# ALTERID is a per-COMPANY counter and sync_state stores one high-water mark per
+# BRANCH. Running -Incremental against an old financial-year company would write
+# that company's alterIds into the branch's high-water mark, and the next live
+# sync would then skip every real change below it. A back-fill is always a full
+# pull that upserts by GUID.
+if ($Historical -and $Incremental) {
+    throw "-Historical cannot be combined with -Incremental: an old company's ALTERID counter would corrupt the branch's sync high-water mark. Use a full pull (-Historical -FromDate ... -ToDate ...)."
+}
 
 # Windows PowerShell 5.1 defaults to TLS 1.0/1.1, but modern hosts (Render, Atlas
 # API, etc.) require TLS 1.2+. Without this, HTTPS calls fail with "Could not
@@ -517,6 +540,52 @@ function Invoke-Targeted {
 }
 
 # ======================================================================
+# COMPANY DISCOVERY - which years does this Tally actually hold?
+# ======================================================================
+# A multi-year back-fill needs the EXACT company name for each financial year
+# (CDC keeps one company per FY). Guessing them is how a back-fill silently pulls
+# nothing, so ask Tally. Run this first, then feed the names to run_backfill.ps1.
+if ($ListCompanies) {
+    $companyPayload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
+  <TYPE>Collection</TYPE><ID>CompanyList</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="CompanyList" ISMODIFY="No">
+        <TYPE>Company</TYPE>
+        <FETCH>NAME,STARTINGFROM,ENDINGAT,BOOKSFROM</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+    [xml]$cx = Post-Tally $companyPayload
+    $rows = @()
+    foreach ($c in $cx.SelectNodes("//COMPANY")) {
+        $nm = xval $c.NAME; if (-not $nm) { continue }
+        $rows += [PSCustomObject]@{
+            Company = $nm
+            From    = xval $c.STARTINGFROM
+            Books   = xval $c.BOOKSFROM
+            To      = xval $c.ENDINGAT
+        }
+    }
+    if ($rows.Count -eq 0) {
+        Write-Warning "Tally returned no companies. Only companies known to THIS Tally installation are listed - open the older years' companies first (Alt+F3 > Select Company)."
+    } else {
+        Write-Host ("Companies known to Tally at {0}:" -f $TallyUrl)
+        $rows | Sort-Object Company | Format-Table -AutoSize | Out-String | Write-Host
+        Write-Host "Feed the ones you want into run_backfill.ps1 -Companies 'FY=Exact Company Name', e.g."
+        Write-Host "  -Companies '2015-16=CDC PRINTERS 2015-16','2016-17=CDC PRINTERS 2016-17'"
+    }
+    return
+}
+
+# ======================================================================
 # STEP 1 - MASTERS (ledgers + groups)
 # ======================================================================
 Write-Host "Pulling masters..."
@@ -700,8 +769,12 @@ function To-Json($obj, [int]$depth) {
     return $j
 }
 
-$masterPath = Join-Path $OutDir ("{0}_Master.json"       -f $Branch)
-$txnsPath   = Join-Path $OutDir ("{0}_Transactions.json" -f $Branch)
+# A historical pull is one of MANY (one per financial year), so its files are
+# stamped with the range - otherwise each year's export would overwrite the last
+# one, and the live daily export along with it.
+$fileTag = if ($Historical) { "{0}_{1}_to_{2}" -f $Branch, $FromDate, $ToDate } else { $Branch }
+$masterPath = Join-Path $OutDir ("{0}_Master.json"       -f $fileTag)
+$txnsPath   = Join-Path $OutDir ("{0}_Transactions.json" -f $fileTag)
 
 # Write master. ConvertTo-Json emits an empty ordered dict as {} correctly.
 [System.IO.File]::WriteAllText($masterPath, (To-Json $masterObj 6), (New-Object System.Text.UTF8Encoding($false)))
@@ -732,6 +805,10 @@ if ($IngestUrl) {
         master  = $masterObj
         vouchers= $txnsOut.ToArray()
     }
+    # Back-fill: this company's ledger master is the hierarchy as it stood in that
+    # year. 'merge' keeps the live one intact and only files the ledgers Tally no
+    # longer has, so these old vouchers still classify. See server/ingest.js.
+    if ($Historical) { $payload.masterMode = 'merge' }
     $body = $payload | ConvertTo-Json -Depth 12 -Compress
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
@@ -742,8 +819,16 @@ if ($IngestUrl) {
     } catch {
         Write-Warning ("  Ingest failed: {0}" -f $_.Exception.Message)
         Write-Warning ("  Files are still on disk at {0} - push later with server/loader.js" -f $OutDir)
+        # A back-fill year that never reached Mongo must not look like a success, or
+        # run_backfill.ps1 would tick it off and leave a silent hole in the history.
+        if ($Historical) { exit 3 }
     }
 } else {
     Write-Host "No -IngestUrl given: files written locally only."
-    Write-Host "Push them from an internet-connected machine with: node server/loader.js"
+    if ($Historical) {
+        Write-Host ("Push them from an internet-connected machine with: node server/loader.js --dir <dir> --branch {0} --historical" -f $Branch)
+        Write-Host ("  (--historical is REQUIRED for an old-year export, and loader.js expects the files named {0}_Master.json / {0}_Transactions.json - rename or pass one year at a time.)" -f $Branch)
+    } else {
+        Write-Host "Push them from an internet-connected machine with: node server/loader.js"
+    }
 }

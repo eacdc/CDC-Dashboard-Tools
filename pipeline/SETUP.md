@@ -53,6 +53,90 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -FromDate 20250401 -T
 
 A full year is ~250 day requests (~a few minutes; run off-hours — 11 users share that server).
 
+## B2. Multi-year backfill (older financial years, e.g. 2015-16 onwards)
+
+CDC keeps **one Tally company per financial year**, so history is pulled year by
+year. `run_backfill.ps1` walks that loop; it is resumable, and it will not disturb
+the live sync.
+
+**Step 0 — ask Tally which years it actually holds** (only *open* companies answer):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -ListCompanies
+```
+
+**Step 1 — dry run**, to check the FY → company-name mapping before pulling anything:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_backfill.ps1 -Branch kol -FromFY 2015 -ToFY 2024 -Plan
+```
+
+Names default to `CDC PRINTERS {FY}` (→ `CDC PRINTERS 2015-16`). Override the odd
+year out with `-Companies "2019-20=CDC PRINTERS PVT LTD 2019-20"`.
+
+**Step 2 — run it.** One Tally request per day of history, so a decade is **hours,
+not minutes**. Run it off-hours, and expect to do it in sittings — finished years
+are recorded in `tally_export\backfill_state.json` and skipped on the next run.
+
+```powershell
+$env:CDC_INGEST_URL   = "https://YOUR-API-URL"
+$env:CDC_INGEST_TOKEN = "some-long-random-string"
+powershell -ExecutionPolicy Bypass -File .\run_backfill.ps1 -Branch kol -FromFY 2015 -ToFY 2024
+```
+
+Tally only answers for the companies **currently open** in it. If a year's company
+isn't loaded, that year aborts on the `-MinLedgers` safety floor and is *not* marked
+done — open it (Alt+F3 → Select Company) and re-run. Run once per branch, on the box
+that holds that branch's companies.
+
+### What makes a backfill safe
+
+- **The live ledger master is never overwritten.** A `-Historical` pull sends
+  `masterMode: 'merge'`, so the old company's ledgers land in separate
+  `histLedgers`/`histGroups` fields. Reads union them with the live master, **live
+  winning** — so old-only parties still classify as debtor/creditor, while parties
+  opened since 2015 keep their current group. An ordinary sync the next morning
+  leaves the backfilled names alone.
+- **The incremental sync is untouched.** `-Historical` refuses to combine with
+  `-Incremental` (an old company's ALTERID counter would poison the branch's
+  high-water mark) and never writes `sync_state`.
+- **Nothing is deleted.** Backfill vouchers upsert on their Tally GUID, which is
+  per company — so old years can't collide with current ones, and re-running a year
+  is a no-op. The incremental sync's deletion reconcile is scoped to the dates it
+  actually scanned, so it will never delete backfilled history.
+- **Offline Tally box?** Drop `-IngestUrl`; each year is written to
+  `tally_export\<branch>_<from>_to_<to>_*.json`. Push each year with
+  `node ..\server\loader.js --dir <dir> --branch kol --historical` — the
+  `--historical` flag is what keeps the merge semantics (rename the pair to
+  `<branch>_Master.json` / `<branch>_Transactions.json` per year first).
+
+### Re-syncing the current year for bill-wise allocations
+
+Bill-wise receipt matching needs the `bills` field, which only vouchers pulled with
+the current extractor carry. Vouchers synced before it fall back to date FIFO — no
+wrong numbers, just no bill-level settlement. To upgrade the current year, do a
+plain full pull (**not** `-Historical`: the current company *is* the live master):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -FromDate 20250401 -ToDate 20260331 `
+  -Branch kol -Company "CDC PRINTERS 2025-26" `
+  -IngestUrl "https://YOUR-API-URL" -IngestToken "some-long-random-string"
+```
+
+It upserts on GUID, so existing vouchers are updated in place — the `bills` field is
+added and nothing is duplicated.
+
+### Viewing backfilled years
+
+Fetch **one financial year at a time** (portal date boxes: `01-04-2015` →
+`31-03-2016`). Two reasons:
+
+- The dashboard derives "current FY" from the **latest voucher date in the loaded
+  range**, and its FY toggle only reaches that year and the one before it. Load
+  2015-16 alone and 2015-16 becomes the year on screen.
+- `/api/dataset` returns every voucher in the range in one response. A decade at
+  once is a very large payload for the browser to parse.
+
 ## C. Daily schedule
 
 `run_daily.ps1` auto-detects the push path (API if `CDC_INGEST_URL` is set, else

@@ -8,7 +8,7 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const { getDb, close } = require('./db');
-const { ingest, getSyncState, syncIncremental } = require('./ingest');
+const { ingest, getSyncState, syncIncremental, readMaster } = require('./ingest');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -102,8 +102,11 @@ app.get('/api/dataset', async (req, res) => {
               { projection: { _id: 0, branch: 0, updatedAt: 0, details: 0 } })
         .sort({ date: 1 })
         .toArray();
+      // readMaster unions in ledgers/groups that only ever existed in a back-filled
+      // older financial year, so historical vouchers still classify. Live wins.
+      const hier = readMaster(master);
       out.branches[branch] = {
-        hierarchy: master ? { ledgers: master.ledgers, groups: master.groups, ids: master.ids || {} } : null,
+        hierarchy: hier ? { ledgers: hier.ledgers, groups: hier.groups, ids: hier.ids } : null,
         vouchers,
         lastUpdatedAt,
       };
@@ -141,8 +144,8 @@ app.get('/api/voucher', async (req, res) => {
     // person/email/mobile are stored on the ledger, not the voucher). Only fills
     // gaps, so anything already on the voucher wins.
     if (doc.details) {
-      const master = await db.collection('masters').findOne({ branch }, { projection: { contacts: 1 } });
-      const contacts = master && master.contacts;
+      const master = await db.collection('masters').findOne({ branch }, { projection: { contacts: 1, histContacts: 1 } });
+      const contacts = master && readMaster(master).contacts;
       if (contacts) {
         const key = doc.party || doc.details.partyMailName || doc.details.partyName;
         const c = key && contacts[key];

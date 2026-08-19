@@ -114,7 +114,78 @@ function voucherKey(branch, v) {
   return `${branch}:${v.date}:${v.type}:${v.no}:${contentHash(v)}`;
 }
 
-// payload = { branch, from, to, master:{ledgers,groups}, vouchers:[...] }
+// Union two name->value maps, with `base` winning every collision.
+function unionMaps(base, extra) {
+  const out = {};
+  for (const [k, v] of Object.entries(extra || {})) out[k] = v;
+  for (const [k, v] of Object.entries(base || {})) out[k] = v;
+  return out;
+}
+
+// Build the $set for the masters collection.
+//
+// mode 'replace' (default) is the normal live sync: `ledgers`/`groups`/`contacts`/
+// `ids` are the snapshot of Tally as it stands right now, latest wins.
+//
+// mode 'merge' is a historical back-fill from an OLD financial-year company. Its
+// ledger list is Tally as it stood back then, so it must never land in the live
+// fields — a party opened since would vanish and every voucher of theirs would
+// stop classifying as debtor/creditor. Instead the old-only names accumulate in
+// SEPARATE `histLedgers`/`histGroups`/`histContacts` fields, which the live sync
+// never writes. Reads union the two with the live side winning (see readMaster),
+// so back-filled ledgers survive every future daily sync — a plain merge into the
+// live fields would be wiped by the very next one.
+//
+// `ids` (ledger name -> Tally GUID) is never taken from a historical pull: GUIDs
+// are per company, so an old company's GUID is meaningless against the current one.
+async function masterSet(db, branch, master, mode) {
+  const updatedAt = new Date();
+  if (mode === 'merge') {
+    const cur = (await db.collection('masters').findOne({ branch })) || {};
+    const set = { branch, updatedAt };
+    // Keep only what the live master doesn't already define, so the historical
+    // fields stay small and can never shadow a current mapping even by accident.
+    // hasOwnProperty, not truthiness: a root group's parent is legitimately null,
+    // and those keys ARE defined by the live master.
+    const onlyNew = (incoming, live) => {
+      const out = {};
+      const have = live || {};
+      for (const [k, v] of Object.entries(incoming || {})) {
+        if (!Object.prototype.hasOwnProperty.call(have, k)) out[k] = v;
+      }
+      return out;
+    };
+    set.histLedgers = unionMaps(cur.histLedgers, onlyNew(master.ledgers, cur.ledgers));
+    set.histGroups = unionMaps(cur.histGroups, onlyNew(master.groups, cur.groups));
+    const hc = onlyNew(cleanContacts(master.contacts), cur.contacts);
+    const mergedContacts = unionMaps(cur.histContacts, hc);
+    if (Object.keys(mergedContacts).length) set.histContacts = mergedContacts;
+    return set;
+  }
+  const set = { branch, ledgers: master.ledgers, groups: master.groups, updatedAt };
+  const contacts = cleanContacts(master.contacts);
+  if (contacts) set.contacts = contacts;
+  // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
+  if (master.ids && typeof master.ids === 'object') set.ids = master.ids;
+  return set;
+}
+
+// The hierarchy as the dashboards should see it: the live Tally master, plus any
+// back-filled ledgers/groups that only ever existed in an older financial year.
+// Live always wins. Returns null when the branch has no master at all.
+function readMaster(doc) {
+  if (!doc) return null;
+  return {
+    ledgers: unionMaps(doc.ledgers, doc.histLedgers),
+    groups: unionMaps(doc.groups, doc.histGroups),
+    contacts: unionMaps(doc.contacts, doc.histContacts),
+    ids: doc.ids || {},
+    updatedAt: doc.updatedAt || null,
+  };
+}
+
+// payload = { branch, from, to, master:{ledgers,groups}, vouchers:[...],
+//             masterMode?: 'replace'|'merge' }
 async function ingest(payload) {
   const branch = String(payload.branch || '').toLowerCase();
   if (!VALID_BRANCHES.has(branch)) {
@@ -123,13 +194,13 @@ async function ingest(payload) {
   const db = await getDb();
   const result = { branch, masterUpserted: false, vouchers: 0, dateRange: [payload.from || null, payload.to || null] };
 
-  // 1) Master snapshot (latest wins per branch).
+  // 1) Master snapshot. 'replace' (default) = latest wins per branch, the normal
+  //    live sync. 'merge' = historical back-fill: keep the live hierarchy, only add
+  //    ledgers/groups that Tally no longer has (see mergeMasterMaps).
+  const masterMode = payload.masterMode === 'merge' ? 'merge' : 'replace';
+  result.masterMode = masterMode;
   if (payload.master && payload.master.ledgers && payload.master.groups) {
-    const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
-    const contacts = cleanContacts(payload.master.contacts);
-    if (contacts) set.contacts = contacts;
-    // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
-    if (payload.master.ids && typeof payload.master.ids === 'object') set.ids = payload.master.ids;
+    const set = await masterSet(db, branch, payload.master, masterMode);
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }
@@ -199,12 +270,9 @@ async function syncIncremental(payload) {
   const db = await getDb();
   const result = { branch, masterUpserted: false, replacedDates: 0, upserted: 0, deletedByDate: 0, deletedMissing: 0, lastAlterId: null };
 
+  // Incremental only ever runs against the live company, so the master always replaces.
   if (payload.master && payload.master.ledgers && payload.master.groups) {
-    const set = { branch, ledgers: payload.master.ledgers, groups: payload.master.groups, updatedAt: new Date() };
-    const contacts = cleanContacts(payload.master.contacts);
-    if (contacts) set.contacts = contacts;
-    // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
-    if (payload.master.ids && typeof payload.master.ids === 'object') set.ids = payload.master.ids;
+    const set = await masterSet(db, branch, payload.master, 'replace');
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
   }
@@ -256,4 +324,4 @@ async function syncIncremental(payload) {
   return result;
 }
 
-module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, voucherKey, diffMeta, getSyncState, syncIncremental };
+module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, readMaster, voucherKey, diffMeta, getSyncState, syncIncremental };

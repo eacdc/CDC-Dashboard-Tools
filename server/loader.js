@@ -7,6 +7,9 @@
 //
 // Or push through a running API instead of writing to Mongo directly:
 //   node loader.js --dir ./tally_export --branch ahm --url https://cdc-api.onrender.com --token SECRET
+//
+// Pushing an OLD financial year's export (a back-fill)? Add --historical so the old
+// company's ledger master is merged into the live one instead of replacing it.
 require('./loadEnv');
 const fs = require('fs');
 const path = require('path');
@@ -31,8 +34,12 @@ async function main() {
   const master = JSON.parse(fs.readFileSync(masterPath, 'utf8'));
   const vouchers = JSON.parse(fs.readFileSync(txnsPath, 'utf8'));
   const dates = vouchers.map((v) => v.date).filter(Boolean).sort();
+  // --historical: this export came from an OLD financial-year company, so its master
+  // must not replace the live hierarchy — merge it in instead (see ingest.js).
+  const historical = process.argv.includes('--historical');
   const payload = { branch, from: dates[0] || null, to: dates[dates.length - 1] || null, master, vouchers };
-  console.log(`Loaded ${vouchers.length} vouchers, ${Object.keys(master.ledgers || {}).length} ledgers for "${branch}" (${payload.from}..${payload.to})`);
+  if (historical) payload.masterMode = 'merge';
+  console.log(`Loaded ${vouchers.length} vouchers, ${Object.keys(master.ledgers || {}).length} ledgers for "${branch}" (${payload.from}..${payload.to})${historical ? ' [historical: master merged, not replaced]' : ''}`);
 
   // Double-entry health check: every voucher's ledgers+party_ledgers should sum to ~0.
   // A large imbalance means postings were dropped in extraction (e.g. sales/purchase
