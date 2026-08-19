@@ -563,25 +563,45 @@ if ($ListCompanies) {
   </DESC></BODY>
 </ENVELOPE>
 "@
-    [xml]$cx = Post-Tally $companyPayload
-    $rows = @()
+    $rawXml = Post-Tally $companyPayload
+    $rawPath = Join-Path $OutDir "companies_raw.xml"
+    [System.IO.File]::WriteAllText($rawPath, $rawXml, (New-Object System.Text.UTF8Encoding($false)))
+    [xml]$cx = $rawXml
+    # A COMPANY node carries NAME as BOTH an attribute and a child element, so the
+    # convenient $node.NAME returns the pair and stringifies to "<value> NAME".
+    # Read each field explicitly instead: attribute first, then child element.
+    function CompField($node, [string]$field) {
+        $a = $node.GetAttribute($field)
+        if ($a) { return ($a -replace "[\x00-\x1f]","").Trim() }
+        $e = $node.SelectSingleNode($field)
+        if ($e) { return xval $e }
+        return ""
+    }
+    $rows = @(); $seen = @{}
     foreach ($c in $cx.SelectNodes("//COMPANY")) {
-        $nm = xval $c.NAME; if (-not $nm) { continue }
+        $nm = CompField $c "NAME"
+        # Skip the collection's own echo node and any duplicate.
+        if (-not $nm -or $nm -eq "COMPANY" -or $seen.ContainsKey($nm)) { continue }
+        $seen[$nm] = $true
         $rows += [PSCustomObject]@{
             Company = $nm
-            From    = xval $c.STARTINGFROM
-            Books   = xval $c.BOOKSFROM
-            To      = xval $c.ENDINGAT
+            From    = CompField $c "STARTINGFROM"
+            Books   = CompField $c "BOOKSFROM"
+            To      = CompField $c "ENDINGAT"
         }
     }
     if ($rows.Count -eq 0) {
-        Write-Warning "Tally returned no companies. Only companies known to THIS Tally installation are listed - open the older years' companies first (Alt+F3 > Select Company)."
+        Write-Warning ("Tally returned no companies. Raw reply saved to {0} for inspection." -f $rawPath)
     } else {
-        Write-Host ("Companies known to Tally at {0}:" -f $TallyUrl)
+        Write-Host ("Companies OPEN in Tally at {0}:" -f $TallyUrl)
         $rows | Sort-Object Company | Format-Table -AutoSize | Out-String | Write-Host
-        Write-Host "Feed the ones you want into run_backfill.ps1 -Companies 'FY=Exact Company Name', e.g."
-        Write-Host "  -Companies '2015-16=CDC PRINTERS 2015-16','2016-17=CDC PRINTERS 2016-17'"
     }
+    Write-Host "NOTE: this lists only the companies currently OPEN in Tally, not every company on disk."
+    Write-Host "      A year missing here cannot be pulled - open it first (Alt+F3 > Select Company), then re-run."
+    Write-Host ("      Raw reply: {0}" -f $rawPath)
+    Write-Host ""
+    Write-Host "Feed the ones you want into run_backfill.ps1 -Companies 'FY=Exact Company Name', e.g."
+    Write-Host "  -Companies '2023-24=CDC PRINTERS 2023-24','2024-25=CDC PRINTERS 2024-25'"
     return
 }
 
