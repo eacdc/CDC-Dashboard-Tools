@@ -92,6 +92,20 @@ function cleanVoucher(v) {
   };
   const details = cleanDetails(v.details);
   if (details) out.details = details;
+  // Bill-wise allocations (bill reference each posting is booked against). Optional;
+  // only present on vouchers that carry BILLALLOCATIONS in Tally. Powers the portal's
+  // true bill-wise receipt matching (settle the exact bill, not oldest-first FIFO).
+  if (Array.isArray(v.bills) && v.bills.length) {
+    const bills = v.bills
+      .map((b) => ({
+        ledger: String((b && b.ledger) || ''),
+        ref: String((b && b.ref) || ''),
+        type: String((b && b.type) || ''),
+        amount: Number(b && b.amount) || 0,
+      }))
+      .filter((b) => b.ref && b.ledger);
+    if (bills.length) out.bills = bills;
+  }
   return out;
 }
 

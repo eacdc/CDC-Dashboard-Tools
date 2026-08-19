@@ -76,7 +76,18 @@
 
 ### Outstanding Calculation
 - **Outstanding = Opening Bills + This Year's Invoices − Receipts** (from vouchers)
-- Combined FIFO: opening bills + year invoices sorted chronologically, receipts matched against oldest first
+- **Bill-wise first, then FIFO fallback** (two-pass `combinedFIFO`):
+  - **Pass 1 (bill-wise):** a receipt that names the bill it settles (Tally `Agst Ref`
+    in `BILLALLOCATIONS`) is applied to THAT exact bill, honouring the Tally posting.
+  - **Pass 2 (date FIFO):** leftover money (no bill reference, `On Account`/`Advance`,
+    or an unknown reference) is matched oldest-bill-first, as before.
+- **Bill references:** invoices seed the bill map by their `New Ref` name; opening bills
+  by their CSV `Ref. No.`; receipts settle by their `Agst Ref` name. Shared namespace
+  (e.g. `CDC/7037/25-26`).
+- **Backward compatible:** vouchers synced before bill capture carry no `bills`, so every
+  receipt falls through to Pass 2 — identical to the previous pure-FIFO engine.
+- Requires the pipeline (`TallyToJson.ps1` → `Collect-BillAllocs`) and API
+  (`ingest.js` whitelist) to carry the `bills:[{ledger,ref,type,amount}]` voucher field.
 
 ### Receipt Sources (Debtor)
 1. Bank Receipt / Receipt vouchers (direct)

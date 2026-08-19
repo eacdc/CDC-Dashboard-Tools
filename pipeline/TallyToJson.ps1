@@ -116,6 +116,36 @@ function Collect-Postings($node, $list) {
         if ($c.HasChildNodes) { Collect-Postings $c $list }
     }
 }
+# Recursively gather every bill-wise allocation attached to a ledger posting.
+# Tally nests these as *LEDGERENTRIES.LIST > BILLALLOCATIONS.LIST, one per bill the
+# posting touches. Each carries the bill reference NAME (e.g. "CDC/7037/25-26"), the
+# BILLTYPE ("New Ref" = a new bill the invoice creates, "Agst Ref" = settles an
+# existing bill, "Advance"/"On Account" = unlinked), and the signed AMOUNT applied to
+# that bill. Capturing these lets the dashboard settle a receipt against the exact
+# bill it was posted against, instead of guessing oldest-first (date FIFO).
+function Collect-BillAllocs($node, $list) {
+    foreach ($c in $node.ChildNodes) {
+        if ($c.NodeType -ne [System.Xml.XmlNodeType]::Element) { continue }
+        $nm = $c.Name
+        if ($nm -like "*LEDGERENTRIES.LIST") {
+            $ln = xval $c.LEDGERNAME
+            if ($ln) {
+                foreach ($ba in $c.SelectNodes("BILLALLOCATIONS.LIST")) {
+                    $bn = xval $ba.NAME
+                    if (-not $bn) { continue }
+                    [void]$list.Add([PSCustomObject]@{
+                        ledger = $ln
+                        ref    = $bn
+                        type   = xval $ba.BILLTYPE
+                        amount = ToAmount (xval $ba.AMOUNT)   # raw Tally sign: -ve = Dr, +ve = Cr
+                    })
+                }
+                continue   # leaf posting - its bills are captured; don't descend further
+            }
+        }
+        if ($c.HasChildNodes) { Collect-BillAllocs $c $list }
+    }
+}
 # ---- full voucher detail (for the printable invoice / journal PDF) -----------
 # Tally's Day Book XML export already returns the complete voucher tree - the
 # dashboards only ever consumed the ledger amounts. This block harvests the rest
@@ -306,7 +336,11 @@ function ConvertTo-VoucherObject($v) {
         }
     }
     $details = Get-VoucherDetails $v
-    return [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; details=$details; guid=$guid }
+    $billAllocs = New-Object System.Collections.ArrayList
+    Collect-BillAllocs $v $billAllocs
+    $out = [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; details=$details; guid=$guid }
+    if ($billAllocs.Count -gt 0) { $out.bills = $billAllocs.ToArray() }
+    return $out
 }
 # Pull one day's Day Book, return an ArrayList of voucher objects.
 function Get-DayVouchers([string]$ymd) {
