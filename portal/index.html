@@ -1102,6 +1102,11 @@ if(!isPurchVt(vt)){var ymKey=v.date.substring(0,6);for(var l in lds)if(isIE(l)&&
 // through to PASS 2, so behaviour is identical to the previous pure-FIFO engine.
 function combinedFIFO(openBills,yearInvs,yearRcts){
   var billMap={},anonInvs=[],da=[],rcts=[];
+  // Credit that has no bill to sit on: a return or adjustment booked against a
+  // reference this party holds no open bill for, or one larger than the bill
+  // holds. It is still money the party does not owe, so it is collected here and
+  // released into PASS 2 as advance credit instead of quietly disappearing.
+  var surplus=0;
   // Seed a bill (keyed by its Tally reference where available; otherwise anonymous
   // so it can still be matched by date in PASS 2). Same ref twice -> merge, keep the
   // earliest date so the credit period isn't understated.
@@ -1114,7 +1119,7 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   function addBill(ref,d,amt,lbl){
     var key=__BW?ref:'';
     if(key&&billMap.hasOwnProperty(key)){if(d<billMap[key].d)billMap[key].d=d;billMap[key].r+=amt;return;}
-    if(amt<=0.5)return;
+    if(amt<=0.5){if(amt<-0.5)surplus+=-amt;return;}
     if(key){billMap[key]={d:d,r:amt,ref:key};return;}
     anonInvs.push({d:d,r:amt,ref:lbl||ref||'INV'});
   }
@@ -1149,13 +1154,20 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
     } else {fb.push({date:rc.date,amt:rc.amt});}
   }
 
+  // A bill can be credited for more than it holds - a credit note larger than the bill,
+  // or an adjustment posted against a reference that had already been settled. That
+  // surplus is real money that must still reduce what the party owes, so recover it
+  // here: collecting the open bills below keeps only r > 0.5, which would let a
+  // negative balance vanish and leave the party owing more than it does.
+  for(var kS in billMap){if(billMap[kS].r<-0.5){surplus+=-billMap[kS].r;billMap[kS].r=0;}}
+
   // PASS 2 — date FIFO over whatever bills are still open.
   var q=[];
   for(var key in billMap){if(billMap[key].r>0.5)q.push({d:billMap[key].d,r:billMap[key].r,ref:billMap[key].ref});}
   for(var i=0;i<anonInvs.length;i++){if(anonInvs[i].r>0.5)q.push({d:anonInvs[i].d,r:anonInvs[i].r,ref:anonInvs[i].ref});}
   q.sort(function(a,b){return a.d<b.d?-1:a.d>b.d?1:0;});
   fb.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
-  var adv=0;
+  var adv=surplus;// over-credited bills behave like an advance against what is left
   for(var i=0;i<fb.length;i++){var ra=fb[i].amt,rd=parseDate(fb[i].date);
     for(var qi=0;qi<q.length&&ra>0.5;qi++){
       if(q[qi].r<0.5)continue;
