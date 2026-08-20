@@ -46,6 +46,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <body>
 <div id="root"></div>
 <script>
+// Receipt-allocation mode, shared by every namespace below. Set from the portal's
+// Bill-wise / FIFO toggle; read by the projection engine and stamped onto anything
+// exported, so a downloaded file always says which engine produced it.
+function __allocMode(){try{return window.__cdcAllocMode==='fifo'?'fifo':'billwise';}catch(e){return 'billwise';}}
+function __allocTag(){return __allocMode()==='fifo'?'_FIFO':'_BillWise';}
+function __allocLabel(){return __allocMode()==='fifo'?'FIFO (oldest bill first)':'Bill-wise (Tally Agst Ref)';}
 (function(){
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
 var APP_VERSION='v1.12.1';var APP_BUILD='13-Jun-2026';
@@ -1014,7 +1020,12 @@ var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 // Bill-wise allocations for a party posting on this voucher, filtered to the wanted
 // BILLTYPE(s). Returns [{ref,type,amt}] with positive amounts. Empty when the voucher
 // carries no bill data (older synced vouchers) -> engine falls back to date FIFO.
-function _bills(v,party,types){var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
+// Allocation mode. 'billwise' (default) honours Tally's bill references; 'fifo'
+// drops them here so every receipt falls through to PASS 2 and the engine behaves
+// exactly like the pre-bill-wise one -- which is what makes the two comparable
+// on the SAME data, without re-syncing anything.
+var __BW=(window.__cdcAllocMode||'billwise')!=='fifo';
+function _bills(v,party,types){if(!__BW)return[];var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
 // IE diagnostics — open DevTools Console and read window.__ieDebug to see what was found / skipped.
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
@@ -1064,18 +1075,22 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   // Seed a bill (keyed by its Tally reference where available; otherwise anonymous
   // so it can still be matched by date in PASS 2). Same ref twice -> merge, keep the
   // earliest date so the credit period isn't understated.
-  function addBill(ref,d,amt){
+  // lbl keeps the bill's printed reference even when it is filed anonymously.
+  // In FIFO mode nothing is keyed by reference, so same-ref bills stay separate
+  // exactly as the pre-bill-wise engine left them.
+  function addBill(ref,d,amt,lbl){
     if(amt<=0.5)return;
-    if(ref&&billMap.hasOwnProperty(ref)){if(d<billMap[ref].d)billMap[ref].d=d;billMap[ref].r+=amt;}
-    else if(ref){billMap[ref]={d:d,r:amt,ref:ref};}
-    else{anonInvs.push({d:d,r:amt,ref:'INV'});}
+    var key=__BW?ref:'';
+    if(key&&billMap.hasOwnProperty(key)){if(d<billMap[key].d)billMap[key].d=d;billMap[key].r+=amt;}
+    else if(key){billMap[key]={d:d,r:amt,ref:key};}
+    else{anonInvs.push({d:d,r:amt,ref:lbl||ref||'INV'});}
   }
   for(var i=0;i<openBills.length;i++){var b=openBills[i];
     if(b.isAdvance){rcts.push({date:b.date,amt:b.amount,alloc:null});}// Advance = pre-payment
-    else{addBill(b.refNo||'',b.date,b.amount);}}
+    else{addBill(b.refNo||'',b.date,b.amount,b.refNo||'OB');}}
   for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];
     var ib=inv.bills&&inv.bills.length?inv.bills:null;
-    if(ib){var at=0;for(var k=0;k<ib.length;k++){addBill(ib[k].ref,inv.date,ib[k].amt);at+=ib[k].amt;}
+    if(ib){var at=0;for(var k=0;k<ib.length;k++){addBill(ib[k].ref,inv.date,ib[k].amt,inv.ref||'INV');at+=ib[k].amt;}
       var rem=inv.amt-at;if(rem>0.5)anonInvs.push({d:inv.date,r:rem,ref:inv.ref||'INV'});}
     else{anonInvs.push({d:inv.date,r:inv.amt,ref:inv.ref||'INV'});}}
   for(var i=0;i<(yearRcts||[]).length;i++)rcts.push(yearRcts[i]);
@@ -1308,6 +1323,7 @@ try{window.cdcDiag=function(name){
   function sum(a){return Math.round((a||[]).reduce(function(s,x){return s+(x.amt||0);},0));}
   var pays=rec.payments||rec.receipts||[];var openT=sum(rec.opening),invT=sum(rec.invoices),payT=sum(pays);
   console.log('%c'+side+' — '+name,'font-weight:bold;color:#0891b2;font-size:14px');
+  console.log('Allocation mode :',__allocLabel(),'(toggle it in the top bar)');
   console.log('Opening bills   :',openT,'('+(rec.opening||[]).length+' bills)',rec.opening);
   console.log('This-yr invoices:',invT,'('+(rec.invoices||[]).length+')',rec.invoices);
   console.log('This-yr '+(side==='PAYABLE'?'payments ':'receipts ')+':',payT,'('+pays.length+')',pays);
@@ -1877,13 +1893,13 @@ function exportRecXLS(){
   var hdr=['Customer Group','Customer','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
   var rows=[];for(var p in partyRecs){var rec=partyRecs[p];rec.bills.forEach(function(b){rows.push([rec.grp,p,rec.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabels[b.bucket],Math.round(b.amt)]);});}
   var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
-  var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Receivables');XLSX.writeFile(wb,'CDC_Receivables_'+(recAg==='due'?'DueDate':'BillDate')+'.xlsx');
+  var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Receivables');XLSX.writeFile(wb,'CDC_Receivables_'+(recAg==='due'?'DueDate':'BillDate')+__allocTag()+'.xlsx');
 }
 return e('div',{style:{padding:'0'}},
 e('div',{style:{padding:'14px 24px',background:'var(--bg2)',borderBottom:'2px solid var(--amber)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'10px'}},
 e('div',null,
 e('div',{style:{fontSize:'14px',fontWeight:700,color:'var(--amber)',fontFamily:'var(--mono)'}},'RECEIVABLES \u00B7 as of '+(asOf.toLocaleDateString?asOf.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'today')),
-e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid bills \u2265 \u20B95,000 \u00B7 stale and excluded parties included \u00B7 Aging by '+(recAg==='due'?'predicted DUE DATE':'BILL DATE'),
+e('div',{style:{fontSize:'11px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'4px'}},'All unpaid bills \u2265 \u20B95,000 \u00B7 stale and excluded parties included \u00B7 Aging by '+(recAg==='due'?'predicted DUE DATE':'BILL DATE')+' \u00B7 '+__allocLabel(),
   woRecCnt?e('span',{onClick:function(){setShowWO(!showWO);},title:'Bills marked NOT receivable (bad debt / phantom). Click to '+(showWO?'hide':'show and restore'),style:{marginLeft:'10px',cursor:'pointer',background:showWO?'#dc2626':'#fee2e2',color:showWO?'#fff':'#dc2626',padding:'2px 8px',borderRadius:'10px',fontSize:'10px',fontWeight:700}},(showWO?'\u25BE ':'\u25B8 ')+woRecCnt+' written off \u00B7 \u20B9'+fmt(woRecTot)):null)),
 e('div',{style:{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}},
 e('div',{style:{display:'flex',gap:'2px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},
@@ -2012,7 +2028,7 @@ function exportPayXLS(){
   var hdr=['Vendor Group','Vendor','Eff. Days','Bill Date','Ref','Days Old/OD','Bucket','Amount'];
   var rows=[];for(var p in partyRecsP){var rec=partyRecsP[p];rec.bills.forEach(function(b){rows.push([rec.grp,p,rec.effDays,(b.date||'').substring(6,8)+'-'+(b.date||'').substring(4,6)+'-'+(b.date||'').substring(0,4),b.ref,b.age,bucketLabelsP[b.bucket],Math.round(b.amt)]);});}
   var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));ws['!cols']=[{wch:22},{wch:34},{wch:10},{wch:12},{wch:14},{wch:11},{wch:12},{wch:14}];
-  var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Payables');XLSX.writeFile(wb,'CDC_Payables_'+(payAg==='due'?'DueDate':'BillDate')+'.xlsx');
+  var wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Payables');XLSX.writeFile(wb,'CDC_Payables_'+(payAg==='due'?'DueDate':'BillDate')+__allocTag()+'.xlsx');
 }
 return e('div',{style:{padding:'0'}},
 e('div',{style:{padding:'14px 24px',background:'var(--bg2)',borderBottom:'2px solid var(--pink)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'10px'}},
@@ -2180,6 +2196,14 @@ function Portal(){
   var sConsol=useState(null),consolData=sConsol[0],setConsolData=sConsol[1];
   var sProj=useState(null),projData=sProj[0],setProjData=sProj[1];
   var sPB=useState('all'),projBranch=sPB[0],setProjBranch=sPB[1];// Projected view branch: all|kol|ahm
+  // Receipt-allocation mode for the whole Projected app (projection, receivables,
+  // payables, PvA all come off the same combinedFIFO). 'billwise' honours Tally's
+  // bill references; 'fifo' ignores them and reproduces the old oldest-first
+  // engine on the SAME data, so the two can be compared without re-syncing.
+  // Remembered per browser; window.__cdcAllocMode is what the engine actually reads.
+  var sAM=useState((function(){try{return localStorage.getItem('cdc_alloc_mode')==='fifo'?'fifo':'billwise';}catch(e){return 'billwise';}})()),
+      allocMode=sAM[0],setAllocMode=sAM[1];
+  try{window.__cdcAllocMode=allocMode;}catch(e){}
   var sProjOvr=useState(null),projOverrides=sProjOvr[0],setProjOverrides=sProjOvr[1];// shared overrides from MongoDB
   var sAliases=useState({}),aliases=sAliases[0],setAliases=sAliases[1];// shared party name-merge map
   var sAliasUI=useState(false),aliasUI=sAliasUI[0],setAliasUI=sAliasUI[1];// alias editor modal open
@@ -2267,6 +2291,17 @@ function Portal(){
     });
   }
   function rebuildProj(newAsOf){setAsOf(newAsOf);if(built){try{var full=window.CDC_PROJ.build(built.texts,newAsOf);var pd=(projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full;setProjData(pd);}catch(ex){}}}
+  // Switch allocation mode and rebuild the Projected app in place. The raw texts
+  // are already in memory, so this is a recompute -- no re-fetch, no re-sync.
+  function chooseAllocMode(m){
+    if(m===allocMode)return;
+    setAllocMode(m);
+    try{window.__cdcAllocMode=m;localStorage.setItem('cdc_alloc_mode',m);}catch(e){}
+    if(built){try{
+      var full=window.CDC_PROJ.build(built.texts,asOf);
+      setProjData((projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full);
+    }catch(ex){setErr((ex&&ex.message||ex)+'\n'+(ex&&ex.stack||''));}}
+  }
   function chooseProjBranch(b){setProjBranch(b);if(projData&&projData._projRaw){try{setProjData(window.CDC_PROJ.buildForBranch(projData._projRaw,b));}catch(ex){}}}
   // Save the shared alias map, then rebuild both views so the merge takes effect at once.
   function saveAliases(newMap){window.__cdcAliases=newMap;setAliases(newMap);
@@ -2334,6 +2369,7 @@ function Portal(){
       navBtn('proj','📈 Projected (Projection / Receivables / Payables / PvA)','#be185d'),
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
       active==='proj'?e('div',{style:{display:'flex',gap:'2px',marginLeft:'2px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){if(projBranch!==__b)chooseProjBranch(__b);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:projBranch===__b?'#be185d':'#f1f5f9',color:projBranch===__b?'#fff':'#475569'}},__lbl);})):null,
+      active==='proj'?e('div',{title:'How receipts are matched to bills. Bill-wise settles the exact bill Tally booked the receipt against (Agst Ref); FIFO ignores those references and clears the oldest bill first, as the dashboard did before.',style:{display:'flex',gap:'2px',marginLeft:'6px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},[['billwise','🧾 Bill-wise'],['fifo','⏳ FIFO']].map(function(__m){return e('span',{key:__m[0],onClick:function(){chooseAllocMode(__m[0]);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:allocMode===__m[0]?'#7c3aed':'#f1f5f9',color:allocMode===__m[0]?'#fff':'#475569'}},__m[1]);})):null,
       updBadge(),
       e('button',{onClick:function(){setAliasUI(true);},title:'Merge parties renamed in Tally',style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'🔗 Merge names'+(Object.keys(aliases||{}).length?' ('+Object.keys(aliases).length+')':'')),
       e('button',{onClick:reset,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),

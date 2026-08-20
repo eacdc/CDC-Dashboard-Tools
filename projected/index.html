@@ -82,7 +82,11 @@ var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
 // Bill-wise allocations for a party posting on this voucher, filtered to the wanted
 // BILLTYPE(s). Returns [{ref,type,amt}] with positive amounts. Empty when the voucher
 // carries no bill data (older synced vouchers) -> engine falls back to date FIFO.
-function _bills(v,party,types){var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
+// Allocation mode. 'billwise' (default) honours Tally's bill references; 'fifo'
+// drops them here so every receipt falls through to PASS 2 and the engine behaves
+// exactly like the pre-bill-wise one. The portal exposes this as a toggle.
+var __BW=(window.__cdcAllocMode||'billwise')!=='fifo';
+function _bills(v,party,types){if(!__BW)return[];var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
 // IE diagnostics — open DevTools Console and read window.__ieDebug to see what was found / skipped.
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
@@ -132,18 +136,22 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   // Seed a bill (keyed by its Tally reference where available; otherwise anonymous
   // so it can still be matched by date in PASS 2). Same ref twice -> merge, keep the
   // earliest date so the credit period isn't understated.
-  function addBill(ref,d,amt){
+  // lbl keeps the bill's printed reference even when it is filed anonymously.
+  // In FIFO mode nothing is keyed by reference, so same-ref bills stay separate
+  // exactly as the pre-bill-wise engine left them.
+  function addBill(ref,d,amt,lbl){
     if(amt<=0.5)return;
-    if(ref&&billMap.hasOwnProperty(ref)){if(d<billMap[ref].d)billMap[ref].d=d;billMap[ref].r+=amt;}
-    else if(ref){billMap[ref]={d:d,r:amt,ref:ref};}
-    else{anonInvs.push({d:d,r:amt,ref:'INV'});}
+    var key=__BW?ref:'';
+    if(key&&billMap.hasOwnProperty(key)){if(d<billMap[key].d)billMap[key].d=d;billMap[key].r+=amt;}
+    else if(key){billMap[key]={d:d,r:amt,ref:key};}
+    else{anonInvs.push({d:d,r:amt,ref:lbl||ref||'INV'});}
   }
   for(var i=0;i<openBills.length;i++){var b=openBills[i];
     if(b.isAdvance){rcts.push({date:b.date,amt:b.amount,alloc:null});}// Advance = pre-payment
-    else{addBill(b.refNo||'',b.date,b.amount);}}
+    else{addBill(b.refNo||'',b.date,b.amount,b.refNo||'OB');}}
   for(var i=0;i<(yearInvs||[]).length;i++){var inv=yearInvs[i];
     var ib=inv.bills&&inv.bills.length?inv.bills:null;
-    if(ib){var at=0;for(var k=0;k<ib.length;k++){addBill(ib[k].ref,inv.date,ib[k].amt);at+=ib[k].amt;}
+    if(ib){var at=0;for(var k=0;k<ib.length;k++){addBill(ib[k].ref,inv.date,ib[k].amt,inv.ref||'INV');at+=ib[k].amt;}
       var rem=inv.amt-at;if(rem>0.5)anonInvs.push({d:inv.date,r:rem,ref:inv.ref||'INV'});}
     else{anonInvs.push({d:inv.date,r:inv.amt,ref:inv.ref||'INV'});}}
   for(var i=0;i<(yearRcts||[]).length;i++)rcts.push(yearRcts[i]);
