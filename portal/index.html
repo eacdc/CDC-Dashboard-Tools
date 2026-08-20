@@ -2302,6 +2302,78 @@ function Portal(){
       setProjData((projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full);
     }catch(ex){setErr((ex&&ex.message||ex)+'\n'+(ex&&ex.stack||''));}}
   }
+  // Run BOTH allocation engines over the same in-memory data and write a plain-text
+  // report of what moved. The point is the invariant: bill-wise reallocates money
+  // between a party's bills, so every party's TOTAL outstanding must be unchanged.
+  // Anything else in the report is expected movement (which bills stay open, ageing,
+  // payment cycle). Text, not xlsx, so the summary can be pasted into a chat as-is.
+  function compareModes(){
+    if(!built){alert('Fetch the data first.');return;}
+    var prev=allocMode;
+    function buildWith(m){
+      try{window.__cdcAllocMode=m;}catch(e){}
+      var full=window.CDC_PROJ.build(built.texts,asOf);
+      return (projBranch&&projBranch!=='all')?window.CDC_PROJ.buildForBranch(full._projRaw,projBranch):full;
+    }
+    var A,B;
+    try{A=buildWith('fifo').proj;B=buildWith('billwise').proj;}
+    catch(ex){setErr('Compare failed: '+(ex&&ex.message||ex));return;}
+    finally{try{window.__cdcAllocMode=prev;}catch(e){}}
+
+    var L=[],r2=function(n){return Math.round(n||0);};
+    L.push('CDC ALLOCATION MODE COMPARISON  (FIFO vs BILL-WISE)');
+    L.push('as-of '+asOf+'  branch '+(projBranch||'all')+'  generated '+new Date().toISOString().slice(0,19).replace('T',' '));
+    L.push('Same data, same date - only the receipt-to-bill matching differs.');
+    L.push('');
+    var bad=0,moved=0,rows=[];
+    ['debtor','creditor'].forEach(function(side){
+      var key=side==='debtor'?'allDebtorBills':'allCreditorBills';
+      var a=A[key]||{},b=B[key]||{};
+      var names={};for(var p in a)names[p]=1;for(var p in b)names[p]=1;
+      var tA=0,tB=0,nA=0,nB=0;
+      for(var p in names){
+        var x=a[p]||{},y=b[p]||{};
+        var oA=x.outstanding||0,oB=y.outstanding||0;
+        var uA=(x.unpaid||[]).length,uB=(y.unpaid||[]).length;
+        var dA=(x.avgDays==null?-1:x.avgDays),dB=(y.avgDays==null?-1:y.avgDays);
+        tA+=oA;tB+=oB;nA+=uA;nB+=uB;
+        var diff=oB-oA;
+        if(Math.abs(diff)>1){bad++;rows.push({bad:true,side:side,p:p,oA:oA,oB:oB,d:diff,uA:uA,uB:uB,dA:dA,dB:dB});}
+        else if(uA!==uB||dA!==dB){moved++;rows.push({bad:false,side:side,p:p,oA:oA,oB:oB,d:0,uA:uA,uB:uB,dA:dA,dB:dB});}
+      }
+      L.push(side.toUpperCase()+'S');
+      L.push('  total outstanding   FIFO '+r2(tA)+'   BILLWISE '+r2(tB)+'   diff '+r2(tB-tA)+(Math.abs(tB-tA)<=1?'   OK':'   <-- MISMATCH'));
+      L.push('  open bill lines     FIFO '+nA+'   BILLWISE '+nB+'   (bill-wise merges same-reference bills, so fewer lines is normal)');
+      L.push('  parties             '+Object.keys(names).length);
+      L.push('');
+    });
+    L.push('INVARIANT: every party total must match. Parties that do NOT match: '+bad+(bad?'   <-- REPORT THESE':'   OK'));
+    L.push('EXPECTED MOVEMENT: parties whose open bills or payment cycle changed: '+moved);
+    L.push('');
+    L.push('side       party                                    outFIFO      outBILLWISE   diff      billsF billsB  daysF daysB');
+    rows.sort(function(x,y){
+      if(x.bad!==y.bad)return x.bad?-1:1;                       // mismatches first
+      return Math.abs(y.dB-y.dA)-Math.abs(x.dB-x.dA);           // then biggest cycle change
+    });
+    var CAP=300;
+    rows.slice(0,CAP).forEach(function(r){
+      function pad(s,n){s=String(s);return s.length>=n?s.slice(0,n):s+Array(n-s.length+1).join(' ');}
+      function rp(s,n){s=String(s);return s.length>=n?s:Array(n-s.length+1).join(' ')+s;}
+      L.push((r.bad?'!! ':'   ')+pad(r.side,8)+' '+pad(r.p,40)+' '+rp(r2(r.oA),12)+' '+rp(r2(r.oB),13)+' '+rp(r2(r.d),9)+' '+rp(r.uA,6)+' '+rp(r.uB,6)+' '+rp(r.dA,6)+' '+rp(r.dB,5));
+    });
+    if(rows.length>CAP)L.push('... '+(rows.length-CAP)+' more rows not listed');
+
+    var txt=L.join('\n');
+    try{console.log(txt);}catch(e){}
+    var blob=new Blob([txt],{type:'text/plain'});
+    var a2=document.createElement('a');a2.href=URL.createObjectURL(blob);
+    a2.download='CDC_AllocCompare_'+asOf+'_'+(projBranch||'all')+'.txt';
+    document.body.appendChild(a2);a2.click();document.body.removeChild(a2);
+    setTimeout(function(){URL.revokeObjectURL(a2.href);},2000);
+    alert((bad?('⚠ '+bad+' party total(s) DO NOT match between the two modes - send the file.'):'✓ Every party total matches between the two modes.')
+      +'\n\n'+moved+' parties changed which bills stay open / payment cycle (expected).'
+      +'\n\nReport downloaded, and printed to the console (F12).');
+  }
   function chooseProjBranch(b){setProjBranch(b);if(projData&&projData._projRaw){try{setProjData(window.CDC_PROJ.buildForBranch(projData._projRaw,b));}catch(ex){}}}
   // Save the shared alias map, then rebuild both views so the merge takes effect at once.
   function saveAliases(newMap){window.__cdcAliases=newMap;setAliases(newMap);
@@ -2370,6 +2442,7 @@ function Portal(){
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
       active==='proj'?e('div',{style:{display:'flex',gap:'2px',marginLeft:'2px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){if(projBranch!==__b)chooseProjBranch(__b);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:projBranch===__b?'#be185d':'#f1f5f9',color:projBranch===__b?'#fff':'#475569'}},__lbl);})):null,
       active==='proj'?e('div',{title:'How receipts are matched to bills. Bill-wise settles the exact bill Tally booked the receipt against (Agst Ref); FIFO ignores those references and clears the oldest bill first, as the dashboard did before.',style:{display:'flex',gap:'2px',marginLeft:'6px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},[['billwise','🧾 Bill-wise'],['fifo','⏳ FIFO']].map(function(__m){return e('span',{key:__m[0],onClick:function(){chooseAllocMode(__m[0]);},style:{padding:'5px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:allocMode===__m[0]?'#7c3aed':'#f1f5f9',color:allocMode===__m[0]?'#fff':'#475569'}},__m[1]);})):null,
+      active==='proj'?e('button',{onClick:compareModes,title:'Run both engines over this same data and download a report of what differs. Every party total must match; only which bills stay open should move.',style:{marginLeft:'4px',padding:'5px 10px',borderRadius:'6px',border:'1px solid #cbd5e1',background:'#fff',color:'#475569',fontSize:'10px',fontFamily:'monospace',fontWeight:600,cursor:'pointer'}},'⇄ Compare'):null,
       updBadge(),
       e('button',{onClick:function(){setAliasUI(true);},title:'Merge parties renamed in Tally',style:{marginLeft:lastUpd?'14px':'auto',padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'🔗 Merge names'+(Object.keys(aliases||{}).length?' ('+Object.keys(aliases).length+')':'')),
       e('button',{onClick:reset,style:{padding:'6px 12px',borderRadius:'6px',border:'1px solid #e2e8f0',background:'#fff',color:'#64748b',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}},'↩ New upload')),

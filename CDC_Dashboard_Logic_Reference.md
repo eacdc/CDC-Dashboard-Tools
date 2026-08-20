@@ -88,6 +88,14 @@
   receipt falls through to Pass 2 — identical to the previous pure-FIFO engine.
 - Requires the pipeline (`TallyToJson.ps1` → `Collect-BillAllocs`) and API
   (`ingest.js` whitelist) to carry the `bills:[{ledger,ref,type,amount}]` voucher field.
+- **Bill-wise / FIFO toggle** (portal top bar, Projected tab): `fifo` makes the engine
+  ignore every bill reference, reproducing the pre-bill-wise behaviour on the same data
+  — for comparison, not as a different truth. It covers the whole Projected app, is
+  remembered per browser, and is stamped into the aging exports (`_BillWise` / `_FIFO`).
+- **⇄ Compare** (same bar) runs both engines and downloads a report of what moved. The
+  invariant it checks: allocation moves money **between** a party's bills, so every
+  party's total outstanding must be identical in both modes. Only which bills stay
+  open, the ageing buckets and the payment cycle may differ.
 
 ### Receipt Sources (Debtor)
 1. Bank Receipt / Receipt vouchers (direct)
