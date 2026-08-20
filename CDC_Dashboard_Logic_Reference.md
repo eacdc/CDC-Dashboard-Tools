@@ -84,6 +84,14 @@
 - **Bill references:** invoices seed the bill map by their `New Ref` name; opening bills
   by their CSV `Ref. No.`; receipts settle by their `Agst Ref` name. Shared namespace
   (e.g. `CDC/7037/25-26`).
+- **Allocation signs matter.** Tally stores every allocation line signed (`-ve` Dr /
+  `+ve` Cr) and one voucher can carry lines both ways for the same ledger — a receipt
+  that also puts value back on a bill (return, adjustment, bill-to-bill transfer). Each
+  line is read relative to the posting's own direction: **+ve settles/opens, -ve puts
+  value back on that bill**. Lines sharing a reference are netted. Verified against a
+  real Day Book: the signed total of a posting's allocations equals that posting's net
+  amount exactly. If it ever exceeds the net, the posting is handed to date FIFO rather
+  than guessed at, and counted in `window.__cdcAllocDiag.unreconciledToFIFO`.
 - **Backward compatible:** vouchers synced before bill capture carry no `bills`, so every
   receipt falls through to Pass 2 — identical to the previous pure-FIFO engine.
 - Requires the pipeline (`TallyToJson.ps1` → `Collect-BillAllocs`) and API

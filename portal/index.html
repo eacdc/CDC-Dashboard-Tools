@@ -82,7 +82,10 @@ window.__cdcCanon=function(xd,vouchers,bills){
   var aliases=window.__cdcAliases||{};var ids=(xd&&xd.ids)||{};var g2n={};for(var n in ids)if(!g2n[ids[n]])g2n[ids[n]]=n;
   function cn(name){if(!name)return name;var a=aliases[name]||name;var g=ids[a];return (g&&g2n[g])?g2n[g]:a;}
   function rk(obj){if(!obj)return obj;var o={};for(var k in obj){var ck=cn(k);o[ck]=(o[ck]||0)+obj[k];}return o;}
-  if(vouchers)for(var i=0;i<vouchers.length;i++){var v=vouchers[i];if(v.party)v.party=cn(v.party);if(v.party_ledgers)v.party_ledgers=rk(v.party_ledgers);if(v.ledgers)v.ledgers=rk(v.ledgers);}
+  if(vouchers)for(var i=0;i<vouchers.length;i++){var v=vouchers[i];if(v.party)v.party=cn(v.party);if(v.party_ledgers)v.party_ledgers=rk(v.party_ledgers);if(v.ledgers)v.ledgers=rk(v.ledgers);
+    // v.bills carries its own ledger name; leave it un-canonicalised and a renamed
+    // party stops matching its own allocations and silently drops back to date FIFO.
+    if(v.bills)for(var bq=0;bq<v.bills.length;bq++){var vb=v.bills[bq];if(vb&&vb.ledger)vb.ledger=cn(vb.ledger);}}
   if(bills)for(var j=0;j<bills.length;j++){if(bills[j]&&bills[j].party)bills[j].party=cn(bills[j].party);}
   return cn;
 };
@@ -1017,23 +1020,50 @@ function isNonCashIE(p){var n=(p||'').toLowerCase();
 // Step 1: Collect invoices and receipts from vouchers
 // ieByMonth is keyed by YYYYMM (not month-only) so vouchers from different FYs don't collide.
 var dInv={},dRct={},cInv={},cPay={},ieByMonth={};
-// Bill-wise allocations for a party posting on this voucher, filtered to the wanted
-// BILLTYPE(s). Returns [{ref,type,amt}] with positive amounts. Empty when the voucher
-// carries no bill data (older synced vouchers) -> engine falls back to date FIFO.
 // Allocation mode. 'billwise' (default) honours Tally's bill references; 'fifo'
 // drops them here so every receipt falls through to PASS 2 and the engine behaves
 // exactly like the pre-bill-wise one -- which is what makes the two comparable
 // on the SAME data, without re-syncing anything.
 var __BW=(window.__cdcAllocMode||'billwise')!=='fifo';
-function _bills(v,party,types){if(!__BW)return[];var out=[];var bs=v.bills||[];for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];if(!b||b.ledger!==party||!b.ref)continue;if(types&&types.indexOf(b.type)<0)continue;out.push({ref:b.ref,type:b.type,amt:Math.abs(b.amount)});}return out;}
+var __allocSeen=0,__allocOdd=0;// diagnostics: postings carrying bill refs / ones we could not reconcile
+// Bill-wise allocations for a party posting on this voucher, filtered to the wanted
+// BILLTYPE(s) and expressed RELATIVE TO THE POSTING'S OWN DIRECTION:
+//   +ve = moves the party the same way the posting does (settles a bill on a receipt,
+//         opens one on an invoice);  -ve = the opposite, i.e. puts value BACK on that
+//         bill (a return, an adjustment, a bill-to-bill transfer).
+// Tally stores every allocation signed (-ve Dr / +ve Cr) and one voucher can carry
+// lines both ways for the same ledger, so taking Math.abs() here would settle money
+// the voucher never moved -- which is exactly how a receipt of 2,43,670 came to clear
+// 7,71,130 of bills. Lines sharing a reference are netted, so a +X / -Y pair on one
+// bill collapses to X-Y.
+// Checked against a real Day Book export: the signed total of a posting's allocations
+// equals that posting's net amount exactly (120/120 postings). If it ever exceeds the
+// net we cannot say which bills the money really touched, so the posting is handed to
+// date FIFO instead of guessing. Same fallback for vouchers synced before bill capture.
+function _bills(v,party,types,net){
+  if(!__BW)return[];
+  var bs=v.bills||[],dir=(net<0)?-1:1,order=[],by={},tot=0;
+  for(var bi2=0;bi2<bs.length;bi2++){var b=bs[bi2];
+    if(!b||b.ledger!==party||!b.ref)continue;
+    if(types&&types.indexOf(b.type)<0)continue;
+    var a2=(Number(b.amount)||0)*dir;
+    if(!by.hasOwnProperty(b.ref)){by[b.ref]={ref:b.ref,type:b.type,amt:0};order.push(b.ref);}
+    by[b.ref].amt+=a2;tot+=a2;
+  }
+  if(!order.length)return[];
+  __allocSeen++;
+  if(tot>Math.abs(net)+0.5){__allocOdd++;return[];}
+  var out=[];for(var k3=0;k3<order.length;k3++){if(Math.abs(by[order[k3]].amt)>0.5)out.push(by[order[k3]]);}
+  return out;
+}
 // IE diagnostics — open DevTools Console and read window.__ieDebug to see what was found / skipped.
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
-if(isSaleVt(vt))for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'])});}
-if(isPurchVt(vt))for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'])});}
-if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'])});}
-if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'])});}
+if(isSaleVt(vt))for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'],pls[p])});}
+if(isPurchVt(vt))for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'],pls[p])});}
+if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'],pls[p])});}
+if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'],pls[p])});}
 if(vt==='Journal'){var hLC=false;for(var ln in lds)if(lds[ln]<0&&isL(ln)){hLC=true;break;}
 if(hLC){for(var p in pls){if(!isD(p)||ib[p]||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
 else{var hB=false;for(var p in pls)if(ib[p]){hB=true;break;}if(hB)for(var p in pls){if(ib[p]||!isD(p)||pls[p]<=0)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}
@@ -1078,12 +1108,15 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   // lbl keeps the bill's printed reference even when it is filed anonymously.
   // In FIFO mode nothing is keyed by reference, so same-ref bills stay separate
   // exactly as the pre-bill-wise engine left them.
+  // amt may be NEGATIVE: an allocation can put value back on a bill (a return, an
+  // adjustment) instead of creating it. Netting into an existing bill handles that;
+  // a negative against a bill we have never seen carries no value to file.
   function addBill(ref,d,amt,lbl){
-    if(amt<=0.5)return;
     var key=__BW?ref:'';
-    if(key&&billMap.hasOwnProperty(key)){if(d<billMap[key].d)billMap[key].d=d;billMap[key].r+=amt;}
-    else if(key){billMap[key]={d:d,r:amt,ref:key};}
-    else{anonInvs.push({d:d,r:amt,ref:lbl||ref||'INV'});}
+    if(key&&billMap.hasOwnProperty(key)){if(d<billMap[key].d)billMap[key].d=d;billMap[key].r+=amt;return;}
+    if(amt<=0.5)return;
+    if(key){billMap[key]={d:d,r:amt,ref:key};return;}
+    anonInvs.push({d:d,r:amt,ref:lbl||ref||'INV'});
   }
   for(var i=0;i<openBills.length;i++){var b=openBills[i];
     if(b.isAdvance){rcts.push({date:b.date,amt:b.amount,alloc:null});}// Advance = pre-payment
@@ -1097,9 +1130,15 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
 
   // PASS 1 — settle each "Agst Ref" allocation against its named bill.
   var fb=[];// leftover receipt money -> date FIFO
+  // A negative allocation puts value BACK on its bill, so apply those first: the money
+  // has to be on the bill before anything can be settled against it.
+  for(var i=0;i<rcts.length;i++){var rcN=rcts[i],alN=rcN.alloc;
+    if(!alN)continue;
+    for(var kN=0;kN<alN.length;kN++)if(alN[kN].amt<-0.5)addBill(alN[kN].ref,rcN.date,-alN[kN].amt,alN[kN].ref);}
   for(var i=0;i<rcts.length;i++){var rc=rcts[i],alloc=rc.alloc;
     if(alloc&&alloc.length){var at=0;
       for(var k=0;k<alloc.length;k++){var al=alloc[k],amt=al.amt,key=al.ref;at+=al.amt;
+        if(amt<=0.5)continue;// negative: already applied above as a bill increase
         if(key&&billMap[key]&&billMap[key].r>0.5){
           var mt=Math.min(billMap[key].r,amt);billMap[key].r-=mt;amt-=mt;
           var dy=daysBtw(parseDate(billMap[key].d),parseDate(rc.date));if(dy>=0)da.push({d:Math.min(dy,730),a:mt});
@@ -1308,7 +1347,12 @@ var pIE=[ieAvg,ieAvg,ieAvg];var pNet=pMo.map(function(_,m){return pInM[m]-pOutM[
 try{var __dg={debtors:{},creditors:{}};
   for(var __p in dStats){__dg.debtors[__p]={opening:obByD[__p]||[],invoices:dInv[__p]||[],receipts:dRct[__p]||[],matchedAmt:dStats[__p].matchedAmt,outstanding:dStats[__p].outstanding,unpaid:dStats[__p].unpaid,avgDays:dStats[__p].avgDays};}
   for(var __p in cStats){__dg.creditors[__p]={opening:obByC[__p]||[],invoices:cInv[__p]||[],payments:cPay[__p]||[],matchedAmt:cStats[__p].matchedAmt,outstanding:cStats[__p].outstanding,unpaid:cStats[__p].unpaid,avgDays:cStats[__p].avgDays};}
-  window.__cdcDiag=__dg;}catch(e){}
+  window.__cdcDiag=__dg;
+  // How much of this build actually ran bill-wise: postings that carried bill
+  // references, and how many of those could not be reconciled against the
+  // posting's net amount and were handed to date FIFO instead.
+  window.__cdcAllocDiag={mode:__BW?'billwise':'fifo',postingsWithBillRefs:__allocSeen,unreconciledToFIFO:__allocOdd};
+  }catch(e){}
 
 return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA,debtorMonthly:debtorMonthly,creditorMonthly:creditorMonthly};};
 
@@ -1324,6 +1368,7 @@ try{window.cdcDiag=function(name){
   var pays=rec.payments||rec.receipts||[];var openT=sum(rec.opening),invT=sum(rec.invoices),payT=sum(pays);
   console.log('%c'+side+' — '+name,'font-weight:bold;color:#0891b2;font-size:14px');
   console.log('Allocation mode :',__allocLabel(),'(toggle it in the top bar)');
+  try{var __ad=window.__cdcAllocDiag;if(__ad)console.log('Bill-ref coverage:',__ad.postingsWithBillRefs,'postings carried bill references this build;',__ad.unreconciledToFIFO,'could not be reconciled against the voucher net and fell back to FIFO');}catch(e){}
   console.log('Opening bills   :',openT,'('+(rec.opening||[]).length+' bills)',rec.opening);
   console.log('This-yr invoices:',invT,'('+(rec.invoices||[]).length+')',rec.invoices);
   console.log('This-yr '+(side==='PAYABLE'?'payments ':'receipts ')+':',payT,'('+pays.length+')',pays);
