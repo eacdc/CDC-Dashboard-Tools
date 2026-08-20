@@ -1312,6 +1312,15 @@ try{window.cdcDiag=function(name){
   console.log('This-yr invoices:',invT,'('+(rec.invoices||[]).length+')',rec.invoices);
   console.log('This-yr '+(side==='PAYABLE'?'payments ':'receipts ')+':',payT,'('+pays.length+')',pays);
   console.log('Expected net (opening + invoices - paid):',openT+invT-payT);
+  // Is this party actually settling bill-wise, or still falling back to date FIFO?
+  // Vouchers synced before bill capture carry no bill refs, so 0/0 here means the
+  // numbers below are pure FIFO -- re-sync that date range to light this up.
+  var __bi=(rec.invoices||[]).filter(function(x){return x.bills&&x.bills.length;}).length;
+  var __ba=pays.filter(function(x){return x.alloc&&x.alloc.length;}).length;
+  var __bw=side==='PAYABLE'?'payments':'receipts';
+  console.log('Bill-wise inputs:',__bi+'/'+(rec.invoices||[]).length+' invoices carry a bill ref ("New Ref"),',
+    __ba+'/'+pays.length+' '+__bw+' name the bill they settle ("Agst Ref")'+((__bi+__ba)?'':'  <- none: still on pure date FIFO'));
+  if(__ba)console.log('  settled against:',pays.filter(function(x){return x.alloc&&x.alloc.length;}).map(function(x){return x.date+' '+Math.round(x.amt)+' -> '+x.alloc.map(function(a){return a.ref+':'+Math.round(a.amt);}).join(', ');}));
   console.log('FIFO outstanding:',Math.round(rec.outstanding),'| matched(cleared):',Math.round(rec.matchedAmt||0),'| avg days:',rec.avgDays);
   if(payT>openT+invT)console.log('%c⚠ Paid ('+payT+') exceeds opening+invoices ('+(openT+invT)+') by '+(payT-(openT+invT))+' — over-payment/advance or a missing invoice.','color:#b45309');
   console.log('Remaining unpaid bills:',rec.unpaid);
