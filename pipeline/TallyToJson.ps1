@@ -32,6 +32,17 @@
                    -IngestUrl "https://your-api.onrender.com" -IngestToken "SECRET"
         (for every year in one go, use run_backfill.ps1 instead)
 
+    RUN (the wrong company went into a branch - wipe it and re-ingest clean):
+        powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Reset `
+                   -FromDate 20250401 -ToDate 20260820 -Branch kol `
+                   -Company "CDC PRINTERS 2025-26" `
+                   -IngestUrl "https://your-api.onrender.com" -IngestToken "SECRET" -ChunkSize 1000
+        A plain re-push does NOT undo it: the other company's vouchers carry their own
+        GUIDs, so nothing overwrites them and the branch keeps BOTH companies. -Reset
+        clears -FromDate..-ToDate for that branch (plus its master and sync mark) once
+        the Tally pull has succeeded, then pushes. -ResetAll clears every date instead.
+        Do the same for the other branch, then check /api/meta.
+
     RUN (daily incremental - just yesterday/today, appended into Mongo):
         powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
                    -FromDate 20260716 -ToDate 20260716 -Branch ahm `
@@ -52,6 +63,13 @@ param(
     [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
                                          #   instead of replacing the live one (see run_backfill.ps1)
     [switch]$ListCompanies,              # print the companies this Tally knows about, then exit
+    [switch]$Reset,                      # wipe this branch over -FromDate..-ToDate in MongoDB before
+                                         #   pushing. Use after the WRONG company was pulled into a
+                                         #   branch: those vouchers carry the other company's GUIDs,
+                                         #   so a plain re-push leaves BOTH companies in the branch.
+    [switch]$ResetAll,                   # same, but wipes every voucher of the branch, not just the
+                                         #   date range (also drops any back-filled years).
+    [switch]$AllowBranchMismatch,        # skip the -Branch vs -Company city check below
     [switch]$DryRun,                     # incremental: print the plan, don't pull detail or post
     [int]$ChunkSize  = 2000,             # vouchers per /ingest POST. A full-year pull is far too big
                                          #   for one body (413); lower this if you still see 413.
@@ -64,6 +82,37 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($ChunkSize -lt 1) { throw "-ChunkSize must be at least 1." }
+
+# ---- guard: a reset needs somewhere to push and a full pull to refill with ----
+# -Incremental posts only what changed since the last ALTERID, which after a wipe
+# is not enough to rebuild the branch. Clear it with a full-range run instead.
+if (($Reset -or $ResetAll) -and -not $IngestUrl) {
+    throw "-Reset needs -IngestUrl: it clears the branch in MongoDB, which only the API can do."
+}
+if (($Reset -or $ResetAll) -and $Incremental) {
+    throw "-Reset cannot be combined with -Incremental. Re-run the full range without -Incremental."
+}
+if (($Reset -or $ResetAll) -and $VoucherNos) {
+    throw "-Reset cannot be combined with -VoucherNos: that pulls a few vouchers, not the whole range."
+}
+
+# ---- guard: -Branch must match the company being pulled --------------------
+# A -Branch/-Company mismatch is silent and expensive. The other company's
+# vouchers carry their own Tally GUIDs, so they do not replace anything -- they
+# ADD to the branch, and every dashboard figure becomes the sum of two companies
+# until someone deletes them again (-Reset). The company name is the only clue
+# available before the pull, so use it: a name that says which city it is must
+# agree with -Branch. A name that says nothing (the Kolkata company is just
+# "CDC PRINTERS 2025-26") is left alone. -AllowBranchMismatch overrides.
+if (-not $AllowBranchMismatch) {
+    $coLower = $Company.ToLower()
+    if ($coLower.Contains('ahmedabad') -and $Branch -ne 'ahm') {
+        throw ("-Company '{0}' is the Ahmedabad company but -Branch is '{1}'. That would pour Ahmedabad's vouchers into the '{1}' branch, on top of what is already there, and only -Reset could undo it. Use -Branch ahm (or -AllowBranchMismatch if the name is misleading)." -f $Company, $Branch)
+    }
+    if (($coLower.Contains('kolkata') -or $coLower.Contains('calcutta')) -and $Branch -ne 'kol') {
+        throw ("-Company '{0}' is the Kolkata company but -Branch is '{1}'. That would pour Kolkata's vouchers into the '{1}' branch, on top of what is already there, and only -Reset could undo it. Use -Branch kol (or -AllowBranchMismatch if the name is misleading)." -f $Company, $Branch)
+    }
+}
 
 # ---- guard: historical pulls must never drive the incremental machinery ----
 # ALTERID is a per-COMPANY counter and sync_state stores one high-water mark per
@@ -831,6 +880,28 @@ if ($IngestUrl) {
     $uri = "{0}/ingest" -f $IngestUrl.TrimEnd('/')
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
+    # -Reset / -ResetAll: clear the branch BEFORE the first chunk, and only now that
+    # the pull has succeeded and the files are on disk - so a Tally that answered
+    # badly can never leave the branch empty. Nothing else deletes: the wrong
+    # company's vouchers have their own GUIDs and no push overwrites them.
+    if ($Reset -or $ResetAll) {
+        $rUri = "{0}/admin/reset" -f $IngestUrl.TrimEnd('/')
+        if ($ResetAll) { $rBody = [ordered]@{ branch = $Branch; all = $true } }
+        else           { $rBody = [ordered]@{ branch = $Branch; from = $FromDate; to = $ToDate } }
+        $scope = if ($ResetAll) { "ALL dates" } else { "{0}..{1}" -f $FromDate, $ToDate }
+        Write-Host ("  Reset: clearing branch '{0}' ({1}) ..." -f $Branch, $scope)
+        try {
+            $rResp = Invoke-WebRequest -Uri $rUri -Method Post -Body ($rBody | ConvertTo-Json -Compress) -Headers $headers -UseBasicParsing
+            Write-Host ("  Reset OK: {0}" -f $rResp.Content)
+        } catch {
+            Write-Warning ("  Reset FAILED: {0}" -f $_.Exception.Message)
+            Write-Warning ("  Nothing will be pushed. Check {0}/api/meta before re-running: a request" -f $IngestUrl.TrimEnd('/'))
+            Write-Warning "  that timed out may still have cleared the branch on the server."
+            Write-Warning ("  Files are on disk at {0}; fix the URL/token and re-run." -f $OutDir)
+            if ($Historical) { exit 3 }
+            exit 4
+        }
+    }
     $total  = $all.Count
     $chunks = [int][Math]::Ceiling($total / [double]$ChunkSize)
     if ($chunks -lt 1) { $chunks = 1 }

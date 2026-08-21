@@ -13,6 +13,11 @@
 //
 // Pushing an OLD financial year's export (a back-fill)? Add --historical so the old
 // company's ledger master is merged into the live one instead of replacing it.
+//
+// Pushed the WRONG company into a branch? Add --reset (clears that branch over this
+// export's date range) or --reset-all (clears the branch outright) before the push.
+// A plain re-push does NOT fix it: the other company's vouchers have their own GUIDs,
+// so nothing overwrites them and the branch ends up holding both companies.
 require('./loadEnv');
 const fs = require('fs');
 const path = require('path');
@@ -76,8 +81,21 @@ async function main() {
     // branch+guid), so splitting the same data across several POSTs is equivalent
     // to one big one -- and a failure now costs one chunk, not the whole year.
     // The master rides with the first chunk only; later chunks are vouchers alone.
-    const endpoint = `${url.replace(/\/$/, '')}/ingest`;
+    const base = url.replace(/\/$/, '');
+    const endpoint = `${base}/ingest`;
     const headers = { 'Content-Type': 'application/json', ...(token ? { 'x-ingest-token': token } : {}) };
+    // --reset: wipe the branch first. The wrong company pulled into a branch leaves
+    // vouchers with foreign GUIDs that no re-push can overwrite -- they have to be
+    // deleted (see resetBranch). --reset-all widens it from this export's date range
+    // to every voucher the branch holds.
+    if (process.argv.includes('--reset') || process.argv.includes('--reset-all')) {
+      const wipeAll = process.argv.includes('--reset-all');
+      const body = wipeAll ? { branch, all: true } : { branch, from: payload.from, to: payload.to };
+      const r0 = await fetch(`${base}/admin/reset`, { method: 'POST', headers, body: JSON.stringify(body) });
+      const t0 = await r0.text();
+      if (!r0.ok) { console.error(`reset FAILED: ${r0.status} ${t0}`); process.exit(1); }
+      console.log(`reset: ${t0}`);
+    }
     const size = Math.max(1, Number(arg('chunk', '2000')) || 2000);
     const chunks = Math.max(1, Math.ceil(vouchers.length / size));
     let sent = 0;
@@ -97,12 +115,14 @@ async function main() {
     }
   } else {
     // Write directly to Mongo.
-    const { ingest } = require('./ingest');
-    const { getDb, close } = require('./db');
-    if (process.argv.includes('--reset')) {
-      const db = await getDb();
-      const r = await db.collection('vouchers').deleteMany({ branch });
-      console.log(`--reset: cleared ${r.deletedCount} existing "${branch}" vouchers`);
+    const { ingest, resetBranch } = require('./ingest');
+    const { close } = require('./db');
+    // Same reset as the API path, so both give the same result: --reset clears this
+    // export's date range, --reset-all clears the branch outright.
+    if (process.argv.includes('--reset') || process.argv.includes('--reset-all')) {
+      const wipeAll = process.argv.includes('--reset-all');
+      const r = await resetBranch(wipeAll ? { branch, all: true } : { branch, from: payload.from, to: payload.to });
+      console.log('reset:', JSON.stringify(r));
     }
     const result = await ingest(payload);
     console.log('Ingested:', JSON.stringify(result));

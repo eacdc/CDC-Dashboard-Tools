@@ -232,6 +232,57 @@ async function ingest(payload) {
   return result;
 }
 
+// Wipe a branch before a clean re-ingest.
+//
+// Needed when the WRONG Tally company was pulled into a branch (an -Branch/-Company
+// mismatch). Those vouchers carry the other company's GUIDs, so `branch:guid` never
+// collides with the right ones: an ordinary re-push does not overwrite them, it just
+// leaves BOTH companies sitting in the branch, and every figure is the sum of two
+// companies. Only a delete gets rid of them.
+//
+// The master goes too by default, because the bad push also REPLACED the branch's
+// ledger hierarchy with the other company's, and any histLedgers left by a back-fill
+// would keep those names alive even after a correct re-push (readMaster unions them).
+// The very next push carries a fresh master, so the branch is rebuilt in one step.
+//
+// sync_state goes too: it is the ALTERID high-water mark, and an ID from the wrong
+// company means nothing against the right one. Cleared, the next incremental sync
+// re-scans everything instead of trusting a mark it cannot interpret.
+//
+// Scope is explicit, never guessed: {from,to} deletes just that date range (what the
+// re-pull is about to replace), all:true deletes every voucher of the branch. Without
+// one of the two this throws rather than defaulting to "delete everything".
+async function resetBranch(payload) {
+  const branch = String(payload.branch || '').toLowerCase();
+  if (!VALID_BRANCHES.has(branch)) {
+    throw Object.assign(new Error(`invalid branch "${payload.branch}" (expected kol|ahm)`), { status: 400 });
+  }
+  const all = payload.all === true || payload.all === 'true';
+  const from = payload.from == null ? null : String(payload.from);
+  const to = payload.to == null ? null : String(payload.to);
+  const isYmd = (s) => typeof s === 'string' && /^\d{8}$/.test(s);
+  if (!all && !(isYmd(from) && isYmd(to))) {
+    throw Object.assign(new Error('reset needs from+to as YYYYMMDD, or all:true'), { status: 400 });
+  }
+  const db = await getDb();
+  const q = all ? { branch } : { branch, date: { $gte: from, $lte: to } };
+  const del = await db.collection('vouchers').deleteMany(q);
+  const result = {
+    branch,
+    scope: all ? 'all dates' : `${from}..${to}`,
+    deletedVouchers: del.deletedCount || 0,
+    masterDeleted: false,
+    syncStateCleared: false,
+  };
+  if (payload.master !== false) {
+    result.masterDeleted = ((await db.collection('masters').deleteOne({ branch })).deletedCount || 0) > 0;
+  }
+  if (payload.syncState !== false) {
+    result.syncStateCleared = ((await db.collection('sync_state').deleteOne({ branch })).deletedCount || 0) > 0;
+  }
+  return result;
+}
+
 // ---- ALTERID-based true-incremental sync ---------------------------------
 // Tally stamps every voucher with a monotonic ALTERID that bumps on ANY create
 // or edit, regardless of the voucher's date. So a lightweight metadata scan
@@ -328,4 +379,4 @@ async function syncIncremental(payload) {
   return result;
 }
 
-module.exports = { ingest, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, readMaster, voucherKey, diffMeta, getSyncState, syncIncremental };
+module.exports = { ingest, resetBranch, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, readMaster, voucherKey, diffMeta, getSyncState, syncIncremental };

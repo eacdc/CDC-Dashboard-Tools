@@ -8,7 +8,7 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const { getDb, close } = require('./db');
-const { ingest, getSyncState, syncIncremental, readMaster } = require('./ingest');
+const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = require('./ingest');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -48,6 +48,24 @@ app.post('/ingest', async (req, res) => {
   try {
     const result = await ingest(req.body || {});
     res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---- reset a branch before a clean re-ingest --------------------------------
+// POST /admin/reset { branch, from, to }   -> delete that branch's vouchers in the range
+// POST /admin/reset { branch, all: true }  -> delete every voucher of that branch
+// Also drops the branch's master and sync_state unless master:false / syncState:false.
+// For when the wrong Tally company was pulled into a branch: those vouchers have
+// foreign GUIDs, so nothing but a delete removes them (see resetBranch).
+// Token-protected like /ingest, and the scope must be stated explicitly.
+app.post('/admin/reset', async (req, res) => {
+  if (INGEST_TOKEN && req.get('x-ingest-token') !== INGEST_TOKEN) {
+    return res.status(401).json({ error: 'bad or missing x-ingest-token' });
+  }
+  try {
+    res.json({ ok: true, ...(await resetBranch(req.body || {})) });
   } catch (e) {
     res.status(e.status || 500).json({ ok: false, error: e.message });
   }
