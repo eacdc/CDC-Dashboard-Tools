@@ -31,6 +31,15 @@ async function main() {
     console.error('Usage: node loader.js --dir <folder> --branch <kol|ahm> [--url <api>] [--token <secret>]');
     process.exit(1);
   }
+  // Header values are ByteStrings: a non-ASCII token (a placeholder pasted verbatim,
+  // a smart quote, a stray dash from a doc) throws deep inside fetch with a
+  // character-code message that says nothing about the token. Catch it here, after
+  // the files have loaded but before the first POST.
+  if (token && /[^\x20-\x7E]/.test(token)) {
+    console.error(`--token contains a character that cannot go in an HTTP header: ${JSON.stringify(token)}`);
+    console.error('Looks like a placeholder was pasted verbatim. Use the real token (Render env var INGEST_TOKEN).');
+    process.exit(1);
+  }
 
   const masterPath = path.join(dir, `${branch}_Master.json`);
   const txnsPath = path.join(dir, `${branch}_Transactions.json`);
