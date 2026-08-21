@@ -2228,6 +2228,62 @@ try{return d?e(Dash,{data:d,onReset:function(){sD(null);}}):e(Upload,{onData:fun
 var EB=function(){};EB.prototype=Object.create(React.Component.prototype);EB.prototype.constructor=EB;EB.prototype.componentDidCatch=function(e,i){this.setState({e:e.message+'\n'+(i&&i.componentStack||'')});};EB.getDerivedStateFromError=function(e){return{e:e.message};};
 EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style:{padding:'40px'}},e('h2',{style:{color:'#dc2626'}},'Error'),e('pre',{style:{background:'#fef2f2',padding:'16px',borderRadius:'8px',fontSize:'11px',whiteSpace:'pre-wrap',fontFamily:'var(--mono)',overflow:'auto'}},this.state.e),e('button',{onClick:function(){location.reload();},style:{marginTop:'12px',padding:'8px 16px',background:'#0891b2',color:'#fff',border:'none',borderRadius:'6px',cursor:'pointer'}},'Reload'));return this.props.children;};
 
+// Why is Consolidated NOT the sum of KOL and AHM? Three things make this projection
+// non-additive on purpose, and this reconciles how much each is worth:
+//   1. Inter-branch elimination -- consolidated drops the branches' claims on each
+//      other (see buildForBranch); a single-branch view keeps the other branch as a
+//      normal party, so its money is counted there and nowhere in consolidated.
+//   2. Payment cycle -- a party trading with BOTH branches has ONE combined payment
+//      history in consolidated and two separate ones per branch, so its bills are
+//      expected in different months; parties with no history of their own fall back
+//      to the group / company average, which is itself computed per dataset.
+//   3. The 3-month window -- recalc drops anything expected after month 3 (mi<0),
+//      so (2) does not just move money between months, it moves it in and out of
+//      the totals in the header.
+// Run __cdcBranchDiag() in the console after the data has loaded.
+window.__cdcBranchDiag=function(){
+  var raw=window.__cdcProjRaw;
+  if(!raw){console.log('No projection data in memory yet -- load the data first.');return null;}
+  var ovr={};try{ovr=JSON.parse((window.localStorage&&localStorage.getItem('cdc_pcf_overrides'))||'{}')||{};}catch(e){}
+  var dO=ovr.daysOverrides||{},ex=ovr.excluded||{},exB=ovr.excludedBills||{};
+  var sum=function(a){return (a||[]).reduce(function(x,y){return x+(y||0);},0);};
+  var cr=function(n){return (n/1e7).toFixed(2)+' Cr';};
+  var R={};
+  ['all','kol','ahm'].forEach(function(b){
+    var ed=recalc(window.CDC_PROJ.buildForBranch(raw,b).proj,dO,ex,exB);
+    R[b]={ed:ed,IN:sum(ed.projInM),OUT:sum(ed.projOutM),IE:sum(ed.projIndExp),NET:sum(ed.projNetM),
+          avgDr:ed.companyAvgDays.debtor,avgCr:ed.companyAvgDays.creditor};
+  });
+  var rows=['all','kol','ahm'].map(function(b){var r=R[b];
+    return {view:b,IN:cr(r.IN),OUT:cr(r.OUT+r.IE),'of which IndExp':cr(r.IE),NET:cr(r.NET),'avg Dr':r.avgDr,'avg Cr':r.avgCr};});
+  rows.push({view:'kol+ahm',IN:cr(R.kol.IN+R.ahm.IN),OUT:cr(R.kol.OUT+R.ahm.OUT+R.kol.IE+R.ahm.IE),
+    'of which IndExp':cr(R.kol.IE+R.ahm.IE),NET:cr(R.kol.NET+R.ahm.NET),'avg Dr':'','avg Cr':''});
+  rows.push({view:'(kol+ahm) - all',IN:cr(R.kol.IN+R.ahm.IN-R.all.IN),
+    OUT:cr(R.kol.OUT+R.ahm.OUT+R.kol.IE+R.ahm.IE-R.all.OUT-R.all.IE),
+    'of which IndExp':cr(R.kol.IE+R.ahm.IE-R.all.IE),NET:cr(R.kol.NET+R.ahm.NET-R.all.NET),'avg Dr':'','avg Cr':''});
+  console.log('%c[Branch reconciliation]','color:#be185d;font-weight:bold');
+  console.table(rows);
+  // Per party: what the two branch views project vs what consolidated projects.
+  // A party only in the branch rows is an inter-branch claim consolidated cancels;
+  // one in both with a different figure is the payment cycle landing elsewhere.
+  function tot(ed,p){return sum((ed.projInflows[p]||[]))-sum((ed.projOutflows[p]||[]));}
+  var names={};['all','kol','ahm'].forEach(function(b){
+    for(var p in R[b].ed.projInflows)names[p]=1;for(var q in R[b].ed.projOutflows)names[q]=1;});
+  var diffs=[];
+  for(var p in names){
+    if(ex[p])continue;// party the user switched off -- not in any total
+    var a=tot(R.all.ed,p),k=tot(R.kol.ed,p),m=tot(R.ahm.ed,p),d=k+m-a;
+    if(Math.abs(d)<100000)continue;
+    diffs.push({party:p.length>44?p.slice(0,44)+'...':p,
+      'inter-branch':raw.ib[p]?'YES (dropped in consolidated)':'',
+      kol:cr(k),ahm:cr(m),consolidated:cr(a),'net effect':cr(d)});
+  }
+  diffs.sort(function(x,y){return Math.abs(parseFloat(y['net effect']))-Math.abs(parseFloat(x['net effect']));});
+  console.log('%c[Where the difference sits — party by party, > ₹1 L, + means the branch views count more]','color:#0891b2;font-weight:bold');
+  console.table(diffs.slice(0,25));
+  return {summary:R,perParty:diffs};
+};
+
 ;window.CDC_PROJ={
   Dash: Dash,
   build: function(t, asOfStr){
@@ -2260,6 +2316,7 @@ EB.prototype.render=function(){if(this.state&&this.state.e)return e('div',{style
     // Consolidated eliminates inter-branch; a single-branch view treats the other
     // branch as an external party, so drop the IB filter there.
     var ibEff=branch==='all'?raw.ib:{};
+    try{window.__cdcProjRaw=raw;}catch(e){}// handle for __cdcBranchDiag() in the console
     return {proj:buildProjection(vs,raw.xd,ibEff,rb,pb,asOf), vs:vs, xd:raw.xd, ib:ibEff, rb:rb, pb:pb, branch:branch, _projRaw:raw, partyNames:raw.partyNames||[]};
   }
 };
