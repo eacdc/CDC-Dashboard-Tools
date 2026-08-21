@@ -138,6 +138,47 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -FromDate 20250401 -T
 It upserts on GUID, so existing vouchers are updated in place — the `bills` field is
 added and nothing is duplicated.
 
+### Fixing a branch that got the wrong company
+
+If a pull ran with `-Branch kol` but `-Company "…(Ahmedabad)…"` (or the reverse),
+that company's vouchers are now sitting in the wrong branch, and the branch's ledger
+master was replaced by the wrong company's too. **Re-running the correct pull does not
+fix it**: the two companies' vouchers have different Tally GUIDs, so the keys never
+collide, nothing is overwritten, and the branch ends up holding *both* companies —
+every total is the sum of two companies.
+
+The wrong rows have to be deleted. `-Reset` does that first, then pushes, and only
+after the Tally pull has succeeded (so a Tally that answers badly can never leave the
+branch empty):
+
+```powershell
+# 1. Kolkata: wipe kol over this range, then push the real Kolkata data
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Reset `
+  -FromDate 20250401 -ToDate 20260820 -Branch kol -Company "CDC PRINTERS 2025-26" `
+  -IngestUrl "https://YOUR-API-URL" -IngestToken "some-long-random-string" -ChunkSize 1000
+
+# 2. Ahmedabad: same, with the Ahmedabad company
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Reset `
+  -FromDate 20250401 -ToDate 20260820 -Branch ahm -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26" `
+  -IngestUrl "https://YOUR-API-URL" -IngestToken "some-long-random-string" -ChunkSize 1000
+```
+
+Then confirm at `https://YOUR-API-URL/api/meta` — each branch should show a voucher
+count and date range that match what Tally reports for that company alone.
+
+- `-Reset` clears **only `-FromDate`..`-ToDate`** for that branch, so back-filled
+  older years survive. `-ResetAll` clears every date instead — use it when you don't
+  know how far the bad data spread.
+- It also drops that branch's master (the next push rebuilds it) and its incremental
+  sync high-water mark (an ALTERID from the wrong company means nothing; the next
+  incremental sync re-scans). If you have back-filled older years, re-run those
+  back-fills afterwards so their `histLedgers` come back.
+- Pushing from another machine instead: `node server/loader.js --dir <folder>
+  --branch kol --url https://YOUR-API-URL --token <your-token> --reset` (or
+  `--reset-all`).
+- The endpoint behind it is `POST /admin/reset {branch, from, to}` (or `{branch,
+  all:true}`), token-protected like `/ingest`.
+
 ### Viewing backfilled years
 
 Fetch **one financial year at a time** (portal date boxes: `01-04-2015` →
