@@ -8,6 +8,9 @@
 // Or push through a running API instead of writing to Mongo directly:
 //   node loader.js --dir ./tally_export --branch ahm --url https://cdc-api.onrender.com --token SECRET
 //
+// The API push is chunked (2000 vouchers per POST) so a full financial year doesn't
+// hit the server's body limit and come back 413. Lower it with --chunk 500 if it does.
+//
 // Pushing an OLD financial year's export (a back-fill)? Add --historical so the old
 // company's ledger master is merged into the live one instead of replacing it.
 require('./loadEnv');
@@ -58,13 +61,31 @@ async function main() {
   }
 
   if (url) {
-    // Push through the HTTP API.
-    const res = await fetch(`${url.replace(/\/$/, '')}/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { 'x-ingest-token': token } : {}) },
-      body: JSON.stringify(payload),
-    });
-    console.log('API response:', res.status, await res.text());
+    // Push through the HTTP API, in chunks. A full financial year is tens of
+    // thousands of vouchers and serialises to well over the body limit, which the
+    // server rejects with 413 and nothing lands. Ingest is idempotent (upsert on
+    // branch+guid), so splitting the same data across several POSTs is equivalent
+    // to one big one -- and a failure now costs one chunk, not the whole year.
+    // The master rides with the first chunk only; later chunks are vouchers alone.
+    const endpoint = `${url.replace(/\/$/, '')}/ingest`;
+    const headers = { 'Content-Type': 'application/json', ...(token ? { 'x-ingest-token': token } : {}) };
+    const size = Math.max(1, Number(arg('chunk', '2000')) || 2000);
+    const chunks = Math.max(1, Math.ceil(vouchers.length / size));
+    let sent = 0;
+    for (let i = 0; i < chunks; i++) {
+      const part = { ...payload, vouchers: vouchers.slice(i * size, (i + 1) * size) };
+      if (i > 0) delete part.master;
+      const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(part) });
+      const text = await res.text();
+      if (!res.ok) {
+        console.error(`chunk ${i + 1}/${chunks} FAILED: ${res.status} ${text}`);
+        console.error(`Sent ${sent}/${vouchers.length} vouchers. Re-run to resume (upserts are idempotent);`);
+        console.error(`if this was a 413, retry with a smaller --chunk (e.g. --chunk ${Math.max(250, Math.floor(size / 4))}).`);
+        process.exit(1);
+      }
+      sent += part.vouchers.length;
+      console.log(`chunk ${i + 1}/${chunks}: ${sent}/${vouchers.length} vouchers -> ${res.status} ${text}`);
+    }
   } else {
     // Write directly to Mongo.
     const { ingest } = require('./ingest');

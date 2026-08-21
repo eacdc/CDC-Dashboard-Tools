@@ -53,6 +53,18 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -FromDate 20250401 -T
 
 A full year is ~250 day requests (~a few minutes; run off-hours — 11 users share that server).
 
+**On `413 Payload Too Large`:** a whole year is tens of thousands of vouchers and
+one JSON body of that size is refused outright — nothing is stored. Both push paths
+now send in chunks of 2000 vouchers, so this shouldn't happen; if it still does,
+lower the batch: `-ChunkSize 500` on the `.ps1`, or `--chunk 500` on `loader.js`.
+The files stay on disk either way, and every push is an idempotent upsert on
+`branch:guid` — so just re-running is safe and costs nothing but time:
+
+```powershell
+node ..\server\loader.js --dir "$env:USERPROFILE\Desktop\tally_export" --branch kol `
+  --url "https://YOUR-API-URL" --token "your-token" --chunk 1000
+```
+
 ## B2. Multi-year backfill (older financial years, e.g. 2015-16 onwards)
 
 CDC keeps **one Tally company per financial year**, so history is pulled year by

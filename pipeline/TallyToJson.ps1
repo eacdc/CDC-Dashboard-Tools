@@ -53,6 +53,8 @@ param(
                                          #   instead of replacing the live one (see run_backfill.ps1)
     [switch]$ListCompanies,              # print the companies this Tally knows about, then exit
     [switch]$DryRun,                     # incremental: print the plan, don't pull detail or post
+    [int]$ChunkSize  = 2000,             # vouchers per /ingest POST. A full-year pull is far too big
+                                         #   for one body (413); lower this if you still see 413.
     [int]$MinLedgers = 50,               # safety floor: abort if the company returns fewer ledgers
     [string]$VoucherNos = ""             #   (means it isn't loaded in this Tally). Set 0 to disable.
 )                                        # targeted: only re-sync these exact voucher no(s), comma-
@@ -60,6 +62,8 @@ param(
                                          # each one's date, re-pulls just those, upserts via -IngestUrl.
 
 $ErrorActionPreference = "Stop"
+
+if ($ChunkSize -lt 1) { throw "-ChunkSize must be at least 1." }
 
 # ---- guard: historical pulls must never drive the incremental machinery ----
 # ALTERID is a per-COMPANY counter and sync_state stores one high-water mark per
@@ -818,31 +822,56 @@ if ($EmitCsv -and $csvDay.Count -gt 0) {
 # ======================================================================
 if ($IngestUrl) {
     Write-Host ("Pushing to {0}/ingest ..." -f $IngestUrl)
-    $payload = [ordered]@{
-        branch  = $Branch
-        from    = $FromDate
-        to      = $ToDate
-        master  = $masterObj
-        vouchers= $txnsOut.ToArray()
-    }
-    # Back-fill: this company's ledger master is the hierarchy as it stood in that
-    # year. 'merge' keeps the live one intact and only files the ledgers Tally no
-    # longer has, so these old vouchers still classify. See server/ingest.js.
-    if ($Historical) { $payload.masterMode = 'merge' }
-    $body = $payload | ConvertTo-Json -Depth 12 -Compress
+    # Chunked. A whole financial year is tens of thousands of vouchers and
+    # serialises past the server's body limit, which comes back as 413 with
+    # NOTHING stored. Ingest upserts on branch+guid, so the same data split over
+    # several POSTs lands identically - and one bad chunk costs a chunk, not the
+    # year. Master rides with the first chunk only.
+    $all = $txnsOut.ToArray()
+    $uri = "{0}/ingest" -f $IngestUrl.TrimEnd('/')
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($IngestToken) { $headers['x-ingest-token'] = $IngestToken }
-    try {
-        $resp = Invoke-WebRequest -Uri ("{0}/ingest" -f $IngestUrl.TrimEnd('/')) `
-                -Method Post -Body $body -Headers $headers -UseBasicParsing
-        Write-Host ("  Ingest OK: {0}" -f $resp.Content)
-    } catch {
-        Write-Warning ("  Ingest failed: {0}" -f $_.Exception.Message)
-        Write-Warning ("  Files are still on disk at {0} - push later with server/loader.js" -f $OutDir)
-        # A back-fill year that never reached Mongo must not look like a success, or
-        # run_backfill.ps1 would tick it off and leave a silent hole in the history.
-        if ($Historical) { exit 3 }
+    $total  = $all.Count
+    $chunks = [int][Math]::Ceiling($total / [double]$ChunkSize)
+    if ($chunks -lt 1) { $chunks = 1 }
+    $sent   = 0
+    $failed = $false
+    for ($ci = 0; $ci -lt $chunks; $ci++) {
+        $lo = $ci * $ChunkSize
+        $hi = [Math]::Min($lo + $ChunkSize, $total) - 1
+        # [object[]] so a one-voucher chunk still serialises as an array, not an object.
+        [object[]]$slice = if ($hi -ge $lo) { @($all[$lo..$hi]) } else { @() }
+        $payload = [ordered]@{
+            branch  = $Branch
+            from    = $FromDate
+            to      = $ToDate
+            vouchers= $slice
+        }
+        # Back-fill: this company's ledger master is the hierarchy as it stood in that
+        # year. 'merge' keeps the live one intact and only files the ledgers Tally no
+        # longer has, so these old vouchers still classify. See server/ingest.js.
+        if ($ci -eq 0) {
+            $payload.master = $masterObj
+            if ($Historical) { $payload.masterMode = 'merge' }
+        }
+        $body = $payload | ConvertTo-Json -Depth 12 -Compress
+        try {
+            $resp = Invoke-WebRequest -Uri $uri -Method Post -Body $body -Headers $headers -UseBasicParsing
+            $sent += $slice.Count
+            Write-Host ("  chunk {0}/{1}: {2}/{3} vouchers - {4}" -f ($ci + 1), $chunks, $sent, $total, $resp.Content)
+        } catch {
+            Write-Warning ("  chunk {0}/{1} failed: {2}" -f ($ci + 1), $chunks, $_.Exception.Message)
+            Write-Warning ("  {0}/{1} vouchers reached the server before this." -f $sent, $total)
+            Write-Warning ("  Files are still on disk at {0}. Re-run to resume (upserts are idempotent)," -f $OutDir)
+            Write-Warning ("  or push with: node server/loader.js --dir {0} --branch {1} --url {2} --token <your-token> --chunk {3}" -f $OutDir, $Branch, $IngestUrl.TrimEnd('/'), [Math]::Max(250, [int]($ChunkSize / 4)))
+            $failed = $true
+            break
+        }
     }
+    if (-not $failed) { Write-Host ("  Ingest OK: {0} vouchers in {1} chunk(s)." -f $sent, $chunks) }
+    # A back-fill year that never reached Mongo must not look like a success, or
+    # run_backfill.ps1 would tick it off and leave a silent hole in the history.
+    if ($failed -and $Historical) { exit 3 }
 } else {
     Write-Host "No -IngestUrl given: files written locally only."
     if ($Historical) {
