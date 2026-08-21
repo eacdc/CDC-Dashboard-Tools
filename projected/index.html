@@ -12,6 +12,11 @@
 <style>
 :root{--mono:'Source Code Pro',monospace;--sans:'Inter',-apple-system,sans-serif;--bg:#ffffff;--bg2:#f8fafc;--bg3:#f1f5f9;--border:#e2e8f0;--border2:#cbd5e1;--text:#1e293b;--text2:#475569;--text3:#94a3b8;--dimnum:#d1d5db;--cyan:#0891b2;--pink:#be185d;--green:#059669;--red:#dc2626;--purple:#7c3aed;--amber:#d97706;--rowHover:#f8fafc;--sectionInBg:#f0fdfa;--sectionInBorder:#99f6e4;--sectionOutBg:#fdf2f8;--sectionOutBorder:#fbcfe8;--totalBg:#f8fafc;--netBg:#f0fdf4;}
 *{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);color:var(--text);font-family:var(--sans)}::-webkit-scrollbar{height:6px;width:6px}::-webkit-scrollbar-track{background:var(--bg2)}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}#root{min-height:100vh}.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:0.03em}
+/* Busy state for a control that kicks off a long synchronous re-render. */
+@keyframes cdcspin{to{transform:rotate(360deg)}}
+.cdcspin{display:inline-block;width:9px;height:9px;margin-right:5px;vertical-align:-1px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:cdcspin 0.6s linear infinite}
+.cdcbusy{cursor:progress}
+.cdcwait,.cdcwait *{cursor:progress !important}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -20,6 +25,24 @@
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
+// Switching a view re-renders thousands of rows synchronously -- on a full year of
+// data the click looks dead for a second or two. React cannot paint in the middle of
+// a render, so setting the new state straight from the handler shows nothing until
+// the new view is ready. Instead: set a busy tag, let the browser paint it (rAF runs
+// before the next paint, the timeout inside it after), and only then do the work.
+// The work and clearing the tag are batched into ONE render -- unbatched, each would
+// trigger the expensive render separately.
+function runBusyWith(setBusy,tag,fn){
+  setBusy(tag);
+  var go=function(){
+    var run=function(){try{fn();}finally{setBusy('');}};
+    try{if(ReactDOM.unstable_batchedUpdates){ReactDOM.unstable_batchedUpdates(run);return;}}catch(_e){}
+    run();
+  };
+  if(window.requestAnimationFrame)requestAnimationFrame(function(){setTimeout(go,0);});else setTimeout(go,30);
+}
+// Put a spinner in front of the label while this control is the busy one.
+function busyLabel(isBusy,label){return isBusy?[e('span',{key:'s',className:'cdcspin'}),label]:label;}
 var APP_VERSION='v1.12';var APP_BUILD='14-Jun-2026';
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
@@ -534,6 +557,11 @@ var sCW=useState(340),cW=sCW[0],sCw=sCW[1];var sSr=useState(''),sr=sSr[0],sSrch=
 var sIO=useState(true),iO=sIO[0],sIOp=sIO[1];var sOO=useState(true),oO=sOO[0],sOOp=sOO[1];var sES=useState(false),eS=sES[0],sESp=sES[1];
 var sPVA=useState(true),pvO=sPVA[0],sPVAp=sPVA[1];
 var sView=useState('projection'),viewMode=sView[0],setView=sView[1];
+// Which control (if any) is mid-work. Only one at a time: a second click while a
+// view is still rendering would just queue more of the same freeze.
+var sBusy=useState(''),busy=sBusy[0],setBusy=sBusy[1];
+function runBusy(tag,fn){if(busy)return;runBusyWith(setBusy,tag,fn);}
+function goView(v){if(v===viewMode)return;runBusy('view:'+v,function(){setView(v);});}
 var sPvaSort=useState('ac_desc'),pvaSort=sPvaSort[0],setPvaSort=sPvaSort[1];
 var sPvaSp=useState(''),pvaSpF=sPvaSp[0],setPvaSpF=sPvaSp[1];
 var sRecAg=useState('bill'),recAg=sRecAg[0],setRecAg=sRecAg[1];// 'bill' | 'due'
@@ -598,7 +626,7 @@ var hs={padding:'9px 10px',textAlign:'right',fontSize:'11.5px',fontFamily:'var(-
 var hC=[e('div',{key:'h',style:Object.assign({},hs,{textAlign:'left',paddingLeft:'16px',color:'var(--text2)',fontSize:'12px',fontFamily:'var(--sans)'})},'Particulars')];
 mos.forEach(function(m,i){hC.push(e('div',{key:'m'+i,style:hs},m));});hC.push(e('div',{key:'t',style:Object.assign({},hs,{background:'var(--totalBg)',color:'var(--text2)',borderRight:'none'})},'TOTAL'));
 
-return e('div',{style:{minHeight:'100vh',background:'var(--bg)'}},
+return e('div',{className:busy?'cdcwait':'',style:{minHeight:'100vh',background:'var(--bg)'}},
 e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'8px'}},
 e('div',null,e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC \u00B7 Projected CF \u00B7 Bill-Wise \u00B7 As of '+(ed.asOfDate?ed.asOfDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'Today')+' \u00B7 '+APP_VERSION+' ('+APP_BUILD+')'),e('div',{style:{fontSize:'18px',fontWeight:700,marginTop:'2px'}},'Cash Intelligence Dashboard'),
 e('div',{style:{fontSize:'9px',color:'var(--text3)',fontFamily:'var(--mono)',marginTop:'2px'}},'Avg: Dr '+ed.companyAvgDays.debtor+'d Cr '+ed.companyAvgDays.creditor+'d \u00B7 '+iP.length+'/'+oP.length+' parties \u00B7 Excluded: '+exDC+'Dr+'+exCC+'Cr ('+fmt(ed.excludedTotals.debtors)+'/'+fmt(ed.excludedTotals.creditors)+')')),
@@ -607,12 +635,12 @@ e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tO+tIE))),
 e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tN>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tN>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tN))),
 e('div',{style:{display:'flex',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}},
-e('button',{onClick:function(){setView('projection');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='projection'?'2px solid var(--cyan)':'1px solid var(--border)',background:viewMode==='projection'?'var(--cyan)':'var(--bg2)',color:viewMode==='projection'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Projection'),
-e('button',{onClick:function(){setView('excluded');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='excluded'?'2px solid #dc2626':'1px solid var(--border)',background:viewMode==='excluded'?'#dc2626':'var(--bg2)',color:viewMode==='excluded'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Excluded ('+Object.keys(ed.excluded.debtors).length+' Dr + '+Object.keys(ed.excluded.creditors).length+' Cr)'),
-pva?e('button',{onClick:function(){setView('pva');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='pva'?'2px solid var(--purple)':'1px solid var(--border)',background:viewMode==='pva'?'var(--purple)':'var(--bg2)',color:viewMode==='pva'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'Pred vs Actual ('+pva.month+')'):null,
-e('button',{onClick:function(){setView('receivables');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='receivables'?'2px solid var(--amber)':'1px solid var(--border)',background:viewMode==='receivables'?'var(--amber)':'var(--bg2)',color:viewMode==='receivables'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'📋 Receivables'),
-e('button',{onClick:function(){setView('payables');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='payables'?'2px solid var(--pink)':'1px solid var(--border)',background:viewMode==='payables'?'var(--pink)':'var(--bg2)',color:viewMode==='payables'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:'pointer'}},'📤 Payables')),
-e('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},e('button',{onClick:function(){expXLS(Object.assign({},ed,{_inTree:iT,_outTree:oT}),gO,ex);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),
+e('button',{onClick:function(){goView('projection');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='projection'?'2px solid var(--cyan)':'1px solid var(--border)',background:viewMode==='projection'?'var(--cyan)':'var(--bg2)',color:viewMode==='projection'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:busy==='view:projection'?'progress':'pointer'}},busyLabel(busy==='view:projection','Projection')),
+e('button',{onClick:function(){goView('excluded');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='excluded'?'2px solid #dc2626':'1px solid var(--border)',background:viewMode==='excluded'?'#dc2626':'var(--bg2)',color:viewMode==='excluded'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:busy==='view:excluded'?'progress':'pointer'}},busyLabel(busy==='view:excluded','Excluded ('+Object.keys(ed.excluded.debtors).length+' Dr + '+Object.keys(ed.excluded.creditors).length+' Cr)')),
+pva?e('button',{onClick:function(){goView('pva');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='pva'?'2px solid var(--purple)':'1px solid var(--border)',background:viewMode==='pva'?'var(--purple)':'var(--bg2)',color:viewMode==='pva'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:busy==='view:pva'?'progress':'pointer'}},busyLabel(busy==='view:pva','Pred vs Actual ('+pva.month+')')):null,
+e('button',{onClick:function(){goView('receivables');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='receivables'?'2px solid var(--amber)':'1px solid var(--border)',background:viewMode==='receivables'?'var(--amber)':'var(--bg2)',color:viewMode==='receivables'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:busy==='view:receivables'?'progress':'pointer'}},busyLabel(busy==='view:receivables','📋 Receivables')),
+e('button',{onClick:function(){goView('payables');},style:{padding:'6px 14px',borderRadius:'6px',border:viewMode==='payables'?'2px solid var(--pink)':'1px solid var(--border)',background:viewMode==='payables'?'var(--pink)':'var(--bg2)',color:viewMode==='payables'?'#fff':'var(--text2)',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600,cursor:busy==='view:payables'?'progress':'pointer'}},busyLabel(busy==='view:payables','📤 Payables'))),
+e('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},e('button',{onClick:function(){runBusy('xls',function(){expXLS(Object.assign({},ed,{_inTree:iT,_outTree:oT}),gO,ex);});},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:busy==='xls'?'progress':'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},busyLabel(busy==='xls','\u2B07 XLS')),
 e('button',{onClick:saveOverridesJSON,style:{background:'var(--amber)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCBE Save'+(Object.keys(dO).length+Object.keys(ex).length>0?' ('+( Object.keys(dO).length+Object.keys(ex).length)+')':'')),
 e('label',{style:{background:'var(--purple)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\uD83D\uDCC2 Load',e('input',{type:'file',accept:'.json',style:{display:'none'},onChange:function(ev){if(ev.target.files&&ev.target.files[0])loadOverridesJSON(ev.target.files[0]);}})),
 e('button',{onClick:function(){sDOv({});sExp({});persistOverrides({},{});},style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--red)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21BA Clear'),
