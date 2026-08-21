@@ -34,6 +34,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 .stab{display:inline-block;padding:6px 16px;cursor:pointer;font-size:12px;font-weight:500;border-radius:6px;color:var(--text3);transition:all 0.2s;margin-right:4px}
 .stab:hover{background:var(--bg3)}
 .stab.active{background:var(--cyan);color:#fff;font-weight:600}
+/* Busy state for a control that kicks off a long synchronous re-render. */
+@keyframes cdcspin{to{transform:rotate(360deg)}}
+.cdcspin{display:inline-block;width:9px;height:9px;margin-right:5px;vertical-align:-1px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:cdcspin 0.6s linear infinite}
+.cdcbusy{cursor:progress}
+.cdcwait,.cdcwait *{cursor:progress !important}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -42,6 +47,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans)}
 <div id="root"></div>
 <script>
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
+// Switching a view, or reloading the data behind one, re-renders thousands of rows
+// synchronously -- on a full year of data the click looks dead for a second or two.
+// React cannot paint in the middle of a render, so setting the new state straight
+// from the handler shows nothing until the new view is ready. Instead: set a busy
+// tag, let the browser paint it (rAF runs before the next paint, the timeout inside
+// it after), and only then do the work. The work and clearing the tag are batched
+// into ONE render -- unbatched, each would trigger the expensive render separately.
+function runBusyWith(setBusy,tag,fn){
+  setBusy(tag);
+  var go=function(){
+    var run=function(){try{fn();}finally{setBusy('');}};
+    try{if(ReactDOM.unstable_batchedUpdates){ReactDOM.unstable_batchedUpdates(run);return;}}catch(_e){}
+    run();
+  };
+  if(window.requestAnimationFrame)requestAnimationFrame(function(){setTimeout(go,0);});else setTimeout(go,30);
+}
+// Put a spinner in front of the label while this control is the busy one.
+function busyLabel(isBusy,label){return isBusy?[e('span',{key:'s',className:'cdcspin'}),label]:label;}
 var APP_VERSION='v1.12.1';var APP_BUILD='13-Jun-2026';
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -367,6 +390,11 @@ function Dash(props){
   var data=props.data,onReset=props.onReset,months=data.months,mc=months.length,pl=data.pl,cf=data.cf;
   var sView=useState('pl'),view=sView[0],setView=sView[1];var sCW=useState(320),colW=sCW[0],setColW=sCW[1];var sSort=useState(true),sortV=sSort[0],setSortV=sSort[1];var sSearch=useState(''),search=sSearch[0],setSearch=sSearch[1];
   var sDr=useState(null),drill=sDr[0],setDrill=sDr[1];function openDrill(node,mi){setDrill({ledger:node.name,monthIdx:mi});}
+  // Which control (if any) is mid-work. Only one at a time: a second click while a
+  // view is still rendering would just queue more of the same freeze.
+  var sBusy=useState(''),busy=sBusy[0],setBusy=sBusy[1];
+  function runBusy(tag,fn){if(busy)return;runBusyWith(setBusy,tag,fn);}
+  function goView(v){if(v===view)return;runBusy('view:'+v,function(){setView(v);});}
   GRID_COL1=colW;
   // Rebuild the invoice-number match set for the current search term. A ledger/party qualifies
   // when the typed text appears anywhere in one of its booked invoice numbers.
@@ -384,7 +412,7 @@ function Dash(props){
     else if(__v._branch==='ahm'){ if(__v.date>__aL)__aL=__v.date; } }
   function fmtSyncDate(y){ if(!y||y.length<8)return '—'; var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return (+y.substr(6,2))+' '+M[(+y.substr(4,2))-1]+' '+y.substr(0,4); }
-  return e('div',{style:{minHeight:'100vh',background:'var(--bg)',color:'var(--text)',fontFamily:'var(--sans)'}},
+  return e('div',{className:busy?'cdcwait':'',style:{minHeight:'100vh',background:'var(--bg)',color:'var(--text)',fontFamily:'var(--sans)'}},
     e('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 24px',borderBottom:'2px solid var(--border)',background:'var(--bg2)',flexWrap:'wrap',gap:'10px'}},
       e('div',null,
         e('div',{style:{fontSize:'10px',letterSpacing:'2px',color:'var(--text3)',textTransform:'uppercase',fontFamily:'var(--mono)'}},'CDC Printers \u00B7 '+(data.branch==='kol'?'KOLKATA':(data.branch==='ahm'?'AHMEDABAD':'CONSOLIDATED'))+' \u00B7 FY '+data.fy),
@@ -398,12 +426,12 @@ function Dash(props){
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--cyan)',fontFamily:'var(--mono)',fontWeight:600}},'IN'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--cyan)'}},'\u20B9'+fmt(tIn))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:'var(--pink)',fontFamily:'var(--mono)',fontWeight:600}},'OUT'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:'var(--pink)'}},'\u20B9'+fmt(tOut))),
         view==='cf'&&e('div',{style:{textAlign:'right'}},e('div',{style:{fontSize:'9px',color:tNet>=0?'var(--green)':'var(--red)',fontFamily:'var(--mono)',fontWeight:600}},'NET'),e('div',{className:'num',style:{fontSize:'16px',fontWeight:700,color:tNet>=0?'var(--green)':'var(--red)'}},'\u20B9'+fmt(tNet))),
-        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':''),onClick:function(){setView('pl');}},'P&L'),e('span',{className:'stab'+(view==='cf'?' active':''),onClick:function(){setView('cf');}},'Cashflow'),e('span',{className:'stab'+(view==='audit'?' active':''),onClick:function(){setView('audit');}},'\ud83d\udd0d Audit'),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
+        e('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginLeft:'8px'}},e('span',{className:'stab'+(view==='pl'?' active':'')+(busy==='view:pl'?' cdcbusy':''),onClick:function(){goView('pl');}},busyLabel(busy==='view:pl','P&L')),e('span',{className:'stab'+(view==='cf'?' active':'')+(busy==='view:cf'?' cdcbusy':''),onClick:function(){goView('cf');}},busyLabel(busy==='view:cf','Cashflow')),e('span',{className:'stab'+(view==='audit'?' active':'')+(busy==='view:audit'?' cdcbusy':''),onClick:function(){goView('audit');}},busyLabel(busy==='view:audit','\ud83d\udd0d Audit')),e('span',{className:'stab'+(sortV?' active':''),onClick:function(){setSortV(!sortV);},style:{fontSize:'11px'}},sortV?'\u2193 Val':'\u2193 A-Z'),
 // FY toggle: switches between Current FY (fyOffset=0) and Prior FY (fyOffset=-1), 12 months each.
-e('button',{onClick:function(){var raw=data._raw;if(!raw)return;var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY'),
+e('button',{onClick:function(){var raw=data._raw;if(!raw)return;runBusy('fy',function(){var newOff=(data.fyOffset===0)?-1:0;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,newOff,data.branch);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);});},style:{background:(data.fyOffset===-1)?'var(--amber)':'var(--bg3)',border:'1px solid var(--border2)',color:(data.fyOffset===-1)?'#fff':'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:busy==='fy'?'progress':'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},busyLabel(busy==='fy',(data.fyOffset===-1)?'\u2190 Current FY':'\u2190 Prior FY')),
 // Branch selector: switches between Consolidated / Kolkata / Ahmedabad. Preserves FY toggle state.
-e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);},style:{padding:'6px 10px',cursor:'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},__lbl);})),
-e('button',{onClick:function(){exportToExcel(data,view,months,sortV,expandRegistry);},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},'\u2B07 XLS'),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
+e('div',{style:{display:'flex',gap:'2px',marginLeft:'4px',border:'1px solid var(--border2)',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');return e('span',{key:__b,onClick:function(){var raw=data._raw;if(!raw||data.branch===__b)return;runBusy('br:'+__b,function(){var nd=processData(raw.vouchers,raw.xd,raw.stock,raw.ibLedgers,12,data.fyOffset||0,__b);nd.branchStats=data.branchStats;nd._raw=raw;props.setData(nd);});},style:{padding:'6px 10px',cursor:busy==='br:'+__b?'progress':'pointer',fontSize:'10px',fontFamily:'var(--mono)',fontWeight:600,background:data.branch===__b?'var(--cyan)':'var(--bg3)',color:data.branch===__b?'#fff':'var(--text2)'}},busyLabel(busy==='br:'+__b,__lbl));})),
+e('button',{onClick:function(){runBusy('xls',function(){exportToExcel(data,view,months,sortV,expandRegistry);});},style:{background:'var(--green)',border:'none',color:'#fff',padding:'6px 12px',borderRadius:'6px',cursor:busy==='xls'?'progress':'pointer',fontSize:'11px',fontFamily:'var(--mono)',fontWeight:600}},busyLabel(busy==='xls','\u2B07 XLS')),e('button',{onClick:onReset,style:{background:'var(--bg3)',border:'1px solid var(--border2)',color:'var(--text2)',padding:'6px 12px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontFamily:'var(--mono)'}},'\u21A9 New')))),
     e('div',{style:{padding:'4px 24px',background:'var(--bg2)',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)',flexWrap:'wrap'}},e('input',{type:'text',placeholder:'\uD83D\uDD0D Search name or invoice no...',value:search,onChange:function(ev){setSearch(ev.target.value);},style:{width:'260px',padding:'6px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'6px',color:'var(--text)',fontSize:'12px',fontFamily:'var(--sans)',outline:'none'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},'Col:'),e('input',{type:'range',min:200,max:500,value:colW,onChange:function(ev){setColW(parseInt(ev.target.value));},style:{width:'100px',accentColor:'var(--cyan)'}}),e('span',{style:{fontSize:'10px',color:'var(--text3)',fontFamily:'var(--mono)'}},colW+'px')),
     e('div',{style:{overflowX:'auto'}},e('div',{style:{minWidth:(colW+mc*105+115)+'px'}},
       e('div',{style:{display:'grid',gridTemplateColumns:gtc(mc),position:'sticky',top:0,zIndex:20,background:'var(--bg2)'}},hCells),
