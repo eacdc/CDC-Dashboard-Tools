@@ -223,7 +223,10 @@ async function ingest(payload) {
     const CHUNK = 1000;
     for (let i = 0; i < ops.length; i += CHUNK) {
       const r = await db.collection('vouchers').bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });
-      result.vouchers += (r.upsertedCount || 0) + (r.modifiedCount || 0) + (r.matchedCount || 0);
+      // upserted + matched, NOT + modified: an existing voucher that changes is
+      // reported as BOTH matched and modified, so adding all three counted every
+      // re-sync twice and reported 2000 vouchers stored for a 1000-voucher push.
+      result.vouchers += (r.upsertedCount || 0) + (r.matchedCount || 0);
     }
   }
   return result;
@@ -295,7 +298,8 @@ async function syncIncremental(payload) {
     const CHUNK = 1000;
     for (let i = 0; i < ops.length; i += CHUNK) {
       const r = await db.collection('vouchers').bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });
-      result.upserted += (r.upsertedCount || 0) + (r.modifiedCount || 0) + (r.matchedCount || 0);
+      // See ingest(): matched and modified overlap, so adding both double-counts.
+      result.upserted += (r.upsertedCount || 0) + (r.matchedCount || 0);
     }
   }
 
