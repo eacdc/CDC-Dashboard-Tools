@@ -138,6 +138,34 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -FromDate 20250401 -T
 It upserts on GUID, so existing vouchers are updated in place — the `bills` field is
 added and nothing is duplicated.
 
+### On a shared / RDP machine: make sure you are talking to YOUR Tally
+
+Tally's HTTP port is per-machine, not per-user: whichever instance starts first
+binds `9001`, and on a terminal-server box with many people logged in that can be
+**someone else's Tally, in another RDP session**. The extractor then pulls whatever
+companies *that* instance has open — which looks exactly like "my company is not
+loaded", even though it is open on your own screen.
+
+Check who owns the port:
+
+```
+netstat -ano | findstr :9001
+tasklist /FI "PID eq <the PID it printed>" /V
+```
+
+Compare the `Session#` with your own Tally's (`tasklist /FI "IMAGENAME eq tally.exe" /V`
+— yours is the row with your username and a window title). If they differ, give your
+Tally its own port: **F1 → Settings → Connectivity → Client/Server configuration**,
+`Tally acting as: Server` (or Both), `Port: 9019` (any free port — confirm with
+`netstat -ano | findstr :9019` that nothing answers). Then pass it to every script:
+
+```powershell
+-TallyUrl "http://localhost:9019"
+```
+
+`run_daily.ps1` and `run_backfill.ps1` take `-TallyUrl` too — a scheduled task left on
+the default `9001` will quietly sync another instance's company into your branch.
+
 ### Fixing a branch that got the wrong company
 
 If a pull ran with `-Branch kol` but `-Company "…(Ahmedabad)…"` (or the reverse),
