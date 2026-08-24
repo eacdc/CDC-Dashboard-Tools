@@ -598,7 +598,22 @@ function Invoke-Targeted {
 # A multi-year back-fill needs the EXACT company name for each financial year
 # (CDC keeps one company per FY). Guessing them is how a back-fill silently pulls
 # nothing, so ask Tally. Run this first, then feed the names to run_backfill.ps1.
-if ($ListCompanies) {
+# A COMPANY node carries NAME as BOTH an attribute and a child element, so the
+# convenient $node.NAME returns the pair and stringifies to "<value> NAME".
+# Read each field explicitly instead: attribute first, then child element.
+function CompField($node, [string]$field) {
+    $a = $node.GetAttribute($field)
+    if ($a) { return ($a -replace "[\x00-\x1f]","").Trim() }
+    $e = $node.SelectSingleNode($field)
+    if ($e) { return xval $e }
+    return ""
+}
+# Which companies is the Tally at -TallyUrl actually serving right now? Asked by
+# -ListCompanies, and again when a pull comes back empty -- on a shared or RDP
+# machine the port can belong to a DIFFERENT Tally instance (another user's
+# session), and then "company not loaded" is true but points at the wrong thing.
+# Naming the companies that Tally DOES have open makes that obvious immediately.
+function Get-OpenCompanyRows {
     $companyPayload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
@@ -617,19 +632,9 @@ if ($ListCompanies) {
 </ENVELOPE>
 "@
     $rawXml = Post-Tally $companyPayload
-    $rawPath = Join-Path $OutDir "companies_raw.xml"
-    [System.IO.File]::WriteAllText($rawPath, $rawXml, (New-Object System.Text.UTF8Encoding($false)))
+    $script:CompaniesRawPath = Join-Path $OutDir "companies_raw.xml"
+    [System.IO.File]::WriteAllText($script:CompaniesRawPath, $rawXml, (New-Object System.Text.UTF8Encoding($false)))
     [xml]$cx = $rawXml
-    # A COMPANY node carries NAME as BOTH an attribute and a child element, so the
-    # convenient $node.NAME returns the pair and stringifies to "<value> NAME".
-    # Read each field explicitly instead: attribute first, then child element.
-    function CompField($node, [string]$field) {
-        $a = $node.GetAttribute($field)
-        if ($a) { return ($a -replace "[\x00-\x1f]","").Trim() }
-        $e = $node.SelectSingleNode($field)
-        if ($e) { return xval $e }
-        return ""
-    }
     $rows = @(); $seen = @{}
     foreach ($c in $cx.SelectNodes("//COMPANY")) {
         $nm = CompField $c "NAME"
@@ -643,6 +648,13 @@ if ($ListCompanies) {
             To      = CompField $c "ENDINGAT"
         }
     }
+    # Comma so a single company still comes back as an array, not a bare object.
+    return ,$rows
+}
+
+if ($ListCompanies) {
+    $rows = Get-OpenCompanyRows
+    $rawPath = $script:CompaniesRawPath
     if ($rows.Count -eq 0) {
         Write-Warning ("Tally returned no companies. Raw reply saved to {0} for inspection." -f $rawPath)
     } else {
@@ -651,6 +663,9 @@ if ($ListCompanies) {
     }
     Write-Host "NOTE: this lists only the companies currently OPEN in Tally, not every company on disk."
     Write-Host "      A year missing here cannot be pulled - open it first (Alt+F3 > Select Company), then re-run."
+    Write-Host "      If a company IS open on your screen but missing above, this port belongs to a DIFFERENT"
+    Write-Host "      Tally (on a shared/RDP box, whichever instance grabbed it first - possibly another user's)."
+    Write-Host "      Check: netstat -ano | findstr :9001   then   tasklist /FI ""PID eq <pid>"" /V"
     Write-Host ("      Raw reply: {0}" -f $rawPath)
     Write-Host ""
     Write-Host "Feed the ones you want into run_backfill.ps1 -Companies 'FY=Exact Company Name', e.g."
@@ -740,7 +755,28 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # dashboard. Abort loudly instead. Override with -MinLedgers 0 if you really do
 # have a tiny company.
 if ($ledgerToGroup.Count -lt $MinLedgers) {
-    Write-Warning ("Company '{0}' returned only {1} ledgers (< {2}). It is almost certainly NOT loaded in this Tally -- refusing to sync branch '{3}' so the good master/vouchers in Mongo are not overwritten with empty data. Load the correct company (or fix -Company / -Branch), or pass -MinLedgers 0 to override." -f $Company, $ledgerToGroup.Count, $MinLedgers, $Branch)
+    Write-Warning ("Company '{0}' returned only {1} ledgers (< {2}). It is almost certainly NOT loaded in the Tally at {3} -- refusing to sync branch '{4}' so the good master/vouchers in Mongo are not overwritten with empty data. Load the correct company (or fix -Company / -Branch), or pass -MinLedgers 0 to override." -f $Company, $ledgerToGroup.Count, $MinLedgers, $TallyUrl, $Branch)
+    # Name the companies that Tally DOES have open. If the one you asked for is
+    # missing while it is plainly open on your screen, you are talking to someone
+    # else's Tally: on a shared/RDP box the port belongs to whichever instance
+    # grabbed it first, which can be another user's session entirely.
+    try {
+        $openRows = Get-OpenCompanyRows
+        if ($openRows.Count -gt 0) {
+            Write-Warning ("The Tally at {0} currently has these companies OPEN:" -f $TallyUrl)
+            foreach ($r in $openRows) { Write-Warning ("    - {0}" -f $r.Company) }
+            Write-Warning 'If the company you asked for is open on YOUR screen but is not in that list, that'
+            Write-Warning 'is a different Tally instance. Find out whose it is with:'
+            Write-Warning '    netstat -ano | findstr :<port>'
+            Write-Warning '    tasklist /FI "PID eq <the pid it printed>" /V'
+            Write-Warning 'then give your own Tally its own port (F1 > Settings > Connectivity) and pass'
+            Write-Warning '-TallyUrl http://localhost:<your port> to this script and to run_daily/run_backfill.'
+        } else {
+            Write-Warning ("The Tally at {0} reports no open companies at all." -f $TallyUrl)
+        }
+    } catch {
+        Write-Warning ("  (could not list that Tally's open companies: {0})" -f $_.Exception.Message)
+    }
     exit 2
 }
 
