@@ -37,7 +37,8 @@ param(
     [int]$ToFY,                                     # last FY to pull (default: the FY before the current one)
     [string]$CompanyPattern = "CDC PRINTERS {FY}",  # {FY} is replaced with e.g. 2015-16
     [string[]]$Companies = @(),                     # per-year overrides: "2015-16=Exact Tally Company Name"
-    [string]$TallyUrl    = "http://localhost:9001",
+    # See run_daily.ps1: on a shared/RDP box 9001 can be another user's Tally.
+    [string]$TallyUrl    = $(if ($env:CDC_TALLY_URL) { $env:CDC_TALLY_URL } else { "http://localhost:9001" }),
     [string]$IngestUrl   = $env:CDC_INGEST_URL,
     [string]$IngestToken = $env:CDC_INGEST_TOKEN,
     [string]$OutDir,                                # default: .\tally_export (same as run_daily)

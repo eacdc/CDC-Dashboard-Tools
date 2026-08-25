@@ -16,6 +16,9 @@
       MONGODB_URI       Atlas connection string   (for the direct-loader path)
       CDC_INGEST_URL    e.g. https://cdc-api...   (for the hosted-API path)
       CDC_INGEST_TOKEN  shared secret token       (optional, with CDC_INGEST_URL)
+      CDC_TALLY_URL     e.g. http://localhost:9019 (which Tally to pull from; the
+                        default 9001 can belong to ANOTHER user's Tally on a shared
+                        or terminal-server box -- see SETUP.md)
 
     RUN:  powershell -ExecutionPolicy Bypass -File .\run_daily.ps1
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -TrailingDays 7
@@ -24,7 +27,10 @@ param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
-    [string]$TallyUrl  = "http://localhost:9001",
+    # Which Tally to pull from. On a shared/RDP machine port 9001 belongs to whichever
+    # instance started first -- possibly another user's -- so pin your own instance's
+    # port here or in CDC_TALLY_URL rather than trusting the default.
+    [string]$TallyUrl  = $(if ($env:CDC_TALLY_URL) { $env:CDC_TALLY_URL } else { "http://localhost:9001" }),
     [string]$IngestUrl   = $env:CDC_INGEST_URL,     # falls back to the env var
     [string]$IngestToken = $env:CDC_INGEST_TOKEN,
     [string]$Branches    = "kol,ahm"                # which branch(es) THIS machine syncs (e.g. "kol").
