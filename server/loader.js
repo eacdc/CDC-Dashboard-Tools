@@ -99,13 +99,37 @@ async function main() {
     const size = Math.max(1, Number(arg('chunk', '2000')) || 2000);
     const chunks = Math.max(1, Math.ceil(vouchers.length / size));
     let sent = 0;
+    // Retry each chunk a few times. Across a push this long the far end drops the
+    // odd keep-alive connection, and losing the run to one dropped socket is absurd
+    // when the next attempt succeeds. Upserts are idempotent, so a retry can only
+    // re-write the same rows. A 4xx is never retried: a bad token or an oversized
+    // body fails identically however many times we ask.
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     for (let i = 0; i < chunks; i++) {
       const part = { ...payload, vouchers: vouchers.slice(i * size, (i + 1) * size) };
       if (i > 0) delete part.master;
-      const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(part) });
-      const text = await res.text();
-      if (!res.ok) {
-        console.error(`chunk ${i + 1}/${chunks} FAILED: ${res.status} ${text}`);
+      const body = JSON.stringify(part);
+      const MAX = 4;
+      let res = null, text = '', why = '';
+      for (let attempt = 1; attempt <= MAX; attempt++) {
+        try {
+          res = await fetch(endpoint, { method: 'POST', headers, body });
+          text = await res.text();
+          if (res.ok) break;
+          why = `${res.status} ${text}`;
+          if (res.status >= 400 && res.status < 500) break;
+        } catch (e) {
+          res = null;
+          why = e.message || String(e);
+        }
+        if (attempt < MAX) {
+          const wait = 2 ** attempt * 1000; // 2s, 4s, 8s
+          console.error(`chunk ${i + 1}/${chunks} attempt ${attempt}/${MAX} failed (${why}) - retrying in ${wait / 1000}s`);
+          await sleep(wait);
+        }
+      }
+      if (!res || !res.ok) {
+        console.error(`chunk ${i + 1}/${chunks} FAILED: ${why}`);
         console.error(`Sent ${sent}/${vouchers.length} vouchers. Re-run to resume (upserts are idempotent);`);
         console.error(`if this was a 413, retry with a smaller --chunk (e.g. --chunk ${Math.max(250, Math.floor(size / 4))}).`);
         process.exit(1);

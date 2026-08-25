@@ -962,15 +962,44 @@ if ($IngestUrl) {
             if ($Historical) { $payload.masterMode = 'merge' }
         }
         $body = $payload | ConvertTo-Json -Depth 12 -Compress
-        try {
-            $resp = Invoke-WebRequest -Uri $uri -Method Post -Body $body -Headers $headers -UseBasicParsing
+        # Retry a chunk a few times before giving up. Over a run this long the far
+        # end drops the occasional keep-alive connection ("A connection that was
+        # expected to be kept alive was closed by the server"), and losing a whole
+        # 34,000-voucher year to one dropped socket is absurd when the next attempt
+        # succeeds. Upserts are idempotent, so a retry can only re-write the same
+        # rows. A 4xx is NOT retried: a bad token or an oversized body fails the
+        # same way however many times we ask.
+        $attempt = 0; $maxAttempts = 4; $chunkOk = $false; $lastErr = ""
+        while (-not $chunkOk -and $attempt -lt $maxAttempts) {
+            $attempt++
+            try {
+                $resp = Invoke-WebRequest -Uri $uri -Method Post -Body $body -Headers $headers -UseBasicParsing
+                $chunkOk = $true
+            } catch {
+                $lastErr = $_.Exception.Message
+                $code = 0
+                try { if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode } } catch { }
+                if ($code -ge 400 -and $code -lt 500) { break }
+                if ($attempt -lt $maxAttempts) {
+                    $wait = [int][Math]::Pow(2, $attempt)   # 2s, 4s, 8s
+                    Write-Warning ("  chunk {0}/{1} attempt {2}/{3} failed ({4}) - retrying in {5}s" -f ($ci + 1), $chunks, $attempt, $maxAttempts, $lastErr, $wait)
+                    Start-Sleep -Seconds $wait
+                }
+            }
+        }
+        if ($chunkOk) {
             $sent += $slice.Count
             Write-Host ("  chunk {0}/{1}: {2}/{3} vouchers - {4}" -f ($ci + 1), $chunks, $sent, $total, $resp.Content)
-        } catch {
-            Write-Warning ("  chunk {0}/{1} failed: {2}" -f ($ci + 1), $chunks, $_.Exception.Message)
+        } else {
+            Write-Warning ("  chunk {0}/{1} failed after {2} attempt(s): {3}" -f ($ci + 1), $chunks, $attempt, $lastErr)
             Write-Warning ("  {0}/{1} vouchers reached the server before this." -f $sent, $total)
-            Write-Warning ("  Files are still on disk at {0}. Re-run to resume (upserts are idempotent)," -f $OutDir)
-            Write-Warning ("  or push with: node server/loader.js --dir {0} --branch {1} --url {2} --token <your-token> --chunk {3}" -f $OutDir, $Branch, $IngestUrl.TrimEnd('/'), [Math]::Max(250, [int]($ChunkSize / 4)))
+            Write-Warning ("  The files are still on disk, so push them again WITHOUT re-pulling Tally:")
+            # -historical matters: this is an old financial year, and without it that
+            # year's ledger master would REPLACE the live hierarchy instead of merging.
+            $histArg = ""
+            if ($Historical) { $histArg = " --historical" }
+            Write-Warning ("    node server\loader.js --dir {0} --branch {1} --url {2} --token <your-token> --chunk {3}{4}" -f $OutDir, $Branch, $IngestUrl.TrimEnd('/'), [Math]::Max(250, [int]($ChunkSize / 4)), $histArg)
+            Write-Warning ("  (re-running this script also works, but re-pulls the whole range from Tally.)")
             $failed = $true
             break
         }
