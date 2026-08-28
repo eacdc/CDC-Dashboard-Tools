@@ -183,10 +183,19 @@ the new. Tally's ledger GUIDs are per company, so a back-filled year's GUIDs say
 nothing against the live one — nothing links the two automatically, and the
 dashboard shows one customer twice, each holding half their history.
 
-`server/aliasSuggest.js` (`GET /api/alias-suggestions?branch=all|kol|ahm`) ranks
-candidate pairs on the evidence actually in the data. It scans **every** voucher,
-not the range the browser has loaded — the old name usually lives in a year nobody
-has open.
+`server/aliasSuggest.js` ranks candidate pairs on the evidence actually in the data.
+It scans **every** voucher, not the range the browser has loaded — the old name
+usually lives in a year nobody has open.
+
+That is well over a hundred thousand documents once the back-fill years are in, so
+the scan is **not** a request: `POST /api/alias-suggestions/scan` starts it and
+returns immediately, the result is written to the `alias_scan` doc, and
+`GET /api/alias-suggestions` serves whatever was last computed (the UI polls every
+3 s while one is running). Doing it inline returned **502** — Render's proxy gave up
+waiting. The cursor is streamed rather than collected, so memory stays flat: 150,000
+vouchers fold into ~4,000 profiles in ~0.7 s using ~34 MB. Accepted and dismissed
+pairs are filtered when the result is read, so acting on one suggestion never
+invalidates the scan.
 
 | Evidence | Source | Weight |
 |---|---|---|
