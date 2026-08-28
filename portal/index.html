@@ -2640,6 +2640,7 @@ function SuggestedMerges(pr){
   var s6=useState({}),sel=s6[0],setSel=s6[1];   // checked rows, by pair key
   var s7=useState(0),prog=s7[0],setProg=s7[1];  // vouchers scanned so far, while running
   var s8=useState(0),covered=s8[0],setCovered=s8[1];// vouchers the last finished scan read
+  var s9=useState('all'),filt=s9[0],setFilt=s9[1];  // tier filter: all|certain|likely|possible
   var poll=useRef(null);
   function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
   // Read whatever the last scan produced. Instant: the scan itself runs on the
@@ -2709,15 +2710,25 @@ function SuggestedMerges(pr){
     setSel({});
     pr.onAcceptMany(rows);
   }
-  var selected=list.filter(function(s){return sel[s.key];});
+  // The tiers are just bands of the same confidence score, and the work splits
+  // along them: the certain ones are worth accepting in bulk, the possible ones are
+  // worth reading one by one. So they can be filtered, and the band each one covers
+  // is spelled out -- a badge saying LIKELY means nothing if you don't know it is
+  // 70-89%.
+  var TIER={certain:{bg:'#dcfce7',bd:'#86efac',fg:'#15803d',label:'CERTAIN',range:'90%+'},
+            likely:{bg:'#fef9c3',bd:'#fde047',fg:'#a16207',label:'LIKELY',range:'70-89%'},
+            possible:{bg:'#f1f5f9',bd:'#cbd5e1',fg:'#475569',label:'POSSIBLE',range:'50-69%'}};
+  var TIERS=['certain','likely','possible'];
+  var counts={};TIERS.forEach(function(t){counts[t]=list.filter(function(s){return s.tier===t;}).length;});
+  var shown=filt==='all'?list:list.filter(function(s){return s.tier===filt;});
+  // Selection is read off the VISIBLE rows only: a row ticked and then filtered away
+  // must not be swept up by a bulk action the user can no longer see.
+  var selected=shown.filter(function(s){return sel[s.key];});
   function toggle(k){setSel(function(m){var n=Object.assign({},m);if(n[k])delete n[k];else n[k]=1;return n;});}
   function toggleAll(){
-    if(selected.length===list.length&&list.length){setSel({});return;}
-    var n={};list.forEach(function(s){n[s.key]=1;});setSel(n);
+    if(selected.length===shown.length&&shown.length){setSel({});return;}
+    var n={};shown.forEach(function(s){n[s.key]=1;});setSel(n);
   }
-  var TIER={certain:{bg:'#dcfce7',bd:'#86efac',fg:'#15803d',label:'CERTAIN'},
-            likely:{bg:'#fef9c3',bd:'#fde047',fg:'#a16207',label:'LIKELY'},
-            possible:{bg:'#f1f5f9',bd:'#cbd5e1',fg:'#475569',label:'POSSIBLE'}};
   if(!open){
     return e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0'}},
       e('button',{onClick:load,style:{background:'#7c3aed',border:'none',color:'#fff',padding:'7px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontWeight:600,fontFamily:'monospace'}},'🔎 Find merges automatically'),
@@ -2742,13 +2753,27 @@ function SuggestedMerges(pr){
     // batch, so ticking thirty certain renames costs what one costs.
     phase==='done'&&list.length>0&&e('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'5px 2px 7px',flexWrap:'wrap'}},
       e('label',{style:{display:'flex',alignItems:'center',gap:'5px',fontSize:'10px',color:'#475569',fontFamily:'monospace',cursor:'pointer'}},
-        e('input',{type:'checkbox',checked:list.length>0&&selected.length===list.length,
-          ref:function(el){if(el)el.indeterminate=selected.length>0&&selected.length<list.length;},
+        e('input',{type:'checkbox',checked:shown.length>0&&selected.length===shown.length,
+          ref:function(el){if(el)el.indeterminate=selected.length>0&&selected.length<shown.length;},
           onChange:toggleAll,style:{cursor:'pointer'}}),
-        selected.length?(selected.length+' of '+list.length+' selected'):'select all'),
+        selected.length?(selected.length+' of '+shown.length+' selected'):'select all'),
       selected.length>0&&e('span',{style:{fontSize:'10px',color:'#94a3b8',fontFamily:'monospace'}},
         selected.filter(function(s){return s.tier==='certain';}).length+' certain · '+
         selected.filter(function(s){return s.overlap;}).length+' overlapping'),
+      // Filter by band. Picking one clears the ticks, so a selection can never
+      // outlive the rows it was made on.
+      e('span',{style:{display:'flex',gap:'3px',marginLeft:'4px'}},
+        ['all'].concat(TIERS).map(function(t){
+          var on=filt===t,n=t==='all'?list.length:counts[t],cf=TIER[t];
+          if(t!=='all'&&!n)return null;
+          return e('span',{key:t,onClick:function(){setFilt(t);setSel({});},
+            title:t==='all'?'every suggestion':(cf.label+' = '+cf.range+' confidence'),
+            style:{cursor:'pointer',fontSize:'9px',fontFamily:'monospace',fontWeight:700,padding:'2px 7px',borderRadius:'10px',
+              background:on?(cf?cf.fg:'#6b21a8'):(cf?cf.bg:'#ede9fe'),
+              color:on?'#fff':(cf?cf.fg:'#6b21a8'),
+              border:'1px solid '+(cf?cf.bd:'#ddd6fe')}},
+            (t==='all'?'ALL':cf.label)+' '+n);
+        })),
       e('span',{style:{marginLeft:'auto'}}),
       e('button',{disabled:!selected.length,onClick:function(){acceptMany(selected);},
         style:{background:selected.length?'#0891b2':'#e2e8f0',border:'none',color:selected.length?'#fff':'#94a3b8',padding:'4px 12px',borderRadius:'5px',cursor:selected.length?'pointer':'default',fontSize:'10px',fontWeight:600}},
@@ -2757,11 +2782,11 @@ function SuggestedMerges(pr){
         style:{background:selected.length?'#fef2f2':'#f8fafc',border:'1px solid '+(selected.length?'#fecaca':'#e2e8f0'),color:selected.length?'#dc2626':'#94a3b8',padding:'4px 12px',borderRadius:'5px',cursor:selected.length?'pointer':'default',fontSize:'10px'}},
         'Not same'+(selected.length?' ('+selected.length+')':''))),
     phase==='done'&&list.length>0&&e('div',{style:{maxHeight:'230px',overflowY:'auto',border:'1px solid #e9d5ff',borderRadius:'8px',background:'#fff'}},
-      list.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};var on=!!sel[s.key];
+      shown.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};var on=!!sel[s.key];
         return e('div',{key:s.key||i,style:{padding:'8px 12px',borderBottom:'1px solid #f5f3ff',background:on?'#f5f3ff':'transparent'}},
           e('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
             e('input',{type:'checkbox',checked:on,onChange:function(){toggle(s.key);},title:'select for a bulk action',style:{cursor:'pointer',flex:'0 0 auto'}}),
-            e('span',{style:{background:t.bg,border:'1px solid '+t.bd,color:t.fg,fontSize:'9px',fontWeight:700,padding:'1px 6px',borderRadius:'4px',fontFamily:'monospace'}},t.label),
+            e('span',{title:'confidence '+Math.round((s.confidence||0)*100)+'% — '+t.label+' is '+t.range,style:{background:t.bg,border:'1px solid '+t.bd,color:t.fg,fontSize:'9px',fontWeight:700,padding:'1px 6px',borderRadius:'4px',fontFamily:'monospace'}},t.label+' '+Math.round((s.confidence||0)*100)+'%'),
             e('span',{style:{fontSize:'11.5px',fontFamily:'monospace',color:'#64748b'}},s.variant),
             ov[s.variant]?e('span',{style:{fontSize:'10px',color:'#be185d',fontFamily:'monospace'}},'('+pr.fmtC(ov[s.variant])+')'):null,
             e('span',{style:{color:'#94a3b8'}},'→'),
@@ -2772,7 +2797,7 @@ function SuggestedMerges(pr){
               e('button',{onClick:function(){dismissMany([s]);},title:'Not the same party — do not suggest again',style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Not same'))),
           e('div',{style:{fontSize:'9.5px',color:'#6b7280',fontFamily:'monospace',marginTop:'3px',lineHeight:1.5}},s.evidence.join('  ·  ')));
       })),
-    phase==='done'&&list.length>0&&e('div',{style:{fontSize:'9.5px',color:'#7c3aed',marginTop:'6px'}},'Accept merges the left name into the right (the one still in use). Check the outstanding figures first: the right-hand party should be the one carrying this year’s payments.'));
+    phase==='done'&&list.length>0&&e('div',{style:{fontSize:'9.5px',color:'#7c3aed',marginTop:'6px'}},'CERTAIN 90%+ · LIKELY 70-89% · POSSIBLE 50-69% — the percentage is how strongly the evidence points at one party, not how similar the names look. Accept merges the left name into the right (the one still in use); check the outstanding figures first, the right-hand party should be the one carrying this year’s payments.'));
 }
 
 function AliasModal(pr){

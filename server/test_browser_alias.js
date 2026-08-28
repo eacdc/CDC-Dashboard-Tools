@@ -77,6 +77,9 @@ const V = (date, party, amt, gstin) => ({
     // A second rename, so a bulk selection has more than one row to act on.
     V('20210610', 'Alpha Steel', 60000, GST2), V('20211110', 'Alpha Steel', 61000, GST2),
     V('20230810', 'Alpha Steel Works Pvt Ltd', 62000, GST2), V('20240310', 'Alpha Steel Works Pvt Ltd', 63000, GST2),
+    // Same PAN, different state registration: a LIKELY, not a CERTAIN.
+    V('20210710', 'Modern Herbo', 70000, '19AAACM5678K1Z9'), V('20211210', 'Modern Herbo', 71000, '19AAACM5678K1Z9'),
+    V('20230910', 'Modern Herbo Maharashtra', 72000, '27AAACM5678K1Z1'), V('20240410', 'Modern Herbo Maharashtra', 73000, '27AAACM5678K1Z1'),
     // A pair that must stay a question: alike, but trading side by side.
     V('20250601', 'Sunrise Papers', 90000, null), V('20250605', 'Sunrise Paper Mills', 95000, null),
     V('20260101', 'Sunrise Papers', 80000, null), V('20260105', 'Sunrise Paper Mills', 85000, null),
@@ -85,6 +88,7 @@ const V = (date, party, amt, gstin) => ({
     'M/S Gleebuds': 'Sundry Debtors', 'Gleebuds Paper Pvt Ltd': 'Sundry Debtors',
     'Sunrise Papers': 'Sundry Debtors', 'Sunrise Paper Mills': 'Sundry Debtors',
     'Alpha Steel': 'Sundry Debtors', 'Alpha Steel Works Pvt Ltd': 'Sundry Debtors',
+    'Modern Herbo': 'Sundry Debtors', 'Modern Herbo Maharashtra': 'Sundry Debtors',
   }, groups: { 'Sundry Debtors': 'Current Assets', 'Current Assets': null }, contacts: {} });
 
   const server = app.listen(0);
@@ -105,12 +109,12 @@ const V = (date, party, amt, gstin) => ({
     api = await (await fetch(`${base}/api/alias-suggestions`)).json();
   }
   assert(!fakeDb.collection('vouchers').toArrayCalls, 'the scan streams the cursor and never materialises the collection');
-  assert(api.scannedVouchers === 12, 'every voucher is scanned (count reported back)');
+  assert(api.scannedVouchers === 16, 'every voucher is scanned (count reported back)');
   console.log('endpoint:', JSON.stringify(api.suggestions.map((s) => `${s.tier} ${s.variant} -> ${s.canonical}`)));
   assert(api.suggestions.length >= 1, 'the scan result is stored and served');
   const glee = api.suggestions.find((x) => /Gleebuds/.test(x.variant));
   assert(glee && glee.canonical === 'Gleebuds Paper Pvt Ltd', 'endpoint picks the current name as canonical');
-  assert(api.suggestions.length === 2, 'both planted renames found, the side-by-side lookalikes not');
+  assert(api.suggestions.length === 3, 'both renames plus the same-PAN pair; the side-by-side lookalikes not');
 
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
@@ -143,7 +147,7 @@ const V = (date, party, amt, gstin) => ({
     window.__saved = null; window.__saveCalls = 0;
     if (typeof window.AliasModal !== 'function') throw new Error('AliasModal is not a global — the portal shell got wrapped?');
     ReactDOM.render(React.createElement(window.AliasModal, {
-      aliases: {}, names: ['M/S Gleebuds', 'Gleebuds Paper Pvt Ltd', 'Alpha Steel', 'Alpha Steel Works Pvt Ltd'], outstanding: {},
+      aliases: {}, names: ['M/S Gleebuds', 'Gleebuds Paper Pvt Ltd', 'Alpha Steel', 'Alpha Steel Works Pvt Ltd', 'Modern Herbo', 'Modern Herbo Maharashtra'], outstanding: {},
       onSave: (m) => { window.__saved = m; window.__saveCalls = (window.__saveCalls || 0) + 1; }, onClose: () => {},
     }), host);
   }, base);
@@ -151,27 +155,41 @@ const V = (date, party, amt, gstin) => ({
   await page.click('text=Find merges automatically');
   await page.waitForSelector('text=SUGGESTED MERGES');
   await page.waitForFunction(() => /CERTAIN/.test(document.body.innerText), null, { timeout: 15000 });
-  const shown = await page.evaluate(() => document.body.innerText);
+  let shown = await page.evaluate(() => document.body.innerText);
   assert(/CERTAIN/.test(shown), 'the rename is shown, tagged CERTAIN');
   assert(/same GSTIN 19AABCG1234M1Z5/.test(shown), 'the evidence names the shared GSTIN');
-  assert(/12 vouchers/.test(shown), 'the header says how many vouchers the scan covered');
+  assert(/16 vouchers/.test(shown), 'the header says how many vouchers the scan covered');
   assert(/activity does not overlap/.test(shown), 'the evidence states the activity windows do not overlap');
   assert(!/Sunrise/.test(shown), 'the side-by-side lookalikes are not offered at all');
-  await page.screenshot({ path: '/tmp/alias_suggestions.png' });
+  await page.screenshot({ path: '/tmp/alias_tiers.png' });
 
-  assert((await page.$$('input[type=checkbox]')).length === 3, 'a checkbox per row plus the select-all');
+  assert((await page.$$('input[type=checkbox]')).length === 4, 'a checkbox per row plus the select-all');
+  // The confidence number and the band it falls in are both on screen.
+  assert(/CERTAIN 9[0-9]%/.test(shown), 'the badge carries the actual confidence percentage');
+  assert(/LIKELY 8[0-9]%/.test(shown), 'a same-PAN pair shows as LIKELY with its own percentage');
+  assert(/CERTAIN 90%\+ · LIKELY 70-89% · POSSIBLE 50-69%/.test(shown), 'the bands are spelled out on screen');
+  assert(/ALL 3/.test(shown) && /CERTAIN 2/.test(shown) && /LIKELY 1/.test(shown), 'filter chips count each band');
+
+  // Filtering narrows the list, and select-all then covers only what is visible.
+  await page.click('text=LIKELY 1');
+  const filtered = await page.evaluate(() => document.body.innerText);
+  assert(/Modern Herbo/.test(filtered) && !/Gleebuds/.test(filtered), 'the LIKELY filter shows only that band');
+  await page.click('text=select all');
+  assert(/1 of 1 selected/.test(await page.evaluate(() => document.body.innerText)), 'select-all covers the filtered rows only');
+  await page.click('text=ALL 3');
+  assert(!/\d+ of \d+ selected/.test(await page.evaluate(() => document.body.innerText)), 'changing the filter clears the ticks');
 
   const rowBoxes = () => page.$$eval('input[type=checkbox]', (b) => b.slice(1).map((x) => x.checked));
 
   // Select all, then act on the whole selection in one go.
   await page.click('text=select all');
   assert((await rowBoxes()).every(Boolean), 'select-all ticks every row');
-  assert(/2 of 2 selected/.test(await page.evaluate(() => document.body.innerText)), 'the count follows the selection');
-  await page.click('text=Accept selected (2)');
+  assert(/3 of 3 selected/.test(await page.evaluate(() => document.body.innerText)), 'the count follows the selection');
+  await page.click('text=Accept selected (3)');
   await page.waitForFunction(() => window.__saved !== null, null, { timeout: 5000 });
   const saved = await page.evaluate(() => window.__saved);
   assert(saved && saved['M/S Gleebuds'] === 'Gleebuds Paper Pvt Ltd' && saved['Alpha Steel'] === 'Alpha Steel Works Pvt Ltd',
-    'both selected pairs are written in ONE save');
+    'every selected pair is written in ONE save');
   assert(await page.evaluate(() => window.__saveCalls) === 1, 'a bulk accept saves once, not once per row');
   assert(!/CERTAIN/.test(await page.evaluate(() => document.body.innerText)), 'accepted rows leave the list');
 
@@ -187,11 +205,11 @@ const V = (date, party, amt, gstin) => ({
   await page.click('text=Rescan');
   await page.waitForFunction(() => /CERTAIN/.test(document.body.innerText), null, { timeout: 15000 });
   await page.click('text=select all');
-  await page.click('text=Not same (2)');
+  await page.click('text=Not same (3)');
   await page.waitForFunction(() => !document.body.innerText.includes('CERTAIN'), null, { timeout: 5000 });
   await new Promise((r) => setTimeout(r, 400)); // let the POST land
   const stored = await (await fetch(`${base}/api/aliases`)).json();
-  assert((stored.dismissed || []).length === 2, 'a bulk "Not same" stores every key in ONE write');
+  assert((stored.dismissed || []).length === 3, 'a bulk "Not same" stores every key in ONE write');
   const again = await (await fetch(`${base}/api/alias-suggestions?branch=all`)).json();
   assert(again.suggestions.length === 0, 'a dismissed pair is not offered again');
 
