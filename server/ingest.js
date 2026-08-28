@@ -39,7 +39,9 @@ function cleanContacts(c) {
   for (const [ledger, v] of Object.entries(c)) {
     if (!v || typeof v !== 'object') continue;
     const row = {};
-    for (const f of ['name', 'email', 'mobile']) {
+    // gstin is the party's identity, not just a contact detail: it is what lets a
+    // renamed ledger be recognised across financial years (see aliasSuggest.js).
+    for (const f of ['name', 'email', 'mobile', 'gstin']) {
       if (v[f] != null && v[f] !== '') row[f] = String(v[f]);
     }
     if (Object.keys(row).length) out[String(ledger)] = row;

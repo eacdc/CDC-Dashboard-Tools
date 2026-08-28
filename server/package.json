@@ -13,8 +13,10 @@
     "test:sync": "node test_sync_fake.js",
     "test:backfill": "node test_backfill_fake.js",
     "test:reset": "node test_reset_fake.js",
+    "test:alias": "node test_alias_suggest_fake.js",
     "test:db": "node test_e2e.js",
-    "test:browser": "node test_browser.js && node test_browser_proj.js"
+    "test:browser": "node test_browser.js && node test_browser_proj.js",
+    "test:browser:alias": "node test_browser_alias.js"
   },
   "engines": {
     "node": ">=18"

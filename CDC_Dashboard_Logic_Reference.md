@@ -175,6 +175,49 @@
 | Credit Note, party_ledgers | Debtor (cancellation) | — |
 | Debit Note, party_ledgers | — | Creditor (cancellation) |
 
+## ONE PARTY, TWO NAMES (party merge suggestions)
+
+CDC keeps one Tally company per financial year, so a party renamed between years
+arrives as two unrelated ledgers: old vouchers under the old name, new ones under
+the new. Tally's ledger GUIDs are per company, so a back-filled year's GUIDs say
+nothing against the live one — nothing links the two automatically, and the
+dashboard shows one customer twice, each holding half their history.
+
+`server/aliasSuggest.js` (`GET /api/alias-suggestions?branch=all|kol|ahm`) ranks
+candidate pairs on the evidence actually in the data. It scans **every** voucher,
+not the range the browser has loaded — the old name usually lives in a year nobody
+has open.
+
+| Evidence | Source | Weight |
+|---|---|---|
+| Same GSTIN | `vouchers[].details.partyGstin`, `masters.contacts[].gstin` | 0.93 |
+| Shared bill reference | a receipt under one name settling the other's bill | 0.93 |
+| Same PAN, different GSTIN | GSTIN chars 3–12 (second-state registration) | 0.75 |
+| Same phone / email | ledger master contacts | 0.45 each |
+| Name similarity | token Jaccard after stripping Pvt/Ltd/M-s | ≤ 0.7 |
+
+Weights combine as noisy-OR, so no single weak signal reaches certainty. Then the
+rename test: **if both names are active in the same period the score is cut by
+55%** — a rename means the old name stops and the new one starts, so two names
+invoicing in the same months are far more likely to be two real sister concerns.
+
+Hard rules that no score can override:
+- a debtor is never merged into a creditor;
+- two different GSTINs under two different PANs are two different legal entities,
+  unless a shared bill reference says otherwise;
+- a ledger's GSTIN is the value its own history votes for (≥2 occurrences, ≥60%,
+  clear of the runner-up) — one mistyped GSTIN can cost a match but never cause one.
+
+Tiers: ≥0.9 `certain`, ≥0.7 `likely`, ≥0.5 `possible`; below that it is not shown.
+**Nothing is applied automatically** — a wrong merge silently moves one party's
+money onto another's ledger. Suggestions appear in the portal's 🔗 Merge names
+dialog with their evidence; Accept writes the alias, "Not same" is remembered in
+the shared alias doc (`aliases.dismissed`) so it is never offered again.
+
+Covered by `npm run test:alias` (rename found, sister concerns refused, GSTIN typo
+survived, 3,300 ledgers in ~0.2 s) and `npm run test:browser:alias` (the panel end
+to end in Chromium).
+
 ## CRITICAL FIXES HISTORY
 
 1. **Cashflow sign convention** — Receipt raw, Payment *-1, Contra *-1 then check sign

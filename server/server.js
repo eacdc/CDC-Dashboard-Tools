@@ -9,6 +9,7 @@ const cors = require('cors');
 const compression = require('compression');
 const { getDb, close } = require('./db');
 const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = require('./ingest');
+const { suggestAliases } = require('./aliasSuggest');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -263,8 +264,51 @@ app.post('/api/aliases', async (req, res) => {
     const map = (b.map && typeof b.map === 'object') ? b.map : {};
     const db = await getDb();
     const updatedAt = new Date();
-    await db.collection('aliases').updateOne({ _id: 'party' }, { $set: { map, updatedAt } }, { upsert: true });
+    const set = { map, updatedAt };
+    // Pairs a person has looked at and rejected. Kept so /api/alias-suggestions
+    // stops offering them -- a suggestion that comes back every session is worse
+    // than no suggestion. Omitted here = leave whatever is stored alone.
+    if (Array.isArray(b.dismissed)) set.dismissed = b.dismissed.map(String).slice(0, 5000);
+    await db.collection('aliases').updateOne({ _id: 'party' }, { $set: set }, { upsert: true });
     res.json({ ok: true, updatedAt: updatedAt.toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---- suggested party merges ------------------------------------------------
+// GET /api/alias-suggestions?branch=all|kol|ahm[&limit=200]
+//   -> { suggestions:[{variant, canonical, confidence, tier, evidence[], ...}], scanned, total }
+// Finds ledgers that are the same party under two names -- chiefly a party renamed
+// between financial years, which arrives as two unrelated ledgers. Scans EVERY
+// voucher, not the range the browser happens to have loaded: the old name usually
+// lives in a year nobody has open. Read-only; applying a merge is still a person
+// clicking Accept in the Merge-names dialog.
+app.get('/api/alias-suggestions', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || 'all').toLowerCase();
+    if (!['all', 'kol', 'ahm'].includes(branch)) return res.status(400).json({ error: 'branch must be all|kol|ahm' });
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const db = await getDb();
+    const q = branch === 'all' ? {} : { branch };
+    const vouchers = await db.collection('vouchers')
+      .find(q, { projection: { _id: 0, date: 1, party_ledgers: 1, 'details.partyGstin': 1, 'bills.ledger': 1, 'bills.ref': 1 } })
+      .toArray();
+    // Contacts and groups come from the branch masters (hist included: an old
+    // party's group only exists in the back-filled half).
+    const contacts = {}, groups = {};
+    for (const b of branch === 'all' ? ['kol', 'ahm'] : [branch]) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+      if (!m) continue;
+      for (const [k, v] of Object.entries(m.contacts || {})) contacts[k] = v;
+      for (const [k, v] of Object.entries(m.ledgers || {})) groups[k] = v;
+    }
+    const aliasDoc = await db.collection('aliases').findOne({ _id: 'party' });
+    res.json(suggestAliases({
+      vouchers, contacts, groups, limit,
+      existing: (aliasDoc && aliasDoc.map) || {},
+      dismissed: (aliasDoc && aliasDoc.dismissed) || [],
+    }));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
