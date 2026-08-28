@@ -2611,18 +2611,51 @@ function Portal(){
 // concerns (do they trade in the same months?) is exactly the kind of thing a person
 // here knows and the data only hints at. So: evidence on screen, human decides.
 function SuggestedMerges(pr){
-  var s0=useState('idle'),phase=s0[0],setPhase=s0[1];   // idle|loading|done|error|off
+  var s0=useState('idle'),phase=s0[0],setPhase=s0[1];   // idle|loading|scanning|done|error|off
   var s1=useState([]),list=s1[0],setList=s1[1];
   var s2=useState(''),err=s2[0],setErr=s2[1];
   var s3=useState(false),open=s3[0],setOpen=s3[1];
   var s4=useState({}),busy=s4[0],setBusy=s4[1];
+  var s5=useState(null),stamp=s5[0],setStamp=s5[1];
+  var poll=useRef(null);
+  function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
+  // Read whatever the last scan produced. Instant: the scan itself runs on the
+  // server, out of band, and this only reads its result.
+  function read(after){
+    return fetch((window.__cdcApiBase||'')+'/api/alias-suggestions')
+      .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){
+        setList(d.suggestions||[]);setStamp(d.updatedAt||null);
+        if(d.error)setErr(d.error);
+        setPhase(d.running?'scanning':'done');
+        if(after)after(d);
+        return d;
+      })
+      .catch(function(ex){stopPoll();setErr(ex.message||String(ex));setPhase('error');});
+  }
   function load(){
     if(!window.__cdcFromApi){setPhase('off');setOpen(true);return;}
-    setPhase('loading');setOpen(true);
-    fetch((window.__cdcApiBase||'')+'/api/alias-suggestions?branch=all')
+    setOpen(true);setPhase('loading');setErr('');
+    read(function(d){
+      // Nothing scanned yet (or the caller asked again): start one and watch for it.
+      if(!d.updatedAt&&!d.running)rescan();
+      else if(d.running)watch();
+    });
+  }
+  // The scan reads every voucher of every year, so it is started, not awaited --
+  // waiting for it inside one HTTP request is what made this 502 before.
+  function rescan(){
+    setPhase('scanning');setErr('');
+    fetch((window.__cdcApiBase||'')+'/api/alias-suggestions/scan?branch=all',{method:'POST'})
       .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
-      .then(function(d){setList(d.suggestions||[]);setPhase('done');})
+      .then(function(){watch();})
       .catch(function(ex){setErr(ex.message||String(ex));setPhase('error');});
+  }
+  function watch(){
+    stopPoll();
+    poll.current=setInterval(function(){
+      read(function(d){if(!d.running){stopPoll();}});
+    },3000);
   }
   // Dismissing writes to the shared alias doc, so a rejected pair stays rejected
   // for everyone instead of coming back every session.
@@ -2650,13 +2683,15 @@ function SuggestedMerges(pr){
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}},
       e('span',{style:{fontSize:'11px',fontWeight:700,color:'#6b21a8',fontFamily:'monospace'}},'SUGGESTED MERGES'),
       phase==='done'&&e('span',{style:{fontSize:'10px',color:'#64748b'}},list.length+' to review'),
+      stamp&&e('span',{style:{fontSize:'9.5px',color:'#94a3b8',fontFamily:'monospace'}},'scanned '+new Date(stamp).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})),
       e('span',{style:{marginLeft:'auto'}}),
-      e('button',{onClick:load,style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'↻ Rescan'),
-      e('button',{onClick:function(){setOpen(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
+      e('button',{disabled:phase==='scanning',onClick:rescan,style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:phase==='scanning'?'progress':'pointer',fontSize:'10px'}},phase==='scanning'?'Scanning…':'↻ Rescan'),
+      e('button',{onClick:function(){stopPoll();setOpen(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
     phase==='off'&&e('div',{style:{fontSize:'11px',color:'#b45309'}},'Only available when the data came from MongoDB — the scan runs on the server, over every year.'),
-    phase==='loading'&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Scanning every voucher…'),
+    phase==='loading'&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Loading…'),
+    phase==='scanning'&&e('div',{style:{fontSize:'11px',color:'#7c3aed'}},'Scanning every voucher of every year on the server — this can take a minute. You can close this dialog; the scan keeps running and the result will be here when you come back.'),
     phase==='error'&&e('div',{style:{fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},'Scan failed: '+err),
-    phase==='done'&&list.length===0&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Nothing to suggest — no unmerged party looks like a duplicate.'),
+    phase==='done'&&list.length===0&&e('div',{style:{fontSize:'11px',color:'#64748b'}},stamp?'Nothing to suggest — no unmerged party looks like a duplicate.':'No scan has run yet. Press Rescan.'),
     phase==='done'&&list.length>0&&e('div',{style:{maxHeight:'230px',overflowY:'auto',border:'1px solid #e9d5ff',borderRadius:'8px',background:'#fff'}},
       list.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};
         return e('div',{key:s.key||i,style:{padding:'8px 12px',borderBottom:'1px solid #f5f3ff'}},

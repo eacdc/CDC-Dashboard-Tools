@@ -9,7 +9,7 @@ const cors = require('cors');
 const compression = require('compression');
 const { getDb, close } = require('./db');
 const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = require('./ingest');
-const { suggestAliases } = require('./aliasSuggest');
+const { suggestAliases, newProfiles, addVoucher, finalizeProfiles } = require('./aliasSuggest');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -277,38 +277,102 @@ app.post('/api/aliases', async (req, res) => {
 });
 
 // ---- suggested party merges ------------------------------------------------
-// GET /api/alias-suggestions?branch=all|kol|ahm[&limit=200]
-//   -> { suggestions:[{variant, canonical, confidence, tier, evidence[], ...}], scanned, total }
 // Finds ledgers that are the same party under two names -- chiefly a party renamed
-// between financial years, which arrives as two unrelated ledgers. Scans EVERY
-// voucher, not the range the browser happens to have loaded: the old name usually
-// lives in a year nobody has open. Read-only; applying a merge is still a person
-// clicking Accept in the Merge-names dialog.
-app.get('/api/alias-suggestions', async (req, res) => {
+// between financial years, which arrives as two unrelated ledgers.
+//
+// The scan reads EVERY voucher, not the range the browser has loaded: the old name
+// usually lives in a year nobody has open. That is well over a hundred thousand
+// documents once the back-fill years are in, and doing it inside the request is how
+// the first version of this died -- Render's proxy gave up waiting and returned 502
+// to the browser while the scan was still going.
+//
+// So it is not a request any more. POST starts it and returns immediately; the
+// result is written to the alias_scan doc; GET serves whatever was last computed.
+// A scan therefore survives the browser closing, and every later open is instant.
+//
+//   POST /api/alias-suggestions/scan[?branch=all|kol|ahm]  -> {started|running}
+//   GET  /api/alias-suggestions[?limit=200]                -> {suggestions, running, updatedAt, ...}
+//
+// Applying a merge is still a person clicking Accept in the Merge-names dialog.
+let aliasScan = { running: false, startedAt: null, branch: null };
+// A scan that started long ago is not running any more -- the process was recycled
+// mid-scan (Render restarts freely) and nothing will ever clear the flag.
+const SCAN_STALE_MS = 15 * 60 * 1000;
+function scanRunning() {
+  if (!aliasScan.running) return false;
+  if (Date.now() - (aliasScan.startedAt || 0) > SCAN_STALE_MS) { aliasScan = { running: false, startedAt: null, branch: null }; return false; }
+  return true;
+}
+
+async function runAliasScan(branch) {
+  const db = await getDb();
+  const q = branch === 'all' ? {} : { branch };
+  // Stream the cursor: fold each voucher into the profiles and let it go. The
+  // profiles stay a few thousand small objects however many vouchers there are.
+  const profiles = newProfiles();
+  let scannedVouchers = 0;
+  const cursor = db.collection('vouchers')
+    .find(q, { projection: { _id: 0, date: 1, party_ledgers: 1, 'details.partyGstin': 1, 'bills.ledger': 1, 'bills.ref': 1 } })
+    .batchSize(1000);
+  for await (const v of cursor) { addVoucher(profiles, v); scannedVouchers++; }
+  finalizeProfiles(profiles);
+  // Contacts and groups come from the branch masters (hist included: an old party's
+  // group only exists in the back-filled half).
+  const contacts = {}, groups = {};
+  for (const b of branch === 'all' ? ['kol', 'ahm'] : [branch]) {
+    const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+    if (!m) continue;
+    for (const [k, v] of Object.entries(m.contacts || {})) contacts[k] = v;
+    for (const [k, v] of Object.entries(m.ledgers || {})) groups[k] = v;
+  }
+  // Scored WITHOUT the alias map: pairs already merged or dismissed are filtered on
+  // read instead, so accepting one suggestion does not invalidate the whole scan.
+  const out = suggestAliases({ profiles, contacts, groups, limit: 1000 });
+  await db.collection('alias_scan').updateOne({ _id: 'party' }, { $set: {
+    branch, suggestions: out.suggestions, scanned: out.scanned, total: out.total,
+    scannedVouchers, updatedAt: new Date(),
+  } }, { upsert: true });
+  return out;
+}
+
+app.post('/api/alias-suggestions/scan', async (req, res) => {
   try {
     const branch = String(req.query.branch || 'all').toLowerCase();
     if (!['all', 'kol', 'ahm'].includes(branch)) return res.status(400).json({ error: 'branch must be all|kol|ahm' });
+    if (scanRunning()) return res.json({ running: true, startedAt: new Date(aliasScan.startedAt).toISOString() });
+    aliasScan = { running: true, startedAt: Date.now(), branch };
+    // Deliberately not awaited: the response goes back now, the scan carries on.
+    runAliasScan(branch)
+      .catch((e) => { aliasScan.error = e.message; console.error('alias scan failed:', e.message); })
+      .finally(() => { aliasScan.running = false; });
+    res.json({ started: true, branch });
+  } catch (e) {
+    aliasScan.running = false;
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/alias-suggestions', async (req, res) => {
+  try {
     const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
     const db = await getDb();
-    const q = branch === 'all' ? {} : { branch };
-    const vouchers = await db.collection('vouchers')
-      .find(q, { projection: { _id: 0, date: 1, party_ledgers: 1, 'details.partyGstin': 1, 'bills.ledger': 1, 'bills.ref': 1 } })
-      .toArray();
-    // Contacts and groups come from the branch masters (hist included: an old
-    // party's group only exists in the back-filled half).
-    const contacts = {}, groups = {};
-    for (const b of branch === 'all' ? ['kol', 'ahm'] : [branch]) {
-      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
-      if (!m) continue;
-      for (const [k, v] of Object.entries(m.contacts || {})) contacts[k] = v;
-      for (const [k, v] of Object.entries(m.ledgers || {})) groups[k] = v;
-    }
+    const doc = await db.collection('alias_scan').findOne({ _id: 'party' });
     const aliasDoc = await db.collection('aliases').findOne({ _id: 'party' });
-    res.json(suggestAliases({
-      vouchers, contacts, groups, limit,
-      existing: (aliasDoc && aliasDoc.map) || {},
-      dismissed: (aliasDoc && aliasDoc.dismissed) || [],
-    }));
+    const map = (aliasDoc && aliasDoc.map) || {};
+    const no = new Set((aliasDoc && aliasDoc.dismissed) || []);
+    // Filter on read, so Accept and "Not same" take effect at once without a rescan.
+    const live = ((doc && doc.suggestions) || []).filter((s) =>
+      !no.has(s.key) && map[s.variant] !== s.canonical && map[s.canonical] !== s.variant &&
+      !(map[s.variant] && map[s.variant] === map[s.canonical]));
+    res.json({
+      running: scanRunning(),
+      error: aliasScan.error || null,
+      updatedAt: doc ? doc.updatedAt : null,
+      scanned: doc ? doc.scanned : 0,
+      scannedVouchers: doc ? doc.scannedVouchers : 0,
+      total: live.length,
+      suggestions: live.slice(0, limit),
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
