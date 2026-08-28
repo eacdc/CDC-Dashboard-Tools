@@ -2601,6 +2601,80 @@ function Portal(){
     aliasUI&&e(AliasModal,{aliases:aliases,names:(projData&&projData.partyNames)||[],outstanding:(function(){var o={};var pj=projData&&(projData.proj||projData);if(pj){var acb=pj.allCreditorBills||{},adb=pj.allDebtorBills||{};for(var p in acb)o[p]=(o[p]||0)+(acb[p].outstanding||0);for(var p in adb)o[p]=(o[p]||0)+(adb[p].outstanding||0);}return o;})(),onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
 }
 // Editor for the shared party name-merge map: "variant/old name" -> "canonical/current name".
+// Pairs the server thinks are one party under two names (server/aliasSuggest.js).
+// It scans EVERY voucher, not the range loaded in the browser -- a renamed party's
+// old name usually lives in a financial year nobody has open -- so this asks the
+// API rather than working off the data in memory.
+//
+// Nothing is applied automatically. A wrong merge silently moves one party's money
+// onto another's ledger, and the evidence that separates a rename from two sister
+// concerns (do they trade in the same months?) is exactly the kind of thing a person
+// here knows and the data only hints at. So: evidence on screen, human decides.
+function SuggestedMerges(pr){
+  var s0=useState('idle'),phase=s0[0],setPhase=s0[1];   // idle|loading|done|error|off
+  var s1=useState([]),list=s1[0],setList=s1[1];
+  var s2=useState(''),err=s2[0],setErr=s2[1];
+  var s3=useState(false),open=s3[0],setOpen=s3[1];
+  var s4=useState({}),busy=s4[0],setBusy=s4[1];
+  function load(){
+    if(!window.__cdcFromApi){setPhase('off');setOpen(true);return;}
+    setPhase('loading');setOpen(true);
+    fetch((window.__cdcApiBase||'')+'/api/alias-suggestions?branch=all')
+      .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){setList(d.suggestions||[]);setPhase('done');})
+      .catch(function(ex){setErr(ex.message||String(ex));setPhase('error');});
+  }
+  // Dismissing writes to the shared alias doc, so a rejected pair stays rejected
+  // for everyone instead of coming back every session.
+  function dismiss(s){
+    setBusy(function(b){var n=Object.assign({},b);n[s.key]=1;return n;});
+    setList(function(l){return l.filter(function(x){return x.key!==s.key;});});
+    try{
+      var base=(window.__cdcApiBase||'');
+      fetch(base+'/api/aliases').then(function(r){return r.json();}).then(function(d){
+        var dis=(d&&d.dismissed)||[];if(dis.indexOf(s.key)<0)dis=dis.concat([s.key]);
+        return fetch(base+'/api/aliases',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({map:(d&&d.map)||window.__cdcAliases||{},dismissed:dis})});
+      }).catch(function(){});
+    }catch(e){}
+  }
+  var TIER={certain:{bg:'#dcfce7',bd:'#86efac',fg:'#15803d',label:'CERTAIN'},
+            likely:{bg:'#fef9c3',bd:'#fde047',fg:'#a16207',label:'LIKELY'},
+            possible:{bg:'#f1f5f9',bd:'#cbd5e1',fg:'#475569',label:'POSSIBLE'}};
+  if(!open){
+    return e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0'}},
+      e('button',{onClick:load,style:{background:'#7c3aed',border:'none',color:'#fff',padding:'7px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',fontWeight:600,fontFamily:'monospace'}},'🔎 Find merges automatically'),
+      e('span',{style:{marginLeft:'10px',fontSize:'10px',color:'#94a3b8'}},'Scans every year for one party under two names (GSTIN, shared bill refs, contacts, names).'));
+  }
+  return e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0',background:'#faf5ff'}},
+    e('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}},
+      e('span',{style:{fontSize:'11px',fontWeight:700,color:'#6b21a8',fontFamily:'monospace'}},'SUGGESTED MERGES'),
+      phase==='done'&&e('span',{style:{fontSize:'10px',color:'#64748b'}},list.length+' to review'),
+      e('span',{style:{marginLeft:'auto'}}),
+      e('button',{onClick:load,style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'↻ Rescan'),
+      e('button',{onClick:function(){setOpen(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
+    phase==='off'&&e('div',{style:{fontSize:'11px',color:'#b45309'}},'Only available when the data came from MongoDB — the scan runs on the server, over every year.'),
+    phase==='loading'&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Scanning every voucher…'),
+    phase==='error'&&e('div',{style:{fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},'Scan failed: '+err),
+    phase==='done'&&list.length===0&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Nothing to suggest — no unmerged party looks like a duplicate.'),
+    phase==='done'&&list.length>0&&e('div',{style:{maxHeight:'230px',overflowY:'auto',border:'1px solid #e9d5ff',borderRadius:'8px',background:'#fff'}},
+      list.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};
+        return e('div',{key:s.key||i,style:{padding:'8px 12px',borderBottom:'1px solid #f5f3ff'}},
+          e('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
+            e('span',{style:{background:t.bg,border:'1px solid '+t.bd,color:t.fg,fontSize:'9px',fontWeight:700,padding:'1px 6px',borderRadius:'4px',fontFamily:'monospace'}},t.label),
+            e('span',{style:{fontSize:'11.5px',fontFamily:'monospace',color:'#64748b'}},s.variant),
+            ov[s.variant]?e('span',{style:{fontSize:'10px',color:'#be185d',fontFamily:'monospace'}},'('+pr.fmtC(ov[s.variant])+')'):null,
+            e('span',{style:{color:'#94a3b8'}},'→'),
+            e('span',{style:{fontSize:'11.5px',fontFamily:'monospace',fontWeight:700,color:'#0f172a'}},s.canonical),
+            ov[s.canonical]?e('span',{style:{fontSize:'10px',color:'#be185d',fontFamily:'monospace'}},'('+pr.fmtC(ov[s.canonical])+')'):null,
+            e('span',{style:{marginLeft:'auto',display:'flex',gap:'5px'}},
+              e('button',{disabled:!!busy[s.key],onClick:function(){setList(function(l){return l.filter(function(x){return x.key!==s.key;});});pr.onAccept(s);},style:{background:'#0891b2',border:'none',color:'#fff',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px',fontWeight:600}},'Accept'),
+              e('button',{onClick:function(){dismiss(s);},title:'Not the same party — do not suggest again',style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Not same'))),
+          e('div',{style:{fontSize:'9.5px',color:'#6b7280',fontFamily:'monospace',marginTop:'3px',lineHeight:1.5}},s.evidence.join('  ·  ')));
+      })),
+    phase==='done'&&list.length>0&&e('div',{style:{fontSize:'9.5px',color:'#7c3aed',marginTop:'6px'}},'Accept merges the left name into the right (the one still in use). Check the outstanding figures first: the right-hand party should be the one carrying this year’s payments.'));
+}
+
 function AliasModal(pr){
   var s1=useState(''),va=s1[0],sVa=s1[1];var s2=useState(''),ca=s2[0],sCa=s2[1];
   var map=pr.aliases||{};var keys=Object.keys(map).sort();var names=pr.names||[];var nameSet={};names.forEach(function(n){nameSet[n]=1;});
@@ -2626,6 +2700,7 @@ function AliasModal(pr){
         e('input',{type:'text',list:'__cdcNameList',value:ca,placeholder:'Current name — pick or type',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
         e('button',{onClick:add,style:{background:'#0891b2',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:600}},'Add')),
       (canonBad||varBad)&&e('div',{style:{padding:'0 22px 12px',fontSize:'10.5px',color:'#b45309',fontFamily:'monospace'}},'⚠ '+((varBad?'Left name ':'')+(varBad&&canonBad?'and right name ':canonBad?'Right (current) name ':''))+'not found in the data — pick the EXACT name from the dropdown. The right side must be the party’s current name (the one carrying this year’s payments), or old bills won’t clear.'),
+      e(SuggestedMerges,{onAccept:function(s){var m=Object.assign({},map);m[s.variant]=s.canonical;pr.onSave(m);},outstanding:out,fmtC:fmtC}),
       e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0',background:'#f8fafc'}},
         e('div',{style:{fontSize:'10px',color:'#64748b',fontFamily:'monospace',marginBottom:'4px'}},'Find variants — type part of a name to see every matching party and its current outstanding (highest first). Use → to set the one with the CORRECT amount as the current name; ← to add each other variant.'),
         e('input',{type:'text',value:look,placeholder:'e.g. trading paper',onChange:function(ev){sLook(ev.target.value);},style:{width:'100%',padding:'7px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),

@@ -690,7 +690,7 @@ $ledgerPayload = @"
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerList" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL</FETCH>
+        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL,PARTYGSTIN,GSTREGISTRATIONTYPE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -734,8 +734,13 @@ foreach ($l in $lx.SelectNodes("//LEDGER")) {
     $cName   = xval $l.LEDGERCONTACT
     $cEmail  = xval $l.EMAIL
     $cMobile = xval $l.LEDGERMOBILE; if (-not $cMobile) { $cMobile = xval $l.LEDGERPHONE }
-    if ($cName -or $cEmail -or $cMobile) {
-        $ledgerContacts[$name] = [ordered]@{ name = $cName; email = $cEmail; mobile = $cMobile }
+    # GSTIN identifies the party far better than its name ever will, and it is the
+    # one signal that survives a rename. Vouchers carry it too, but only for parties
+    # that actually invoiced in the pulled range - taking it from the master covers
+    # the rest (see server/aliasSuggest.js).
+    $cGstin  = xval $l.PARTYGSTIN
+    if ($cName -or $cEmail -or $cMobile -or $cGstin) {
+        $ledgerContacts[$name] = [ordered]@{ name = $cName; email = $cEmail; mobile = $cMobile; gstin = $cGstin }
     }
 }
 Write-Host ("  Ledgers : {0}  (contacts: {1})" -f $ledgerToGroup.Count, $ledgerContacts.Count)
