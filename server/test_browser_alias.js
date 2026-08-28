@@ -62,6 +62,7 @@ let fails = 0;
 const assert = (c, m) => { if (!c) { console.error('FAIL:', m); fails++; } else console.log('ok  -', m); };
 
 const GST = '19AABCG1234M1Z5';
+const GST2 = '19AABCA5678N1Z7';
 const V = (date, party, amt, gstin) => ({
   _id: 'kol:' + date + party, branch: 'kol', guid: date + party, date, type: 'Sales',
   ledgers: { Sales: amt }, party_ledgers: { [party]: -amt },
@@ -73,6 +74,9 @@ const V = (date, party, amt, gstin) => ({
   fakeDb.collection('vouchers').docs.push(
     V('20210510', 'M/S Gleebuds', 100000, GST), V('20211220', 'M/S Gleebuds', 120000, GST),
     V('20230715', 'Gleebuds Paper Pvt Ltd', 150000, GST), V('20240220', 'Gleebuds Paper Pvt Ltd', 160000, GST),
+    // A second rename, so a bulk selection has more than one row to act on.
+    V('20210610', 'Alpha Steel', 60000, GST2), V('20211110', 'Alpha Steel', 61000, GST2),
+    V('20230810', 'Alpha Steel Works Pvt Ltd', 62000, GST2), V('20240310', 'Alpha Steel Works Pvt Ltd', 63000, GST2),
     // A pair that must stay a question: alike, but trading side by side.
     V('20250601', 'Sunrise Papers', 90000, null), V('20250605', 'Sunrise Paper Mills', 95000, null),
     V('20260101', 'Sunrise Papers', 80000, null), V('20260105', 'Sunrise Paper Mills', 85000, null),
@@ -80,6 +84,7 @@ const V = (date, party, amt, gstin) => ({
   fakeDb.collection('masters').docs.push({ branch: 'kol', ledgers: {
     'M/S Gleebuds': 'Sundry Debtors', 'Gleebuds Paper Pvt Ltd': 'Sundry Debtors',
     'Sunrise Papers': 'Sundry Debtors', 'Sunrise Paper Mills': 'Sundry Debtors',
+    'Alpha Steel': 'Sundry Debtors', 'Alpha Steel Works Pvt Ltd': 'Sundry Debtors',
   }, groups: { 'Sundry Debtors': 'Current Assets', 'Current Assets': null }, contacts: {} });
 
   const server = app.listen(0);
@@ -100,10 +105,12 @@ const V = (date, party, amt, gstin) => ({
     api = await (await fetch(`${base}/api/alias-suggestions`)).json();
   }
   assert(!fakeDb.collection('vouchers').toArrayCalls, 'the scan streams the cursor and never materialises the collection');
-  assert(api.scannedVouchers === 8, 'every voucher is scanned (count reported back)');
+  assert(api.scannedVouchers === 12, 'every voucher is scanned (count reported back)');
   console.log('endpoint:', JSON.stringify(api.suggestions.map((s) => `${s.tier} ${s.variant} -> ${s.canonical}`)));
   assert(api.suggestions.length >= 1, 'the scan result is stored and served');
-  assert(api.suggestions[0].canonical === 'Gleebuds Paper Pvt Ltd', 'endpoint picks the current name as canonical');
+  const glee = api.suggestions.find((x) => /Gleebuds/.test(x.variant));
+  assert(glee && glee.canonical === 'Gleebuds Paper Pvt Ltd', 'endpoint picks the current name as canonical');
+  assert(api.suggestions.length === 2, 'both planted renames found, the side-by-side lookalikes not');
 
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
@@ -133,11 +140,11 @@ const V = (date, party, amt, gstin) => ({
     window.__cdcFromApi = true; window.__cdcApiBase = apiBase;
     const host = document.createElement('div');
     document.body.appendChild(host);
-    window.__saved = null;
+    window.__saved = null; window.__saveCalls = 0;
     if (typeof window.AliasModal !== 'function') throw new Error('AliasModal is not a global — the portal shell got wrapped?');
     ReactDOM.render(React.createElement(window.AliasModal, {
-      aliases: {}, names: ['M/S Gleebuds', 'Gleebuds Paper Pvt Ltd'], outstanding: {},
-      onSave: (m) => { window.__saved = m; }, onClose: () => {},
+      aliases: {}, names: ['M/S Gleebuds', 'Gleebuds Paper Pvt Ltd', 'Alpha Steel', 'Alpha Steel Works Pvt Ltd'], outstanding: {},
+      onSave: (m) => { window.__saved = m; window.__saveCalls = (window.__saveCalls || 0) + 1; }, onClose: () => {},
     }), host);
   }, base);
 
@@ -149,24 +156,41 @@ const V = (date, party, amt, gstin) => ({
   assert(/same GSTIN 19AABCG1234M1Z5/.test(shown), 'the evidence names the shared GSTIN');
   assert(/activity does not overlap/.test(shown), 'the evidence states the activity windows do not overlap');
   assert(!/Sunrise/.test(shown), 'the side-by-side lookalikes are not offered at all');
-  await page.screenshot({ path: path.join(require('os').tmpdir(), 'alias_suggestions.png') });
+  await page.screenshot({ path: '/tmp/alias_suggestions.png' });
 
-  // Accept writes the alias through the dialog's normal save path.
-  await page.click('text=Accept');
+  assert((await page.$$('input[type=checkbox]')).length === 3, 'a checkbox per row plus the select-all');
+
+  const rowBoxes = () => page.$$eval('input[type=checkbox]', (b) => b.slice(1).map((x) => x.checked));
+
+  // Select all, then act on the whole selection in one go.
+  await page.click('text=select all');
+  assert((await rowBoxes()).every(Boolean), 'select-all ticks every row');
+  assert(/2 of 2 selected/.test(await page.evaluate(() => document.body.innerText)), 'the count follows the selection');
+  await page.click('text=Accept selected (2)');
   await page.waitForFunction(() => window.__saved !== null, null, { timeout: 5000 });
   const saved = await page.evaluate(() => window.__saved);
-  assert(saved && saved['M/S Gleebuds'] === 'Gleebuds Paper Pvt Ltd', 'Accept maps the old name onto the current one');
-  assert(!/CERTAIN/.test(await page.evaluate(() => document.body.innerText)), 'an accepted row leaves the list');
+  assert(saved && saved['M/S Gleebuds'] === 'Gleebuds Paper Pvt Ltd' && saved['Alpha Steel'] === 'Alpha Steel Works Pvt Ltd',
+    'both selected pairs are written in ONE save');
+  assert(await page.evaluate(() => window.__saveCalls) === 1, 'a bulk accept saves once, not once per row');
+  assert(!/CERTAIN/.test(await page.evaluate(() => document.body.innerText)), 'accepted rows leave the list');
+
+  // A chain must be flattened: mapping A->B while B->C already exists has to leave
+  // A pointing at C, because the canonicaliser only ever looks a name up once.
+  const flat = await page.evaluate(() => window.flattenAliases({ A: 'B', B: 'C', X: 'X', P: 'Q', Q: 'P' }));
+  assert(flat.A === 'C' && flat.B === 'C', 'chains collapse to the final name');
+  assert(!('X' in flat), 'a name mapping to itself is dropped');
+  assert(flat.P && flat.Q, 'a cycle keeps its first target instead of looping');
 
   // onSave here is a test spy, so the stored alias map is untouched and a rescan
   // legitimately offers the pair again -- which is what the dismissal needs.
   await page.click('text=Rescan');
   await page.waitForFunction(() => /CERTAIN/.test(document.body.innerText), null, { timeout: 15000 });
-  await page.click('text=Not same');
+  await page.click('text=select all');
+  await page.click('text=Not same (2)');
   await page.waitForFunction(() => !document.body.innerText.includes('CERTAIN'), null, { timeout: 5000 });
   await new Promise((r) => setTimeout(r, 400)); // let the POST land
   const stored = await (await fetch(`${base}/api/aliases`)).json();
-  assert((stored.dismissed || []).length === 1, '"Not same" is stored server-side, not just hidden locally');
+  assert((stored.dismissed || []).length === 2, 'a bulk "Not same" stores every key in ONE write');
   const again = await (await fetch(`${base}/api/alias-suggestions?branch=all`)).json();
   assert(again.suggestions.length === 0, 'a dismissed pair is not offered again');
 
