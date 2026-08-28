@@ -2638,6 +2638,8 @@ function SuggestedMerges(pr){
   var s4=useState({}),busy=s4[0],setBusy=s4[1];
   var s5=useState(null),stamp=s5[0],setStamp=s5[1];
   var s6=useState({}),sel=s6[0],setSel=s6[1];   // checked rows, by pair key
+  var s7=useState(0),prog=s7[0],setProg=s7[1];  // vouchers scanned so far, while running
+  var s8=useState(0),covered=s8[0],setCovered=s8[1];// vouchers the last finished scan read
   var poll=useRef(null);
   function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
   // Read whatever the last scan produced. Instant: the scan itself runs on the
@@ -2646,8 +2648,9 @@ function SuggestedMerges(pr){
     return fetch((window.__cdcApiBase||'')+'/api/alias-suggestions')
       .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
       .then(function(d){
-        setList(d.suggestions||[]);setStamp(d.updatedAt||null);
+        setList(d.suggestions||[]);setStamp(d.updatedAt||null);setProg(d.progress||0);
         if(d.error)setErr(d.error);
+        if(d.scannedVouchers)setCovered(d.scannedVouchers);
         setPhase(d.running?'scanning':'done');
         if(after)after(d);
         return d;
@@ -2724,13 +2727,15 @@ function SuggestedMerges(pr){
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}},
       e('span',{style:{fontSize:'11px',fontWeight:700,color:'#6b21a8',fontFamily:'monospace'}},'SUGGESTED MERGES'),
       phase==='done'&&e('span',{style:{fontSize:'10px',color:'#64748b'}},list.length+' to review'),
-      stamp&&e('span',{style:{fontSize:'9.5px',color:'#94a3b8',fontFamily:'monospace'}},'scanned '+new Date(stamp).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})),
+      stamp&&e('span',{style:{fontSize:'9.5px',color:'#94a3b8',fontFamily:'monospace'}},'scanned '+new Date(stamp).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})+(covered?(' · '+covered.toLocaleString('en-IN')+' vouchers'):'')),
       e('span',{style:{marginLeft:'auto'}}),
       e('button',{disabled:phase==='scanning',onClick:rescan,style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:phase==='scanning'?'progress':'pointer',fontSize:'10px'}},phase==='scanning'?'Scanning…':'↻ Rescan'),
       e('button',{onClick:function(){stopPoll();setOpen(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
     phase==='off'&&e('div',{style:{fontSize:'11px',color:'#b45309'}},'Only available when the data came from MongoDB — the scan runs on the server, over every year.'),
     phase==='loading'&&e('div',{style:{fontSize:'11px',color:'#64748b'}},'Loading…'),
-    phase==='scanning'&&e('div',{style:{fontSize:'11px',color:'#7c3aed'}},'Scanning every voucher of every year on the server — this can take a minute. You can close this dialog; the scan keeps running and the result will be here when you come back.'),
+    phase==='scanning'&&e('div',{style:{fontSize:'11px',color:'#7c3aed'}},
+      (prog?('Scanning… '+prog.toLocaleString('en-IN')+' vouchers so far. '):'Starting the scan… ')+
+      'It reads every voucher of every year on the server, so on a decade of history give it a few minutes. You can close this dialog — the scan keeps running and the result will be here when you come back.'),
     phase==='error'&&e('div',{style:{fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},'Scan failed: '+err),
     phase==='done'&&list.length===0&&e('div',{style:{fontSize:'11px',color:'#64748b'}},stamp?'Nothing to suggest — no unmerged party looks like a duplicate.':'No scan has run yet. Press Rescan.'),
     // Bulk bar. Acting on a selection is one save and one round trip for the whole

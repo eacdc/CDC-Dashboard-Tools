@@ -191,11 +191,15 @@ That is well over a hundred thousand documents once the back-fill years are in, 
 the scan is **not** a request: `POST /api/alias-suggestions/scan` starts it and
 returns immediately, the result is written to the `alias_scan` doc, and
 `GET /api/alias-suggestions` serves whatever was last computed (the UI polls every
-3 s while one is running). Doing it inline returned **502** — Render's proxy gave up
-waiting. The cursor is streamed rather than collected, so memory stays flat: 150,000
-vouchers fold into ~4,000 profiles in ~0.7 s using ~34 MB. Accepted and dismissed
-pairs are filtered when the result is read, so acting on one suggestion never
-invalidates the scan.
+3 s while one is running, showing the running voucher count). Doing it inline
+returned **502** — Render's proxy gave up waiting. The cursor is streamed rather than
+collected, so cost is linear and memory near-flat: 150,000 vouchers fold in ~0.7 s at
+~34 MB; 600,000 over eleven financial years fold in ~2.5 s at ~90 MB, scoring ~8,000
+ledgers in another 40 ms. Wall-clock is dominated by fetching the documents from
+Atlas, not by the work. A scan counts as dead only after 10 minutes with **no
+progress** — timing it from the start would let a second scan begin beside a healthy
+slow one. Accepted and dismissed pairs are filtered when the result is read, so
+acting on one suggestion never invalidates the scan.
 
 | Evidence | Source | Weight |
 |---|---|---|

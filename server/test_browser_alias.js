@@ -154,6 +154,7 @@ const V = (date, party, amt, gstin) => ({
   const shown = await page.evaluate(() => document.body.innerText);
   assert(/CERTAIN/.test(shown), 'the rename is shown, tagged CERTAIN');
   assert(/same GSTIN 19AABCG1234M1Z5/.test(shown), 'the evidence names the shared GSTIN');
+  assert(/12 vouchers/.test(shown), 'the header says how many vouchers the scan covered');
   assert(/activity does not overlap/.test(shown), 'the evidence states the activity windows do not overlap');
   assert(!/Sunrise/.test(shown), 'the side-by-side lookalikes are not offered at all');
   await page.screenshot({ path: '/tmp/alias_suggestions.png' });
