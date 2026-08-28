@@ -2601,6 +2601,26 @@ function Portal(){
     aliasUI&&e(AliasModal,{aliases:aliases,names:(projData&&projData.partyNames)||[],outstanding:(function(){var o={};var pj=projData&&(projData.proj||projData);if(pj){var acb=pj.allCreditorBills||{},adb=pj.allDebtorBills||{};for(var p in acb)o[p]=(o[p]||0)+(acb[p].outstanding||0);for(var p in adb)o[p]=(o[p]||0)+(adb[p].outstanding||0);}return o;})(),onSave:saveAliases,onClose:function(){setAliasUI(false);}}));
 }
 // Editor for the shared party name-merge map: "variant/old name" -> "canonical/current name".
+// Collapse chains so every variant points STRAIGHT at its final name. __cdcCanon
+// looks a name up once -- it does not follow A->B->C -- so a chain would leave A
+// resolving to B, which is no longer a real party. Accepting several suggestions at
+// once makes chains likely (the scan can offer both "old -> middle" and
+// "middle -> current"), so flatten on every save. A cycle keeps its first target
+// rather than looping forever.
+function flattenAliases(map){
+  var out={};
+  for(var k in map){
+    var seen={},v=map[k];seen[k]=1;
+    while(map[v]&&!seen[v]){seen[v]=1;v=map[v];}
+    // A cycle (A->B->A) is contradictory input, and following it lands back on the
+    // name we started from -- which would drop the entry entirely and leave the user
+    // wondering where their merge went. Keep the hop they actually asked for.
+    if(v===k)v=map[k];
+    if(v!==k)out[k]=v;   // a name mapping to itself is not an alias
+  }
+  return out;
+}
+
 // Pairs the server thinks are one party under two names (server/aliasSuggest.js).
 // It scans EVERY voucher, not the range loaded in the browser -- a renamed party's
 // old name usually lives in a financial year nobody has open -- so this asks the
@@ -2617,6 +2637,7 @@ function SuggestedMerges(pr){
   var s3=useState(false),open=s3[0],setOpen=s3[1];
   var s4=useState({}),busy=s4[0],setBusy=s4[1];
   var s5=useState(null),stamp=s5[0],setStamp=s5[1];
+  var s6=useState({}),sel=s6[0],setSel=s6[1];   // checked rows, by pair key
   var poll=useRef(null);
   function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
   // Read whatever the last scan produced. Instant: the scan itself runs on the
@@ -2658,18 +2679,38 @@ function SuggestedMerges(pr){
     },3000);
   }
   // Dismissing writes to the shared alias doc, so a rejected pair stays rejected
-  // for everyone instead of coming back every session.
-  function dismiss(s){
-    setBusy(function(b){var n=Object.assign({},b);n[s.key]=1;return n;});
-    setList(function(l){return l.filter(function(x){return x.key!==s.key;});});
+  // for everyone instead of coming back every session. Takes a LIST: rejecting
+  // twenty rows is one round trip, not twenty racing ones (each read-modify-write
+  // of the same doc, the later ones overwriting the earlier).
+  function dismissMany(rows){
+    if(!rows.length)return;
+    var keys={};rows.forEach(function(s){keys[s.key]=1;});
+    setList(function(l){return l.filter(function(x){return !keys[x.key];});});
+    setSel({});
     try{
       var base=(window.__cdcApiBase||'');
       fetch(base+'/api/aliases').then(function(r){return r.json();}).then(function(d){
-        var dis=(d&&d.dismissed)||[];if(dis.indexOf(s.key)<0)dis=dis.concat([s.key]);
+        var dis=(d&&d.dismissed)||[];
+        rows.forEach(function(s){if(dis.indexOf(s.key)<0)dis=dis.concat([s.key]);});
         return fetch(base+'/api/aliases',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({map:(d&&d.map)||window.__cdcAliases||{},dismissed:dis})});
       }).catch(function(){});
     }catch(e){}
+  }
+  // Accepting is one save for the whole selection, never one per row: each save
+  // rebuilds both apps from scratch, so twenty saves would mean twenty rebuilds.
+  function acceptMany(rows){
+    if(!rows.length)return;
+    var keys={};rows.forEach(function(s){keys[s.key]=1;});
+    setList(function(l){return l.filter(function(x){return !keys[x.key];});});
+    setSel({});
+    pr.onAcceptMany(rows);
+  }
+  var selected=list.filter(function(s){return sel[s.key];});
+  function toggle(k){setSel(function(m){var n=Object.assign({},m);if(n[k])delete n[k];else n[k]=1;return n;});}
+  function toggleAll(){
+    if(selected.length===list.length&&list.length){setSel({});return;}
+    var n={};list.forEach(function(s){n[s.key]=1;});setSel(n);
   }
   var TIER={certain:{bg:'#dcfce7',bd:'#86efac',fg:'#15803d',label:'CERTAIN'},
             likely:{bg:'#fef9c3',bd:'#fde047',fg:'#a16207',label:'LIKELY'},
@@ -2692,10 +2733,29 @@ function SuggestedMerges(pr){
     phase==='scanning'&&e('div',{style:{fontSize:'11px',color:'#7c3aed'}},'Scanning every voucher of every year on the server — this can take a minute. You can close this dialog; the scan keeps running and the result will be here when you come back.'),
     phase==='error'&&e('div',{style:{fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},'Scan failed: '+err),
     phase==='done'&&list.length===0&&e('div',{style:{fontSize:'11px',color:'#64748b'}},stamp?'Nothing to suggest — no unmerged party looks like a duplicate.':'No scan has run yet. Press Rescan.'),
+    // Bulk bar. Acting on a selection is one save and one round trip for the whole
+    // batch, so ticking thirty certain renames costs what one costs.
+    phase==='done'&&list.length>0&&e('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'5px 2px 7px',flexWrap:'wrap'}},
+      e('label',{style:{display:'flex',alignItems:'center',gap:'5px',fontSize:'10px',color:'#475569',fontFamily:'monospace',cursor:'pointer'}},
+        e('input',{type:'checkbox',checked:list.length>0&&selected.length===list.length,
+          ref:function(el){if(el)el.indeterminate=selected.length>0&&selected.length<list.length;},
+          onChange:toggleAll,style:{cursor:'pointer'}}),
+        selected.length?(selected.length+' of '+list.length+' selected'):'select all'),
+      selected.length>0&&e('span',{style:{fontSize:'10px',color:'#94a3b8',fontFamily:'monospace'}},
+        selected.filter(function(s){return s.tier==='certain';}).length+' certain · '+
+        selected.filter(function(s){return s.overlap;}).length+' overlapping'),
+      e('span',{style:{marginLeft:'auto'}}),
+      e('button',{disabled:!selected.length,onClick:function(){acceptMany(selected);},
+        style:{background:selected.length?'#0891b2':'#e2e8f0',border:'none',color:selected.length?'#fff':'#94a3b8',padding:'4px 12px',borderRadius:'5px',cursor:selected.length?'pointer':'default',fontSize:'10px',fontWeight:600}},
+        'Accept selected'+(selected.length?' ('+selected.length+')':'')),
+      e('button',{disabled:!selected.length,onClick:function(){dismissMany(selected);},
+        style:{background:selected.length?'#fef2f2':'#f8fafc',border:'1px solid '+(selected.length?'#fecaca':'#e2e8f0'),color:selected.length?'#dc2626':'#94a3b8',padding:'4px 12px',borderRadius:'5px',cursor:selected.length?'pointer':'default',fontSize:'10px'}},
+        'Not same'+(selected.length?' ('+selected.length+')':''))),
     phase==='done'&&list.length>0&&e('div',{style:{maxHeight:'230px',overflowY:'auto',border:'1px solid #e9d5ff',borderRadius:'8px',background:'#fff'}},
-      list.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};
-        return e('div',{key:s.key||i,style:{padding:'8px 12px',borderBottom:'1px solid #f5f3ff'}},
+      list.map(function(s,i){var t=TIER[s.tier]||TIER.possible;var ov=pr.outstanding||{};var on=!!sel[s.key];
+        return e('div',{key:s.key||i,style:{padding:'8px 12px',borderBottom:'1px solid #f5f3ff',background:on?'#f5f3ff':'transparent'}},
           e('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
+            e('input',{type:'checkbox',checked:on,onChange:function(){toggle(s.key);},title:'select for a bulk action',style:{cursor:'pointer',flex:'0 0 auto'}}),
             e('span',{style:{background:t.bg,border:'1px solid '+t.bd,color:t.fg,fontSize:'9px',fontWeight:700,padding:'1px 6px',borderRadius:'4px',fontFamily:'monospace'}},t.label),
             e('span',{style:{fontSize:'11.5px',fontFamily:'monospace',color:'#64748b'}},s.variant),
             ov[s.variant]?e('span',{style:{fontSize:'10px',color:'#be185d',fontFamily:'monospace'}},'('+pr.fmtC(ov[s.variant])+')'):null,
@@ -2703,8 +2763,8 @@ function SuggestedMerges(pr){
             e('span',{style:{fontSize:'11.5px',fontFamily:'monospace',fontWeight:700,color:'#0f172a'}},s.canonical),
             ov[s.canonical]?e('span',{style:{fontSize:'10px',color:'#be185d',fontFamily:'monospace'}},'('+pr.fmtC(ov[s.canonical])+')'):null,
             e('span',{style:{marginLeft:'auto',display:'flex',gap:'5px'}},
-              e('button',{disabled:!!busy[s.key],onClick:function(){setList(function(l){return l.filter(function(x){return x.key!==s.key;});});pr.onAccept(s);},style:{background:'#0891b2',border:'none',color:'#fff',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px',fontWeight:600}},'Accept'),
-              e('button',{onClick:function(){dismiss(s);},title:'Not the same party — do not suggest again',style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Not same'))),
+              e('button',{disabled:!!busy[s.key],onClick:function(){acceptMany([s]);},style:{background:'#0891b2',border:'none',color:'#fff',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px',fontWeight:600}},'Accept'),
+              e('button',{onClick:function(){dismissMany([s]);},title:'Not the same party — do not suggest again',style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',padding:'3px 10px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Not same'))),
           e('div',{style:{fontSize:'9.5px',color:'#6b7280',fontFamily:'monospace',marginTop:'3px',lineHeight:1.5}},s.evidence.join('  ·  ')));
       })),
     phase==='done'&&list.length>0&&e('div',{style:{fontSize:'9.5px',color:'#7c3aed',marginTop:'6px'}},'Accept merges the left name into the right (the one still in use). Check the outstanding figures first: the right-hand party should be the one carrying this year’s payments.'));
@@ -2713,7 +2773,7 @@ function SuggestedMerges(pr){
 function AliasModal(pr){
   var s1=useState(''),va=s1[0],sVa=s1[1];var s2=useState(''),ca=s2[0],sCa=s2[1];
   var map=pr.aliases||{};var keys=Object.keys(map).sort();var names=pr.names||[];var nameSet={};names.forEach(function(n){nameSet[n]=1;});
-  function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;if(v===c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(m);sVa('');sCa('');}
+  function add(){var v=(va||'').trim(),c=(ca||'').trim();if(!v||!c)return;if(v===c)return;var m=Object.assign({},map);m[v]=c;pr.onSave(flattenAliases(m));sVa('');sCa('');}
   function del(k){var m=Object.assign({},map);delete m[k];pr.onSave(m);}
   var nameOpts=names.map(function(n){return e('option',{key:n,value:n});});
   // The canonical (right) MUST be an exact existing name, else this year's
@@ -2735,7 +2795,13 @@ function AliasModal(pr){
         e('input',{type:'text',list:'__cdcNameList',value:ca,placeholder:'Current name — pick or type',onChange:function(ev){sCa(ev.target.value);},onKeyDown:function(ev){if(ev.key==='Enter')add();},style:{flex:'1 1 240px',padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
         e('button',{onClick:add,style:{background:'#0891b2',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'6px',cursor:'pointer',fontSize:'12px',fontWeight:600}},'Add')),
       (canonBad||varBad)&&e('div',{style:{padding:'0 22px 12px',fontSize:'10.5px',color:'#b45309',fontFamily:'monospace'}},'⚠ '+((varBad?'Left name ':'')+(varBad&&canonBad?'and right name ':canonBad?'Right (current) name ':''))+'not found in the data — pick the EXACT name from the dropdown. The right side must be the party’s current name (the one carrying this year’s payments), or old bills won’t clear.'),
-      e(SuggestedMerges,{onAccept:function(s){var m=Object.assign({},map);m[s.variant]=s.canonical;pr.onSave(m);},outstanding:out,fmtC:fmtC}),
+      e(SuggestedMerges,{onAcceptMany:function(rows){
+        var m=Object.assign({},map);
+        // First suggestion wins on a clash: the list is sorted by confidence, so a
+        // party offered two canonicals keeps the better-evidenced one.
+        rows.forEach(function(s){if(!m[s.variant])m[s.variant]=s.canonical;});
+        pr.onSave(flattenAliases(m));
+      },outstanding:out,fmtC:fmtC}),
       e('div',{style:{padding:'10px 22px',borderBottom:'1px solid #e2e8f0',background:'#f8fafc'}},
         e('div',{style:{fontSize:'10px',color:'#64748b',fontFamily:'monospace',marginBottom:'4px'}},'Find variants — type part of a name to see every matching party and its current outstanding (highest first). Use → to set the one with the CORRECT amount as the current name; ← to add each other variant.'),
         e('input',{type:'text',value:look,placeholder:'e.g. trading paper',onChange:function(ev){sLook(ev.target.value);},style:{width:'100%',padding:'7px 10px',border:'1px solid #e2e8f0',borderRadius:'6px',fontSize:'12px'}}),
