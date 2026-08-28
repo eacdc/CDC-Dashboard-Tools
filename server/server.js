@@ -294,13 +294,17 @@ app.post('/api/aliases', async (req, res) => {
 //   GET  /api/alias-suggestions[?limit=200]                -> {suggestions, running, updatedAt, ...}
 //
 // Applying a merge is still a person clicking Accept in the Merge-names dialog.
-let aliasScan = { running: false, startedAt: null, branch: null };
-// A scan that started long ago is not running any more -- the process was recycled
-// mid-scan (Render restarts freely) and nothing will ever clear the flag.
-const SCAN_STALE_MS = 15 * 60 * 1000;
+let aliasScan = { running: false, startedAt: null, branch: null, progress: 0, lastProgressAt: 0 };
+// A scan is dead, not slow, when it stops making progress -- the process was
+// recycled mid-scan (Render restarts freely) and nothing will ever clear the flag.
+// Measured from the last voucher counted, NOT from the start: with a decade of
+// history the scan legitimately runs for minutes, and timing out a healthy scan
+// would let a second one start alongside it, doubling the load on Atlas.
+const SCAN_STALE_MS = 10 * 60 * 1000;
 function scanRunning() {
   if (!aliasScan.running) return false;
-  if (Date.now() - (aliasScan.startedAt || 0) > SCAN_STALE_MS) { aliasScan = { running: false, startedAt: null, branch: null }; return false; }
+  const since = aliasScan.lastProgressAt || aliasScan.startedAt || 0;
+  if (Date.now() - since > SCAN_STALE_MS) { aliasScan = { running: false, startedAt: null, branch: null, progress: 0, lastProgressAt: 0 }; return false; }
   return true;
 }
 
@@ -314,7 +318,14 @@ async function runAliasScan(branch) {
   const cursor = db.collection('vouchers')
     .find(q, { projection: { _id: 0, date: 1, party_ledgers: 1, 'details.partyGstin': 1, 'bills.ledger': 1, 'bills.ref': 1 } })
     .batchSize(1000);
-  for await (const v of cursor) { addVoucher(profiles, v); scannedVouchers++; }
+  for await (const v of cursor) {
+    addVoucher(profiles, v);
+    // Report progress as we go: over a decade of history this runs for minutes, and
+    // the dialog can say "212,000 vouchers so far" instead of an unmoving spinner.
+    // It is also the heartbeat scanRunning() uses to tell a slow scan from a dead one.
+    if (++scannedVouchers % 5000 === 0) { aliasScan.progress = scannedVouchers; aliasScan.lastProgressAt = Date.now(); }
+  }
+  aliasScan.progress = scannedVouchers; aliasScan.lastProgressAt = Date.now();
   finalizeProfiles(profiles);
   // Contacts and groups come from the branch masters (hist included: an old party's
   // group only exists in the back-filled half).
@@ -340,7 +351,7 @@ app.post('/api/alias-suggestions/scan', async (req, res) => {
     const branch = String(req.query.branch || 'all').toLowerCase();
     if (!['all', 'kol', 'ahm'].includes(branch)) return res.status(400).json({ error: 'branch must be all|kol|ahm' });
     if (scanRunning()) return res.json({ running: true, startedAt: new Date(aliasScan.startedAt).toISOString() });
-    aliasScan = { running: true, startedAt: Date.now(), branch };
+    aliasScan = { running: true, startedAt: Date.now(), branch, progress: 0, lastProgressAt: Date.now() };
     // Deliberately not awaited: the response goes back now, the scan carries on.
     runAliasScan(branch)
       .catch((e) => { aliasScan.error = e.message; console.error('alias scan failed:', e.message); })
@@ -364,8 +375,10 @@ app.get('/api/alias-suggestions', async (req, res) => {
     const live = ((doc && doc.suggestions) || []).filter((s) =>
       !no.has(s.key) && map[s.variant] !== s.canonical && map[s.canonical] !== s.variant &&
       !(map[s.variant] && map[s.variant] === map[s.canonical]));
+    const running = scanRunning();
     res.json({
-      running: scanRunning(),
+      running,
+      progress: running ? aliasScan.progress : 0,
       error: aliasScan.error || null,
       updatedAt: doc ? doc.updatedAt : null,
       scanned: doc ? doc.scanned : 0,
