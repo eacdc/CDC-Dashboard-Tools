@@ -2666,18 +2666,37 @@ function YoYPanel(pr){
   }
   var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
   var ROWS=tab==='pl'
-    ? [{k:'revenue',l:'Revenue',up:'good'},{k:'purchase',l:'Purchases',up:'cost'},{k:'directExp',l:'Direct Expenses',up:'cost'},
-       {k:'gp',l:'Gross Profit',up:'good',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost'},{k:'np',l:'Net Profit',up:'good',strong:true}]
-    : [{k:'cashIn',l:'Inflows',up:'good'},{k:'cashOut',l:'Outflows',up:'cost'},{k:'cashNet',l:'Net Cashflow',up:'good',strong:true}];
+    ? [{k:'revenue',l:'Revenue',up:'value'},{k:'purchase',l:'Purchases',up:'cost'},{k:'directExp',l:'Direct Expenses',up:'cost'},
+       {k:'gp',l:'Gross Profit',up:'value',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost'},{k:'np',l:'Net Profit',up:'value',strong:true}]
+    : [{k:'cashIn',l:'Inflows',up:'value'},{k:'cashOut',l:'Outflows',up:'cost'},{k:'cashNet',l:'Net Cashflow',up:'value',strong:true}];
   function fmtM(n){if(n===0||n==null)return'—';var a=Math.abs(n),s=n<0?'-':'';
     if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';
     if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
-  // Growth is measured on the SIZE of the line, so a 10% bigger salary bill reads
-  // "+10%", not "-10%". Whether that is good or bad is the colour's job, not the
-  // number's: up is green on revenue and profit, red on costs.
-  function growth(cur,prev){
+  // Growth, measured the way each kind of line is actually read.
+  //
+  // A cost line is stored negative and what matters is its SIZE, so a salary bill
+  // that grew a tenth reads "+10%" -- comparing magnitudes is right there.
+  //
+  // A value line (profit, net cash) is different: it can cross zero, and then
+  // magnitudes lie. A net profit of 7.15 Cr becoming a LOSS of 10.85 Cr came out as
+  // "+52%" in green, because 10.85 is bigger than 7.15. It has to be the signed
+  // change over the size of last year: (cur - prev) / |prev|, which calls that
+  // -252%. Revenue and inflows never change sign, so the two agree there.
+  function growth(cur,prev,kind){
     if(prev===undefined||prev===null||Math.abs(prev)<0.005)return null;
-    return ((Math.abs(cur)-Math.abs(prev))/Math.abs(prev))*100;
+    if(kind==='cost')return ((Math.abs(cur)-Math.abs(prev))/Math.abs(prev))*100;
+    return ((cur-prev)/Math.abs(prev))*100;
+  }
+  // Green where it helps profit, red where it hurts, white at no change, and the
+  // deeper the colour the bigger the move. Capped at 50%: past that everything
+  // would be the same flat block and the ranking between them would be lost.
+  function tint(pct,kind){
+    if(pct===null||pct===undefined)return {bg:'transparent',fg:'#475569'};
+    var helps=(kind==='cost')?(pct<0):(pct>0);
+    var a=Math.min(Math.abs(pct)/50,1)*0.55;
+    if(Math.abs(pct)<0.5)return {bg:'transparent',fg:'#94a3b8'};
+    return {bg:(helps?'rgba(22,163,74,':'rgba(220,38,38,')+a.toFixed(2)+')',
+            fg:helps?'#14532d':'#7f1d1d'};
   }
   if(!open){
     return e('div',{style:{marginTop:'14px',padding:'12px 14px',background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:'10px',display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}},
@@ -2715,7 +2734,13 @@ function YoYPanel(pr){
             var on=!!openFy[fy];
             var head=[e('th',{key:fy,onClick:function(){setOpenFy(function(m){var x=Object.assign({},m);if(x[fy])delete x[fy];else x[fy]=1;return x;});},
               title:on?'collapse the months':'open the twelve months of '+fy,
-              style:{padding:'7px 10px',textAlign:'right',fontFamily:'monospace',fontSize:'10.5px',cursor:'pointer',whiteSpace:'nowrap',color:on?'#0f766e':'#0f172a',background:on?'#ccfbf1':'transparent',borderLeft:'2px solid #e2e8f0'}},(on?'▾ ':'▸ ')+fy)];
+              style:{padding:'7px 10px',textAlign:'right',fontFamily:'monospace',fontSize:'10.5px',cursor:'pointer',whiteSpace:'nowrap',color:on?'#0f766e':'#0f172a',background:on?'#ccfbf1':'transparent',borderLeft:'2px solid #e2e8f0'}},
+              (on?'▾ ':'▸ ')+fy,
+              (function(){var rw=bd[fy];
+                // Only the newest column can be a year in progress. An older year whose
+                // February and March happen to be empty is finished, not partial.
+                if(!rw||fy!==fys[fys.length-1]||rw.lastMonth<0||rw.lastMonth>=11)return null;
+                return e('div',{style:{fontSize:'8.5px',color:'#b45309',fontWeight:600}},'part year · to '+MN[rw.lastMonth]);})())];
             if(on)MN.forEach(function(m){head.push(e('th',{key:fy+m,style:{padding:'7px 6px',textAlign:'right',fontFamily:'monospace',fontSize:'9px',color:'#94a3b8',fontWeight:500,background:'#f0fdfa'}},m));});
             return head;
           }))),
@@ -2725,11 +2750,21 @@ function YoYPanel(pr){
             fys.map(function(fy,fi){
               var row=bd[fy],prev=fi>0?bd[fys[fi-1]]:null;
               var val=row?row.totals[r.k]:null;
-              var g=(row&&prev)?growth(val,prev.totals[r.k]):null;
-              var good=g===null?null:((r.up==='good')===(g>=0));
-              var cells=[e('td',{key:fy,style:Object.assign({},cell,{borderLeft:'2px solid #e2e8f0',fontWeight:r.strong?700:400,background:openFy[fy]?'#f0fdfa':'transparent'})},
+              // A year still in progress is compared over the months it HAS, against
+              // the same months last year. Five months against twelve would read as
+              // a collapse; Apr-Aug against Apr-Aug is the real comparison.
+              var part=row&&fi===fys.length-1&&row.lastMonth>=0&&row.lastMonth<11;
+              var g=null,note='';
+              if(row&&prev){
+                if(part){
+                  var a=0,b=0;for(var mi=0;mi<=row.lastMonth;mi++){a+=row[r.k][mi];b+=prev[r.k][mi];}
+                  g=growth(a,b,r.up);note=' ('+MN[0]+'-'+MN[row.lastMonth]+' vs same months)';
+                } else { g=growth(val,prev.totals[r.k],r.up); }
+              }
+              var tn=tint(g,r.up);
+              var cells=[e('td',{key:fy,style:Object.assign({},cell,{borderLeft:'2px solid #e2e8f0',fontWeight:r.strong?700:400,background:tn.bg!=='transparent'?tn.bg:(openFy[fy]?'#f0fdfa':'transparent')})},
                 e('div',null,row?fmtM(val):'—'),
-                g!==null&&e('div',{title:'vs '+fys[fi-1],style:{fontSize:'9px',color:good?'#15803d':'#dc2626'}},(g>=0?'+':'')+g.toFixed(0)+'%'))];
+                g!==null&&e('div',{title:'vs '+fys[fi-1]+note,style:{fontSize:'9px',color:tn.fg,fontWeight:600}},(g>=0?'+':'')+g.toFixed(0)+'%'))];
               if(openFy[fy])MN.forEach(function(m,mi){
                 cells.push(e('td',{key:fy+m,style:Object.assign({},cell,{fontSize:'10px',color:'#475569',background:'#f8fffe',borderLeft:'1px solid #f1f5f9'})},row?fmtM(row[r.k][mi]):'—'));
               });
@@ -2737,7 +2772,7 @@ function YoYPanel(pr){
             }));
         }))),
       e('div',{style:{padding:'7px 12px',fontSize:'9.5px',color:'#64748b',borderTop:'1px solid #f1f5f9'}},
-        'April–March financial years. The % is the change in the size of that line against the year before — green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied.')));
+        'April–March financial years. Cost lines are compared by size (a bill a tenth bigger reads +10%); profit and net cash by signed change over last year, so a profit turning into a loss reads as the fall it is. A year still in progress is compared against the SAME months of the year before, and its column says so. Colour depth follows the size of the move, green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied.')));
 }
 
 // Pairs the server thinks are one party under two names (server/aliasSuggest.js).
