@@ -2364,7 +2364,8 @@ function Portal(){
   var sApi=useState(''),apiBase=sApi[0],setApiBase=sApi[1];
   var sFrom=useState('2025-04-01'),fromD=sFrom[0],setFromD=sFrom[1];// full history default; change here to switch back to current-FY-only
   var sTo=useState(new Date().toISOString().slice(0,10)),toD=sTo[0],setToD=sTo[1];
-  var sUpd=useState(null),lastUpd=sUpd[0],setLastUpd=sUpd[1];// {kol,ahm} ISO strings of last DB update
+  var sUpd=useState(null),lastUpd=sUpd[0],setLastUpd=sUpd[1];
+  var sYo=useState(false),yoyOpen=sYo[0],setYoyOpen=sYo[1];// the YoY panel needs a wider card// {kol,ahm} ISO strings of last DB update
   function setF(k){return function(file){var nf=Object.assign({},files);nf[k]=file;setFiles(nf);};}
   // cached bills/stock text — from the shared MongoDB store (fetched once) with
   // this browser's localStorage as a fallback.
@@ -2533,8 +2534,10 @@ function Portal(){
   function reset(){setBuilt(null);setConsolData(null);setProjData(null);setFiles({});setProjBranch('all');}
 
   if(!built){
+    // The year-on-year panel widens the card when it opens: eleven financial years,
+    // and up to twelve months inside each, do not fit a 660px upload form.
     return e('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#f8fafc',padding:'20px',fontFamily:'Inter,-apple-system,sans-serif'}},
-      e('div',{style:{width:'660px',padding:'28px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
+      e('div',{style:{width:yoyOpen?'min(1280px,96vw)':'660px',transition:'width 0.2s',padding:'28px',background:'#fff',border:'1px solid #e2e8f0',borderRadius:'16px',boxShadow:'0 8px 32px rgba(0,0,0,0.06)'}},
         e('div',{style:{textAlign:'center',marginBottom:'16px'}},
           e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'monospace'}},'CDC FINANCE PORTAL'),
           e('h1',{style:{fontSize:'22px',fontWeight:700,margin:'4px 0 0'}},'One Upload → Every View'),
@@ -2568,7 +2571,8 @@ function Portal(){
           e('div',{style:{display:'flex',flexDirection:'column',gap:'2px',marginTop:'4px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'AS-OF DATE (projection)'),
             e('input',{type:'date',value:asOf,onChange:function(ev){setAsOf(ev.target.value);},style:{padding:'8px 10px',border:'1px solid #e2e8f0',borderRadius:'8px',fontFamily:'monospace',fontSize:'12px'}}))),
         err&&e('div',{style:{padding:'10px',borderRadius:'8px',background:'#fef2f2',border:'1px solid #fecaca',color:'#dc2626',marginTop:'10px',fontSize:'11px',fontFamily:'monospace',whiteSpace:'pre-wrap'}},err),
-        e('button',{onClick:mode==='mongo'?goMongo:go,disabled:ld,style:{width:'100%',marginTop:'14px',padding:'13px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ld?'wait':'pointer',background:ld?'#94a3b8':'#0891b2',color:'#fff'}},ld?(mode==='mongo'?'Fetching…':'Building all views…'):(mode==='mongo'?'Fetch from MongoDB → Open Portal':'Open Portal'))));
+        e('button',{onClick:mode==='mongo'?goMongo:go,disabled:ld,style:{width:'100%',marginTop:'14px',padding:'13px',borderRadius:'10px',border:'none',fontSize:'14px',fontWeight:600,cursor:ld?'wait':'pointer',background:ld?'#94a3b8':'#0891b2',color:'#fff'}},ld?(mode==='mongo'?'Fetching…':'Building all views…'):(mode==='mongo'?'Fetch from MongoDB → Open Portal':'Open Portal')),
+        e(YoYPanel,{apiBase:(apiBase||'').replace(/\/+$/,''),onOpenChange:setYoyOpen})));
   }
 
   // Portal chrome + active app
@@ -2619,6 +2623,106 @@ function flattenAliases(map){
     if(v!==k)out[k]=v;   // a name mapping to itself is not an alias
   }
   return out;
+}
+
+// Every financial year side by side, on the landing page, before anything is loaded.
+//
+// The figures are the P&L / Cashflow lines the dashboards show, but folded on the
+// server (server/yoySummary.js) across every year at once -- a decade of vouchers
+// cannot come to the browser. What arrives here is a few thousand numbers WITH the
+// month detail already in them, so opening a year is instant: no second request.
+function YoYPanel(pr){
+  var s0=useState(false),open=s0[0],setOpen=s0[1];
+  var s1=useState(null),data=s1[0],setData=s1[1];
+  var s2=useState(''),err=s2[0],setErr=s2[1];
+  var s3=useState('pl'),tab=s3[0],setTab=s3[1];        // pl | cf
+  var s4=useState('all'),br=s4[0],setBr=s4[1];         // all | kol | ahm
+  var s5=useState({}),openFy=s5[0],setOpenFy=s5[1];    // which years show their months
+  var s6=useState(false),busy=s6[0],setBusy=s6[1];
+  var poll=useRef(null);
+  function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
+  function read(){
+    return fetch((pr.apiBase||'')+'/api/yoy').then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){setData(d);setBusy(!!d.running);if(d.error)setErr(d.error);if(!d.running)stopPoll();return d;})
+      .catch(function(ex){stopPoll();setErr(ex.message||String(ex));setBusy(false);});
+  }
+  function load(){setOpen(true);if(pr.onOpenChange)pr.onOpenChange(true);setErr('');read();}
+  // Rebuilding reads every voucher of every year, so it is started and watched, not
+  // waited for -- the same reason the party-merge scan works that way.
+  function rebuild(){
+    setBusy(true);setErr('');
+    fetch((pr.apiBase||'')+'/api/yoy/scan',{method:'POST'}).then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(){stopPoll();poll.current=setInterval(read,3000);read();})
+      .catch(function(ex){setErr(ex.message||String(ex));setBusy(false);});
+  }
+  var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+  var ROWS=tab==='pl'
+    ? [{k:'revenue',l:'Revenue',up:'good'},{k:'purchase',l:'Purchases',up:'cost'},{k:'directExp',l:'Direct Expenses',up:'cost'},
+       {k:'gp',l:'Gross Profit',up:'good',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost'},{k:'np',l:'Net Profit',up:'good',strong:true}]
+    : [{k:'cashIn',l:'Inflows',up:'good'},{k:'cashOut',l:'Outflows',up:'cost'},{k:'cashNet',l:'Net Cashflow',up:'good',strong:true}];
+  function fmtM(n){if(n===0||n==null)return'—';var a=Math.abs(n),s=n<0?'-':'';
+    if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';
+    if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
+  // Growth is measured on the SIZE of the line, so a 10% bigger salary bill reads
+  // "+10%", not "-10%". Whether that is good or bad is the colour's job, not the
+  // number's: up is green on revenue and profit, red on costs.
+  function growth(cur,prev){
+    if(prev===undefined||prev===null||Math.abs(prev)<0.005)return null;
+    return ((Math.abs(cur)-Math.abs(prev))/Math.abs(prev))*100;
+  }
+  if(!open){
+    return e('div',{style:{marginTop:'14px',padding:'12px 14px',background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:'10px',display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}},
+      e('button',{onClick:load,style:{background:'#0f766e',border:'none',color:'#fff',padding:'8px 14px',borderRadius:'8px',cursor:'pointer',fontSize:'12px',fontWeight:600,fontFamily:'monospace'}},'📅 Year on Year'),
+      e('span',{style:{fontSize:'10.5px',color:'#64748b'}},'Every financial year at a glance — no upload, no wait. Click a year to open its months.'));
+  }
+  var bd=(data&&data.branches&&data.branches[br])||{};
+  var fys=(data&&data.fys)||[];
+  var cell={padding:'6px 10px',textAlign:'right',fontFamily:'monospace',fontSize:'11.5px',whiteSpace:'nowrap',borderLeft:'1px solid #f1f5f9'};
+  return e('div',{style:{marginTop:'14px',border:'1px solid #99f6e4',borderRadius:'10px',background:'#f0fdfa',overflow:'hidden'}},
+    e('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'9px 12px',borderBottom:'1px solid #99f6e4',flexWrap:'wrap'}},
+      e('span',{style:{fontSize:'11px',fontWeight:700,color:'#0f766e',fontFamily:'monospace'}},'YEAR ON YEAR'),
+      ['pl','cf'].map(function(t){return e('span',{key:t,onClick:function(){setTab(t);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:tab===t?'#0f766e':'#fff',color:tab===t?'#fff':'#475569',border:'1px solid #99f6e4'}},t==='pl'?'P&L':'CASHFLOW');}),
+      e('span',{style:{width:'6px'}}),
+      ['all','kol','ahm'].map(function(b){return e('span',{key:b,onClick:function(){setBr(b);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:br===b?'#0891b2':'#fff',color:br===b?'#fff':'#475569',border:'1px solid #bae6fd'}},b==='all'?'CONSOL':b.toUpperCase());}),
+      data&&data.updatedAt&&e('span',{style:{fontSize:'9.5px',color:'#64748b',fontFamily:'monospace'}},'built '+new Date(data.updatedAt).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})),
+      e('span',{style:{marginLeft:'auto'}}),
+      e('button',{disabled:busy,onClick:rebuild,title:'Read every voucher again and rebuild the summary',style:{background:'#fff',border:'1px solid #99f6e4',color:'#0f766e',padding:'3px 9px',borderRadius:'5px',cursor:busy?'progress':'pointer',fontSize:'10px'}},busy?'Rebuilding…':'↻ Rebuild'),
+      e('button',{onClick:function(){stopPoll();setOpen(false);if(pr.onOpenChange)pr.onOpenChange(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
+    err&&e('div',{style:{padding:'8px 12px',fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},err),
+    busy&&e('div',{style:{padding:'8px 12px',fontSize:'11px',color:'#0f766e'}},'Rebuilding from every voucher of every year'+((data&&data.progress)?(' — '+data.progress.toLocaleString('en-IN')+' so far'):'')+'. You can leave this open; it will fill in when it finishes.'),
+    !data?e('div',{style:{padding:'14px',fontSize:'11px',color:'#64748b'}},'Loading…')
+    :fys.length===0?e('div',{style:{padding:'14px',fontSize:'11px',color:'#64748b'}},'No summary yet — press ↻ Rebuild to read the history once. After that it stays up to date on its own.')
+    :e('div',{style:{overflowX:'auto',background:'#fff'}},
+      e('table',{style:{borderCollapse:'collapse',fontSize:'11.5px',minWidth:'100%'}},
+        e('thead',null,e('tr',{style:{background:'#f8fafc'}},
+          e('th',{style:{padding:'7px 12px',textAlign:'left',fontSize:'10px',fontFamily:'monospace',color:'#64748b',position:'sticky',left:0,background:'#f8fafc',zIndex:1}},'PARTICULARS'),
+          fys.map(function(fy){
+            var on=!!openFy[fy];
+            var head=[e('th',{key:fy,onClick:function(){setOpenFy(function(m){var x=Object.assign({},m);if(x[fy])delete x[fy];else x[fy]=1;return x;});},
+              title:on?'collapse the months':'open the twelve months of '+fy,
+              style:{padding:'7px 10px',textAlign:'right',fontFamily:'monospace',fontSize:'10.5px',cursor:'pointer',whiteSpace:'nowrap',color:on?'#0f766e':'#0f172a',background:on?'#ccfbf1':'transparent',borderLeft:'2px solid #e2e8f0'}},(on?'▾ ':'▸ ')+fy)];
+            if(on)MN.forEach(function(m){head.push(e('th',{key:fy+m,style:{padding:'7px 6px',textAlign:'right',fontFamily:'monospace',fontSize:'9px',color:'#94a3b8',fontWeight:500,background:'#f0fdfa'}},m));});
+            return head;
+          }))),
+        e('tbody',null,ROWS.map(function(r,ri){
+          return e('tr',{key:r.k,style:{borderTop:'1px solid #f1f5f9',background:r.strong?'#f8fafc':'transparent'}},
+            e('td',{style:{padding:'6px 12px',whiteSpace:'nowrap',fontWeight:r.strong?700:500,color:'#0f172a',position:'sticky',left:0,background:r.strong?'#f8fafc':'#fff',zIndex:1}},r.l),
+            fys.map(function(fy,fi){
+              var row=bd[fy],prev=fi>0?bd[fys[fi-1]]:null;
+              var val=row?row.totals[r.k]:null;
+              var g=(row&&prev)?growth(val,prev.totals[r.k]):null;
+              var good=g===null?null:((r.up==='good')===(g>=0));
+              var cells=[e('td',{key:fy,style:Object.assign({},cell,{borderLeft:'2px solid #e2e8f0',fontWeight:r.strong?700:400,background:openFy[fy]?'#f0fdfa':'transparent'})},
+                e('div',null,row?fmtM(val):'—'),
+                g!==null&&e('div',{title:'vs '+fys[fi-1],style:{fontSize:'9px',color:good?'#15803d':'#dc2626'}},(g>=0?'+':'')+g.toFixed(0)+'%'))];
+              if(openFy[fy])MN.forEach(function(m,mi){
+                cells.push(e('td',{key:fy+m,style:Object.assign({},cell,{fontSize:'10px',color:'#475569',background:'#f8fffe',borderLeft:'1px solid #f1f5f9'})},row?fmtM(row[r.k][mi]):'—'));
+              });
+              return cells;
+            }));
+        }))),
+      e('div',{style:{padding:'7px 12px',fontSize:'9.5px',color:'#64748b',borderTop:'1px solid #f1f5f9'}},
+        'April–March financial years. The % is the change in the size of that line against the year before — green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied.')));
 }
 
 // Pairs the server thinks are one party under two names (server/aliasSuggest.js).

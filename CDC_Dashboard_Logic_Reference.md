@@ -175,6 +175,43 @@
 | Credit Note, party_ledgers | Debtor (cancellation) | — |
 | Debit Note, party_ledgers | — | Creditor (cancellation) |
 
+## YEAR ON YEAR (landing-page summary)
+
+Every financial year side by side, before anything is loaded, with a year opening
+into its twelve months. The dashboards compute these lines in the browser from ONE
+year's vouchers; a decade cannot travel to a browser, so `server/yoySummary.js` folds
+them server-side in a single streaming pass and stores a few thousand numbers.
+
+**The figures must equal the dashboard's.** They are not re-derived: `plEngine.js`
+lifts the portal's own `classify` / `getChain` / `monthKey` / `CASH_VCH` out of
+`portal/index.html` and runs them in Node, so a ledger lands in the same bucket on
+both sides, and renaming one of those functions fails loudly at startup instead of
+drifting the numbers apart. `npm run test:yoy` then runs the same vouchers through
+`processData` in Chromium and through the fold, comparing every monthly figure across
+3 branches × 2 years × 9 lines.
+
+| | |
+|---|---|
+| `GET /api/yoy` | the stored summary — `{fys, branches:{all,kol,ahm}, updatedAt}` |
+| `POST /api/yoy/scan[?fy=2019-20]` | rebuild everything, or only those years |
+
+The whole payload, month detail included, is one small request — so opening a year
+costs nothing. Rebuilds run in the background (Render's proxy will not wait for a
+full read) and coalesce: a rebuild asked for while one runs is remembered and run
+after, so a back-fill pushing several years never starts several scans. `/ingest` and
+`/sync` refresh **only the financial years their payload touched** (endpoints *and*
+the years between), so the daily sync costs one year.
+
+Two deliberate differences from the P&L tab, stated under the table:
+- **Stock change is not included** — it comes from an uploaded template covering the
+  current period only. So Gross Profit here is Revenue + Purchases + Direct Expenses.
+- **Per-browser overrides are not applied** — ledger-category and invoice-account
+  overrides live in each browser's localStorage, invisible to the server.
+
+Growth % is computed on the **size** of a line, so a 10% bigger salary bill reads
++10%, not −10%; the colour carries the judgement (green where it helps profit, red
+where it hurts).
+
 ## ONE PARTY, TWO NAMES (party merge suggestions)
 
 CDC keeps one Tally company per financial year, so a party renamed between years

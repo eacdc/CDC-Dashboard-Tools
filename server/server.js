@@ -10,6 +10,7 @@ const compression = require('compression');
 const { getDb, close } = require('./db');
 const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = require('./ingest');
 const { suggestAliases, newProfiles, addVoucher, finalizeProfiles } = require('./aliasSuggest');
+const yoy = require('./yoySummary');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -35,6 +36,24 @@ function ymd(d) {
 }
 function isYmd(s) { return typeof s === 'string' && /^\d{8}$/.test(s); }
 
+// Which financial years does this ingest/sync payload touch? Used to refresh only
+// those years of the year-on-year summary. Endpoints alone are not enough -- a
+// back-fill range spans the years between them too. An empty result means "cannot
+// tell", and nothing is refreshed rather than everything.
+function fysTouched(body) {
+  const dates = [];
+  if (body && isYmd(body.from)) dates.push(body.from);
+  if (body && isYmd(body.to)) dates.push(body.to);
+  for (const d of (body && body.changedDates) || []) if (isYmd(String(d))) dates.push(String(d));
+  for (const v of (body && body.vouchers) || []) if (v && isYmd(String(v.date))) dates.push(String(v.date));
+  if (!dates.length) return [];
+  let lo = Infinity, hi = -Infinity;
+  for (const d of dates) { const f = yoy.fyOf(d); if (f < lo) lo = f; if (f > hi) hi = f; }
+  const out = [];
+  for (let y = lo; y <= hi && out.length < 30; y++) out.push(yoy.fyLabel(y));
+  return out;
+}
+
 // ---- health -----------------------------------------------------------------
 app.get('/health', async (_req, res) => {
   try { await getDb(); res.json({ ok: true }); }
@@ -48,6 +67,9 @@ app.post('/ingest', async (req, res) => {
   }
   try {
     const result = await ingest(req.body || {});
+    // Keep the year-on-year summary honest without anyone asking: rebuild only the
+    // financial years this push touched. A daily sync touches one, so it costs one.
+    requestYoy(fysTouched(req.body));
     res.json({ ok: true, ...result });
   } catch (e) {
     res.status(e.status || 500).json({ ok: false, error: e.message });
@@ -86,7 +108,9 @@ app.post('/sync', async (req, res) => {
     return res.status(401).json({ error: 'bad or missing x-ingest-token' });
   }
   try {
-    res.json({ ok: true, ...(await syncIncremental(req.body || {})) });
+    const out = await syncIncremental(req.body || {});
+    requestYoy(fysTouched(req.body));
+    res.json({ ok: true, ...out });
   } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
 });
 
@@ -389,6 +413,123 @@ app.get('/api/alias-suggestions', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ---- year-on-year summary --------------------------------------------------
+// The landing page shows every financial year side by side, and opens a year into
+// its twelve months. A decade of vouchers cannot travel to a browser, so the totals
+// are folded here (server/yoySummary.js -- which borrows the dashboard's own
+// classification, see plEngine.js) and stored as a few thousand numbers. The page
+// then loads the whole thing, month detail included, in one small request.
+//
+//   GET  /api/yoy                      -> { fys, branches, updatedAt, running, ... }
+//   POST /api/yoy/scan[?fy=2019-20]    -> rebuild everything, or just those years
+//
+// Rebuilding is a background job for the same reason the alias scan is: reading
+// every voucher takes minutes, and Render's proxy will not wait.
+let yoyState = { running: false, progress: 0, lastProgressAt: 0, pending: null, error: null };
+function yoyRunning() {
+  if (!yoyState.running) return false;
+  if (Date.now() - (yoyState.lastProgressAt || 0) > SCAN_STALE_MS) { yoyState.running = false; return false; }
+  return true;
+}
+
+// fys: null = every year; otherwise only those FY labels, and only those are replaced
+// in the stored summary. The daily sync touches one year, so it costs one year.
+async function runYoySummary(fys) {
+  const db = await getDb();
+  const xd = { ledgers: {}, groups: {} };
+  for (const b of ['kol', 'ahm']) {
+    const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+    if (!m) continue;
+    Object.assign(xd.ledgers, m.ledgers || {});
+    Object.assign(xd.groups, m.groups || {});
+  }
+  const q = {};
+  if (fys && fys.length) {
+    // FY labels -> the date window they span, so Mongo filters instead of us.
+    const years = fys.map((f) => parseInt(String(f).slice(0, 4), 10)).filter((y) => y > 1900);
+    if (years.length) q.date = { $gte: Math.min(...years) + '0401', $lte: (Math.max(...years) + 1) + '0331' };
+  }
+  const S = yoy.newSummary(xd);
+  let n = 0;
+  const cursor = db.collection('vouchers')
+    .find(q, { projection: { _id: 0, branch: 1, date: 1, type: 1, ledgers: 1, party_ledgers: 1 } })
+    .batchSize(1000);
+  for await (const v of cursor) {
+    yoy.addVoucher(S, v);
+    if (++n % 5000 === 0) { yoyState.progress = n; yoyState.lastProgressAt = Date.now(); }
+  }
+  yoyState.progress = n; yoyState.lastProgressAt = Date.now();
+  const fresh = yoy.finalize(S);
+
+  const prev = (await db.collection('yoy_summary').findOne({ _id: 'summary' })) || { branches: {}, fys: [] };
+  let branches, allFys;
+  if (!fys || !fys.length) { branches = fresh.branches; allFys = fresh.fys; }
+  else {
+    // Partial: keep every other year exactly as it was, replace only these. A year
+    // whose vouchers were all deleted must disappear, so the rebuilt years are
+    // cleared first rather than merged over.
+    branches = JSON.parse(JSON.stringify(prev.branches || {}));
+    const touched = new Set(fys);
+    for (const b of Object.keys(branches)) for (const f of Object.keys(branches[b])) if (touched.has(f)) delete branches[b][f];
+    for (const b of Object.keys(fresh.branches)) {
+      branches[b] = branches[b] || {};
+      for (const f of Object.keys(fresh.branches[b])) branches[b][f] = fresh.branches[b][f];
+    }
+    const s = new Set();
+    for (const b of Object.keys(branches)) for (const f of Object.keys(branches[b])) s.add(f);
+    allFys = [...s].sort();
+  }
+  await db.collection('yoy_summary').updateOne({ _id: 'summary' }, { $set: {
+    fys: allFys, branches, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt: new Date(),
+  } }, { upsert: true });
+}
+
+// Coalescing worker: a rebuild asked for while one is running is remembered and run
+// straight after, so a backfill pushing several years never starts several scans.
+function requestYoy(fys) {
+  // An empty list means the caller could not work out which years changed; leave the
+  // summary alone rather than rebuilding a decade on every push.
+  if (Array.isArray(fys) && !fys.length) return;
+  const want = (fys && fys.length) ? new Set(fys) : null;
+  if (yoyRunning()) {
+    if (!yoyState.pending) yoyState.pending = want ? new Set(want) : null;
+    else if (want) for (const f of want) yoyState.pending.add(f);
+    else yoyState.pending = null;      // a full rebuild subsumes any pending years
+    yoyState.pendingAll = yoyState.pendingAll || !want;
+    return;
+  }
+  yoyState = { running: true, progress: 0, lastProgressAt: Date.now(), pending: want ? new Set(want) : null, pendingAll: !want, error: null };
+  (async () => {
+    let next = want ? [...want] : null;
+    for (let guard = 0; guard < 20; guard++) {
+      yoyState.pending = null; yoyState.pendingAll = false;
+      await runYoySummary(next);
+      if (!yoyState.pending && !yoyState.pendingAll) break;
+      next = yoyState.pendingAll ? null : [...yoyState.pending];
+    }
+  })().catch((e) => { yoyState.error = e.message; console.error('yoy summary failed:', e.message); })
+      .finally(() => { yoyState.running = false; });
+}
+
+app.post('/api/yoy/scan', async (req, res) => {
+  try {
+    const fy = req.query.fy ? String(req.query.fy).split(',').map((s) => s.trim()).filter(Boolean) : null;
+    requestYoy(fy);
+    res.json({ started: true, scope: fy || 'all', running: yoyRunning() });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/yoy', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('yoy_summary').findOne({ _id: 'summary' }, { projection: { _id: 0 } });
+    const running = yoyRunning();
+    res.json(Object.assign({ fys: [], branches: {}, updatedAt: null }, doc || {}, {
+      running, progress: running ? yoyState.progress : 0, error: yoyState.error || null,
+    }));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ---- shared input files (bill-wise CSVs + stock template) ------------------
