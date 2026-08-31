@@ -121,6 +121,28 @@ const V = (branch, date, sales, salary) => ({
 
   // Exact, case-sensitive: a loose "text=CASHFLOW" also matches the card's subtitle
   // line ("P&L · Cashflow · Ledger Audit · ..."), which is not a control.
+  // Maximise: the panel takes the whole window, and Escape brings it back.
+  const inlineW = await page.evaluate(() => document.querySelector('table').getBoundingClientRect().width);
+  await page.click('text=Maximise');
+  await page.waitForFunction(() => /Minimise/.test(document.body.innerText), null, { timeout: 5000 });
+  const box = await page.evaluate(() => {
+    const t = document.querySelector('table');
+    let n = t; while (n && getComputedStyle(n).position !== 'fixed') n = n.parentElement;
+    const r = n && n.getBoundingClientRect();
+    return n ? { w: Math.round(r.width), h: Math.round(r.height), vw: innerWidth, vh: innerHeight } : null;
+  });
+  assert(box && box.w === box.vw && box.h === box.vh, 'maximised, the panel covers the whole window');
+  assert((await page.evaluate(() => document.querySelector('table').getBoundingClientRect().width)) > inlineW,
+    'the table gets more room than it had inside the card');
+  await page.screenshot({ path: '/tmp/yoy_max.png' });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => /Maximise/.test(document.body.innerText), null, { timeout: 5000 });
+  assert(await page.evaluate(() => {
+    const t = document.querySelector('table');
+    let n = t; while (n && getComputedStyle(n).position !== 'fixed') n = n.parentElement;
+    return !n;
+  }), 'Escape puts it back into the page');
+
   await page.click('span:text-is("CASHFLOW")');
   await page.waitForFunction(() => /Net Cashflow/.test(document.body.innerText), null, { timeout: 5000 });
   assert(/Inflows/.test(await page.evaluate(() => document.body.innerText)), 'the Cashflow tab swaps the rows');

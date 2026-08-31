@@ -2639,7 +2639,16 @@ function YoYPanel(pr){
   var s4=useState('all'),br=s4[0],setBr=s4[1];         // all | kol | ahm
   var s5=useState({}),openFy=s5[0],setOpenFy=s5[1];    // which years show their months
   var s6=useState(false),busy=s6[0],setBusy=s6[1];
+  var s7=useState(false),max=s7[0],setMax=s7[1];       // fill the window
   var poll=useRef(null);
+  // Escape leaves the maximised view. Bound only while maximised, so it never steals
+  // the key from anything else on the page.
+  React.useEffect(function(){
+    if(!max)return;
+    function onKey(ev){if(ev.key==='Escape')setMax(false);}
+    window.addEventListener('keydown',onKey);
+    return function(){window.removeEventListener('keydown',onKey);};
+  },[max]);
   function stopPoll(){if(poll.current){clearInterval(poll.current);poll.current=null;}}
   function read(){
     return fetch((pr.apiBase||'')+'/api/yoy').then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
@@ -2678,7 +2687,12 @@ function YoYPanel(pr){
   var bd=(data&&data.branches&&data.branches[br])||{};
   var fys=(data&&data.fys)||[];
   var cell={padding:'6px 10px',textAlign:'right',fontFamily:'monospace',fontSize:'11.5px',whiteSpace:'nowrap',borderLeft:'1px solid #f1f5f9'};
-  return e('div',{style:{marginTop:'14px',border:'1px solid #99f6e4',borderRadius:'10px',background:'#f0fdfa',overflow:'hidden'}},
+  // Maximised, the panel becomes a layer over the whole window and the table takes
+  // whatever height is left; inline, it sits in the card and scrolls sideways only.
+  var shell=max
+    ? {position:'fixed',inset:0,zIndex:400,margin:0,border:'none',borderRadius:0,background:'#f0fdfa',display:'flex',flexDirection:'column'}
+    : {marginTop:'14px',border:'1px solid #99f6e4',borderRadius:'10px',background:'#f0fdfa',overflow:'hidden'};
+  return e('div',{style:shell},
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'9px 12px',borderBottom:'1px solid #99f6e4',flexWrap:'wrap'}},
       e('span',{style:{fontSize:'11px',fontWeight:700,color:'#0f766e',fontFamily:'monospace'}},'YEAR ON YEAR'),
       ['pl','cf'].map(function(t){return e('span',{key:t,onClick:function(){setTab(t);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:tab===t?'#0f766e':'#fff',color:tab===t?'#fff':'#475569',border:'1px solid #99f6e4'}},t==='pl'?'P&L':'CASHFLOW');}),
@@ -2687,14 +2701,15 @@ function YoYPanel(pr){
       data&&data.updatedAt&&e('span',{style:{fontSize:'9.5px',color:'#64748b',fontFamily:'monospace'}},'built '+new Date(data.updatedAt).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})),
       e('span',{style:{marginLeft:'auto'}}),
       e('button',{disabled:busy,onClick:rebuild,title:'Read every voucher again and rebuild the summary',style:{background:'#fff',border:'1px solid #99f6e4',color:'#0f766e',padding:'3px 9px',borderRadius:'5px',cursor:busy?'progress':'pointer',fontSize:'10px'}},busy?'Rebuilding…':'↻ Rebuild'),
-      e('button',{onClick:function(){stopPoll();setOpen(false);if(pr.onOpenChange)pr.onOpenChange(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
+      e('button',{onClick:function(){setMax(!max);},title:max?'Back into the page (Esc)':'Fill the window — eleven years of columns need the room',style:{background:max?'#0f766e':'#fff',border:'1px solid #99f6e4',color:max?'#fff':'#0f766e',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},max?'⤡ Minimise':'⛶ Maximise'),
+      !max&&e('button',{onClick:function(){stopPoll();setOpen(false);if(pr.onOpenChange)pr.onOpenChange(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
     err&&e('div',{style:{padding:'8px 12px',fontSize:'11px',color:'#dc2626',fontFamily:'monospace'}},err),
     busy&&e('div',{style:{padding:'8px 12px',fontSize:'11px',color:'#0f766e'}},'Rebuilding from every voucher of every year'+((data&&data.progress)?(' — '+data.progress.toLocaleString('en-IN')+' so far'):'')+'. You can leave this open; it will fill in when it finishes.'),
     !data?e('div',{style:{padding:'14px',fontSize:'11px',color:'#64748b'}},'Loading…')
     :fys.length===0?e('div',{style:{padding:'14px',fontSize:'11px',color:'#64748b'}},'No summary yet — press ↻ Rebuild to read the history once. After that it stays up to date on its own.')
-    :e('div',{style:{overflowX:'auto',background:'#fff'}},
+    :e('div',{style:max?{overflow:'auto',background:'#fff',flex:1,minHeight:0}:{overflowX:'auto',background:'#fff'}},
       e('table',{style:{borderCollapse:'collapse',fontSize:'11.5px',minWidth:'100%'}},
-        e('thead',null,e('tr',{style:{background:'#f8fafc'}},
+        e('thead',{style:max?{position:'sticky',top:0,zIndex:2}:null},e('tr',{style:{background:'#f8fafc'}},
           e('th',{style:{padding:'7px 12px',textAlign:'left',fontSize:'10px',fontFamily:'monospace',color:'#64748b',position:'sticky',left:0,background:'#f8fafc',zIndex:1}},'PARTICULARS'),
           fys.map(function(fy){
             var on=!!openFy[fy];
