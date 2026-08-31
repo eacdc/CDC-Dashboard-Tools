@@ -142,6 +142,14 @@ function finalize(S) {
         if (k === 'totals') continue;
         row.totals[k] = r2(row[k].reduce((a, x) => a + x, 0));
       }
+      // How far into the year the data actually goes. The financial year in progress
+      // holds only the months booked so far, and comparing five months against a
+      // full twelve reads as a collapse that never happened -- so the client needs
+      // to know, and compares like for like instead.
+      row.lastMonth = -1;
+      for (let i = 0; i < 12; i++) {
+        for (const l of LINES) if (Math.abs(row[l][i]) > 0.005) { row.lastMonth = Math.max(row.lastMonth, i); break; }
+      }
       b[fy] = row;
     }
   }

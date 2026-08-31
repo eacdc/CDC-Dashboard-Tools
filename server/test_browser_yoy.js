@@ -64,9 +64,15 @@ const V = (branch, date, sales, salary) => ({
     ledgers: { 'Sales A/c': 'Sales Accounts', Salary: 'Indirect Expenses', 'A Customer': 'Sundry Debtors' },
     groups: { 'Sales Accounts': 'Revenue Account', 'Indirect Expenses': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null } });
   fakeDb.collection('vouchers').docs.push(
+    // FY 2024-25: profit of 8 L.
     V('kol', '20240510', 1000000), V('kol', '20241105', null, 200000),
-    V('kol', '20250610', 1500000), V('kol', '20251105', null, 300000),
-    V('ahm', '20250712', 400000));
+    // FY 2025-26: expenses exceed revenue -> a LOSS. The old magnitude formula called
+    // this growth, in green; it must now read as the fall it is.
+    // April here gives the part year below something to be compared against.
+    V('kol', '20250415', 100000), V('kol', '20250610', 1400000), V('kol', '20251105', null, 2500000),
+    V('ahm', '20250712', 400000),
+    // FY 2026-27: only April and May booked -- a part year.
+    V('kol', '20260410', 300000), V('kol', '20260512', 200000));
 
   const server = app.listen(0);
   await new Promise((r) => server.on('listening', r));
@@ -107,7 +113,37 @@ const V = (branch, date, sales, salary) => ({
   assert(/Revenue/.test(txt) && /Gross Profit/.test(txt) && /Net Profit/.test(txt), 'the P&L lines are the rows');
   assert(/10\.00 L/.test(txt), 'FY 2024-25 revenue shows as 10.00 L');
   assert(/\+90%/.test(txt), 'growth against the previous year is shown (10L -> 19L consolidated)');
-  assert(/\+50%/.test(txt), 'a cost line that grew shows +50%, sized not signed (2L -> 3L salary)');
+  assert(/\+1150%/.test(txt), 'a cost line that grew is compared by size (2L -> 25L salary)');
+
+  // The bug this fixture exists for: profit -> loss must not read as growth.
+  const npPct = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('tr')].find((r) => /Net Profit/.test(r.cells[0].innerText));
+    const c = row.cells[2];                       // FY 2025-26, the loss year
+    return { text: c.innerText, bg: getComputedStyle(c).backgroundColor };
+  });
+  assert(/-\d+%/.test(npPct.text), 'a profit turning into a loss shows a FALL, not growth: ' + npPct.text.replace(/\n/g, ' '));
+  assert(/rgba?\(2[0-9]{2},\s*3[0-9],\s*3[0-9]/.test(npPct.bg), 'and that cell is tinted red, not green: ' + npPct.bg);
+
+  // Colour depth follows the size of the move, and a helpful move is green.
+  const revBg = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('tr')].find((r) => /Revenue/.test(r.cells[0].innerText));
+    return getComputedStyle(row.cells[2]).backgroundColor;
+  });
+  assert(/rgba?\(22,\s*163,\s*74/.test(revBg), 'revenue growth is tinted green: ' + revBg);
+
+  // The year in progress is flagged and compared like for like.
+  assert(/part year/.test(txt), 'the unfinished financial year is labelled as one');
+  assert((txt.match(/part year/g) || []).length === 1,
+    'and ONLY that one: an older year with an empty February is finished, not partial');
+  const partPct = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('tr')].find((r) => /Revenue/.test(r.cells[0].innerText));
+    const c = row.cells[row.cells.length - 1];
+    return { text: c.innerText, title: c.querySelector('div[title]') ? c.querySelector('div[title]').title : '' };
+  });
+  assert(/vs same months/.test(partPct.title),
+    'a part year is compared against the same months of the year before, not the full year: ' + partPct.title);
+  assert(/\+400%/.test(partPct.text),
+    'and the like-for-like figure is used (Apr+May 5L vs Apr+May 1L), not 5L against a full 19L: ' + partPct.text.replace(/\n/g, ' '));
 
   // A year opens into its months without another request.
   const before = (await page.evaluate(() => performance.getEntriesByType('resource').filter((r) => /api\/yoy/.test(r.name)).length));

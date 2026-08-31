@@ -208,9 +208,23 @@ Two deliberate differences from the P&L tab, stated under the table:
 - **Per-browser overrides are not applied** — ledger-category and invoice-account
   overrides live in each browser's localStorage, invisible to the server.
 
-Growth % is computed on the **size** of a line, so a 10% bigger salary bill reads
-+10%, not −10%; the colour carries the judgement (green where it helps profit, red
-where it hurts).
+Growth % is read the way each kind of line is read:
+
+- **Cost lines** (purchases, expenses, outflows) are stored negative and compared by
+  **size**: `(|cur| − |prev|) / |prev|`. A salary bill a tenth bigger reads +10%.
+- **Value lines** (revenue, GP, NP, inflows, net cash) are compared **signed** over
+  last year's size: `(cur − prev) / |prev|`. This matters when a line crosses zero —
+  a ₹7.15 Cr profit becoming a ₹10.85 Cr loss read as **+52% in green** under a
+  magnitude comparison; signed, it reads −252% in red, which is what happened.
+
+The **financial year in progress** is compared against the **same months** of the
+year before (Apr–Aug vs Apr–Aug), never five months against a full twelve, and its
+column is labelled `part year · to <month>`. Only the newest column can be partial:
+an older year whose February happens to be empty is finished, not unfinished.
+
+Cells are tinted from white at no change to green or red, deepening with the size of
+the move and capped at 50% so the ranking below that stays visible — green where the
+move helps profit, red where it hurts.
 
 ## ONE PARTY, TWO NAMES (party merge suggestions)
 
