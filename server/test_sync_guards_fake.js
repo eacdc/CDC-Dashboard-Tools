@@ -103,6 +103,34 @@ const count = (q) => fakeDb.collection('vouchers').docs.filter((d) => {
   assert(r.deletedMissing === 1, 'and the one voucher Tally really dropped is removed');
   assert(count({ branch: 'ahm', date: '20260520' }) === 59, 'exactly one gone, the rest untouched');
 
+  // --- 3. A day emptied in Tally, then refilled days later ------------------
+  // The guard must not stand in the way of the real sequence: every voucher on a day
+  // is deleted in Tally (the reconcile clears it, since Tally no longer lists those
+  // guids), and three days later four new vouchers are entered on that same date.
+  // Their ALTERID is fresh, so the date comes back as changed WITH vouchers -- which
+  // is precisely the case the guard lets through.
+  const DAY = '20260707';
+  await ingest({ branch: 'kol', master: { ledgers: {}, groups: {} }, vouchers: [
+    V('c1', DAY), V('c2', DAY), V('c3', DAY), V('c4', '20260708')] });
+  assert(count({ branch: 'kol', date: DAY }) === 3, 'three vouchers stored on the day');
+
+  // Day 1: all three deleted in Tally. They vanish from the scan, so the date is not
+  // "changed" -- the reconcile is what notices, and it still works.
+  r = await syncIncremental({ branch: 'kol', changedDates: [], vouchers: [],
+    currentGuids: ['c4'], reconcile: true, scanFrom: '20260701', scanTo: '20260731', lastAlterId: 20 });
+  assert(count({ branch: 'kol', date: DAY }) === 0, 'a day genuinely emptied in Tally IS cleared, by the reconcile');
+  assert(r.deletedMissing === 3, 'and it reports the three it removed');
+
+  // Day 4: four new vouchers entered on that same date.
+  r = await syncIncremental({ branch: 'kol', changedDates: [DAY],
+    vouchers: [V('d1', DAY), V('d2', DAY), V('d3', DAY), V('d4', DAY)],
+    currentGuids: ['c4', 'd1', 'd2', 'd3', 'd4'], reconcile: true,
+    scanFrom: '20260701', scanTo: '20260731', lastAlterId: 30 });
+  console.log('  refill ->', JSON.stringify(r));
+  assert(count({ branch: 'kol', date: DAY }) === 4, 'the four new vouchers land on that date');
+  assert(!r.skippedEmptyDates, 'the guard does not interfere -- the payload had vouchers for the date');
+  assert(count({ branch: 'kol', date: '20260708' }) === 1, 'the neighbouring day is untouched throughout');
+
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== sync delete guards passed ==');
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
