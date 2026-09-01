@@ -175,6 +175,30 @@
 | Credit Note, party_ledgers | Debtor (cancellation) | — |
 | Debit Note, party_ledgers | — | Creditor (cancellation) |
 
+## WHAT CAN DELETE A VOUCHER
+
+Exactly three code paths remove vouchers. Worth knowing, because a week of May 2026
+was lost to the second one.
+
+1. **`/admin/reset`** (`-Reset` / `-ResetAll`, `loader.js --reset`) — a person asks for
+   it. `-ResetAll` is the ONLY path that can reach a back-filled year.
+2. **Incremental sync, replace-by-date** — a changed date is deleted, then the fresh
+   pull is inserted. If the pull came back empty the day was simply gone. **Guarded:**
+   only dates the payload actually carries vouchers for are replaced; an empty
+   replacement leaves the day alone and reports `skippedEmptyDates` + a warning. A day
+   genuinely emptied in Tally is still cleared by the reconcile below.
+3. **Incremental sync, deletion reconcile** — removes vouchers whose GUID Tally no
+   longer lists, **scoped to `scanFrom..scanTo`**. **Guarded:** the incoming list must
+   overlap what is stored. A list from the wrong company overlaps ~0% and would delete
+   the window wholesale; anything that would clear more than half of ≥50 stored
+   vouchers is refused with `reconcileRefused` and a warning.
+
+**Back-filled years cannot be touched automatically.** Both sync deletes work inside
+the scan window, which starts at `run_daily.ps1 -SyncFromDate` (default `20250401`).
+Only an explicit `-ResetAll` reaches further back.
+
+Covered by `npm run test:sync`.
+
 ## YEAR ON YEAR (landing-page summary)
 
 Every financial year side by side, before anything is loaded, with a year opening
