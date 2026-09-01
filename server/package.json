@@ -10,7 +10,7 @@
     "load": "node loader.js",
     "test:logic": "node test_e2e_fake.js",
     "test:voucher": "node test_voucher_details.js",
-    "test:sync": "node test_sync_fake.js",
+    "test:sync": "node test_sync_fake.js && node test_sync_guards_fake.js",
     "test:backfill": "node test_backfill_fake.js",
     "test:reset": "node test_reset_fake.js",
     "test:alias": "node test_alias_suggest_fake.js",

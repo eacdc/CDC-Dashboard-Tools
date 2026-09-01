@@ -335,13 +335,38 @@ async function syncIncremental(payload) {
 
   // 1) Replace every changed date wholesale: delete then insert the fresh pull.
   //    This captures edits, backdated new entries, and same-date deletions.
+  //
+  //    But ONLY for dates the pull actually brought vouchers for. A date flagged as
+  //    changed whose replacement is empty is the shape of a failed pull, not of an
+  //    emptied day -- and that is exactly how a week of May 2026 disappeared: the
+  //    extractor was talking to a Tally that did not have the company loaded, so the
+  //    days were deleted and nothing came back to replace them.
+  //
+  //    A day whose vouchers really were all deleted in Tally is still cleaned up:
+  //    the reconcile below removes anything whose guid Tally no longer lists.
+  const vouchers = Array.isArray(payload.vouchers) ? payload.vouchers : [];
   const changedDates = Array.isArray(payload.changedDates) ? payload.changedDates.map(String) : [];
   if (changedDates.length) {
-    const del = await db.collection('vouchers').deleteMany({ branch, date: { $in: changedDates } });
-    result.deletedByDate = del.deletedCount;
-    result.replacedDates = changedDates.length;
+    const haveFor = new Set(vouchers.map((v) => String((v && v.date) || '')));
+    const replace = changedDates.filter((d) => haveFor.has(d));
+    const skipped = changedDates.filter((d) => !haveFor.has(d));
+    if (replace.length) {
+      const del = await db.collection('vouchers').deleteMany({ branch, date: { $in: replace } });
+      result.deletedByDate = del.deletedCount;
+    }
+    result.replacedDates = replace.length;
+    if (skipped.length) {
+      // Only worth reporting when we actually hold something for those dates --
+      // otherwise it is just a day with no entries, which is unremarkable.
+      const held = await db.collection('vouchers').countDocuments({ branch, date: { $in: skipped } });
+      result.skippedEmptyDates = skipped.length;
+      result.skippedEmptyHeld = held;
+      if (held > 0) {
+        result.warning = `${skipped.length} changed date(s) came back empty while ${held} voucher(s) are stored for them; left untouched. Check the extractor reached the right Tally.`;
+        console.warn(`[sync ${branch}] ${result.warning} dates: ${skipped.slice(0, 10).join(',')}`);
+      }
+    }
   }
-  const vouchers = Array.isArray(payload.vouchers) ? payload.vouchers : [];
   if (vouchers.length) {
     const ops = vouchers.map((raw) => {
       const v = cleanVoucher(raw);
@@ -364,9 +389,29 @@ async function syncIncremental(payload) {
   if (payload.reconcile && Array.isArray(payload.currentGuids) && payload.currentGuids.length) {
     const keep = payload.currentGuids.map(String);
     const q = { branch, guid: { $nin: keep } };
-    if (payload.scanFrom && payload.scanTo) q.date = { $gte: String(payload.scanFrom), $lte: String(payload.scanTo) };
-    const del2 = await db.collection('vouchers').deleteMany(q);
-    result.deletedMissing = del2.deletedCount;
+    const window = {};
+    if (payload.scanFrom && payload.scanTo) {
+      window.date = { $gte: String(payload.scanFrom), $lte: String(payload.scanTo) };
+      q.date = window.date;
+    }
+    // Does this list even belong to this branch? A non-empty list was the only
+    // check, and a list from the WRONG COMPANY passes that easily -- every guid is
+    // foreign, so "delete everything Tally no longer lists" means delete the lot.
+    // A healthy scan overlaps almost completely with what is stored; anything that
+    // would clear more than half the window is refused for a person to look at.
+    const held = await db.collection('vouchers').countDocuments(Object.assign({ branch }, window));
+    const recognised = held ? await db.collection('vouchers').countDocuments(
+      Object.assign({ branch, guid: { $in: keep } }, window)) : 0;
+    const overlap = held ? recognised / held : 1;
+    if (held >= 50 && overlap < 0.5) {
+      result.deletedMissing = 0;
+      result.reconcileRefused = true;
+      result.warning = `reconcile refused: Tally's list matches only ${Math.round(overlap * 100)}% of the ${held} stored voucher(s) in this window, so it is probably not this branch's company. Nothing deleted.`;
+      console.warn(`[sync ${branch}] ${result.warning}`);
+    } else {
+      const del2 = await db.collection('vouchers').deleteMany(q);
+      result.deletedMissing = del2.deletedCount;
+    }
   }
 
   // 3) Advance the high-water mark.
