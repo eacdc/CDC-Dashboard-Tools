@@ -613,6 +613,12 @@ app.use('/projected', express.static(path.join(REPO_ROOT, 'projected')));
 app.use('/dashboard', express.static(path.join(REPO_ROOT, 'dashboard')));
 app.use('/portal', express.static(path.join(REPO_ROOT, 'portal')));
 app.use('/voucher', express.static(path.join(REPO_ROOT, 'voucher')));
+// React and SheetJS, served from here rather than a public CDN. Every page is a
+// single React file, so a CDN the office network cannot reach used to leave a
+// silently blank page -- nothing renders, and the console only says "React is not
+// defined". Serving them ourselves removes that dependency; the pages still keep
+// the CDN as a fallback for anyone opening the HTML straight off disk.
+app.use('/vendor', express.static(path.join(REPO_ROOT, 'vendor'), { maxAge: '30d', immutable: true }));
 // Root opens the portal (the primary UI). The other pages stay reachable at
 // their own paths (/consolidated, /projected, /dashboard) and the API at /api/*.
 app.get('/', (_req, res) => res.redirect('/portal/'));
