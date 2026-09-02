@@ -2963,7 +2963,20 @@ function YoYPanel(pr){
               rows.push(e('tr',{key:r.k+'_e'},e('td',{colSpan:200,style:{padding:'6px 12px 6px 32px',fontSize:'10.5px',color:'#94a3b8'}},
                 'Nothing under this line — press ↻ Rebuild to read the history once.')));
             } else {
-              nodeRows(t.tree,slotIndex(t.fys),1,r.k,r.up,lastRow?lastRow.lastMonth:-1,rows);
+              // Two ways a tree can arrive looking fine and read as nothing, both of
+              // which used to show a full table of dashes and explain themselves to
+              // nobody. Say which one it is instead.
+              var idx=slotIndex(t.fys);
+              var slots=0;(function cnt(ns){ns.forEach(function(x){slots+=Object.keys(x.m||{}).length;if(x.c)cnt(x.c);if(x.l)cnt(x.l);});})(t.tree);
+              var lined=idx.some(function(v){return v>=0;});
+              if(!lined||!slots){
+                rows.push(e('tr',{key:r.k+'_x'},e('td',{colSpan:200,style:{padding:'7px 12px 7px 32px',fontSize:'10.5px',color:'#b45309',background:'#fffbeb'}},
+                  !slots
+                    ? 'The accounts under this line came back with no figures in them. The summary and the per-account detail were built by different versions — press ↻ Rebuild.'
+                    : 'The accounts came back for '+(t.fys.join(', ')||'no years')+', but the columns are '+fys.join(', ')+'. Press ↻ Rebuild.')));
+              } else {
+                nodeRows(t.tree,idx,1,r.k,r.up,lastRow?lastRow.lastMonth:-1,rows);
+              }
             }
           });
           return rows;
