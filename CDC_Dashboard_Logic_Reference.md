@@ -218,6 +218,8 @@ drifting the numbers apart. `npm run test:yoy` then runs the same vouchers throu
 |---|---|
 | `GET /api/yoy` | the stored summary — `{fys, branches:{all,kol,ahm}, updatedAt}` |
 | `POST /api/yoy/scan[?fy=2019-20]` | rebuild everything, or only those years |
+| `GET /api/yoy/tree?branch=&line=` | the accounts under one line, every year at once |
+| `GET /api/yoy/vouchers?branch=&ledger=&from=&to=` | the vouchers behind one account |
 
 The whole payload, month detail included, is one small request — so opening a year
 costs nothing. Rebuilds run in the background (Render's proxy will not wait for a
@@ -232,6 +234,43 @@ Two deliberate differences from the P&L tab, stated under the table:
 - **Per-browser overrides are not applied** — ledger-category and invoice-account
   overrides live in each browser's localStorage, invisible to the server.
 
+### Opening a line down to the accounts
+
+A line expands to the same nested group tree the P&L tab draws, down to the individual
+ledger, and a figure on a ledger opens the vouchers behind it. Three decisions make
+that work at a decade's scale:
+
+**The tree is not stored — the per-ledger detail is.** `yoy_detail` holds one document
+per branch+line: `ledger -> { fy: [12] }`, sparse, so an account that traded in two of
+eleven years carries two arrays. A one-year rebuild has to leave the other ten alone,
+and years can be spliced in and out of that shape; a nested tree cannot. The tree is
+built when a line is opened (`treeFrom`) and cached until the next rebuild.
+
+**The tree itself is the portal's.** `plEngine` lifts `buildTree` out of
+`portal/index.html` alongside `classify`, so the grouping, the roll-ups and the
+ordering are the P&L tab's, not a second implementation that could drift.
+
+**The months of every year lie end to end.** One array, Apr of the first year at slot
+0, Mar of the last at `12n−1` — the layout `buildTree` already takes (it accepts
+`monthCount`) and the one the columns need: a year's total is the sum of its twelve
+slots, and opening a year reads those same twelve. Sent as `{slot: amount}`; thousands
+of parties × 132 zeroes is not worth the wire.
+
+`test_yoy_tree_fake.js` checks the claim that matters: for every branch, every line and
+every year, the accounts in the tree sum back to the line's own total — which
+`test_yoy_fake.js` has already matched against the browser. A ledger dropped for
+landing in no group, a year read at the wrong offset, or consolidated forgetting to
+eliminate the branch account all surface as a mismatch there.
+
+Two things the drill-down does NOT do, both on purpose: a **group** row offers no
+voucher list (it is many accounts, not one), and a long list is **capped** at 500 with
+a note rather than streamed — the point is to see what is in a figure, and a month
+answers that better than two thousand rows of a year.
+
+The voucher lookup matches a ledger by **key list**, not by a dotted path: Tally names
+contain dots ("A.B. Traders"), which Mongo would read as nesting. Narrowed by branch
+and date first, so only one year of one branch is ever examined.
+
 Growth % is read the way each kind of line is read:
 
 - **Cost lines** (purchases, expenses, outflows) are stored negative and compared by
@@ -240,6 +279,9 @@ Growth % is read the way each kind of line is read:
   last year's size: `(cur − prev) / |prev|`. This matters when a line crosses zero —
   a ₹7.15 Cr profit becoming a ₹10.85 Cr loss read as **+52% in green** under a
   magnitude comparison; signed, it reads −252% in red, which is what happened.
+
+Both rules apply at **every depth** — a ledger's column is read exactly like the line
+above it, or the same account reads green on one row and red on the next.
 
 The **financial year in progress** is compared against the **same months** of the
 year before (Apr–Aug vs Apr–Aug), never five months against a full twelve, and its

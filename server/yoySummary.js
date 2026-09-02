@@ -43,8 +43,22 @@ function newSummary(xd) {
     cat: new Map(),                    // ledger -> P&L category, memoised
     chain: new Map(),                  // ledger -> is it a bank/cash/OD account
     data: {},                          // branch -> fy -> line -> [12]
+    // The same amounts again, but kept per ledger, so a line can be opened down to
+    // the accounts under it. Only the two real branches are held: 'all' is built at
+    // the end by merging them, which costs nothing to accumulate.
+    detail: { kol: {}, ahm: {} },      // branch -> line -> ledger -> fy -> [12]
     vouchers: 0,
   };
+}
+// One ledger's contribution to one line, in one month of one year. Kept sparse by
+// year -- an account that traded in two of eleven years holds two arrays, not eleven.
+function addDetail(S, branch, line, name, fy, mi, amt) {
+  const b = S.detail[branch];
+  if (!b) return;                      // a voucher tagged with neither branch
+  const l = b[line] || (b[line] = {});
+  const led = l[name] || (l[name] = {});
+  const arr = led[fy] || (led[fy] = new Array(12).fill(0));
+  arr[mi] += amt;
 }
 function bucket(S, branch, fy) {
   const b = S.data[branch] || (S.data[branch] = {});
@@ -90,6 +104,7 @@ function addVoucher(S, v) {
     const amt = ledgers[ln];
     own[line][mi] += amt;
     if (!S.ib[ln]) all[line][mi] += amt;
+    addDetail(S, branch, line, ln, fy, mi, amt);
   }
   // Expenses are sometimes booked on the party side; the P&L tab counts those too.
   for (const pn in parties) {
@@ -98,6 +113,7 @@ function addVoucher(S, v) {
     const amt = parties[pn];
     own[line][mi] += amt;
     if (!S.ib[pn]) all[line][mi] += amt;
+    addDetail(S, branch, line, pn, fy, mi, amt);
   }
 
   if (!E.CASH_VCH[v.type]) return S;
@@ -113,8 +129,8 @@ function addVoucher(S, v) {
     else if (isP) outAmt = -raw;
     else if (isC) { const cv = -raw; if (cv > 0) inAmt = cv; else outAmt = Math.abs(cv); }
     else continue;
-    if (inAmt) { own.cashIn[mi] += inAmt; if (!S.ib[pn]) all.cashIn[mi] += inAmt; }
-    if (outAmt) { own.cashOut[mi] += outAmt; if (!S.ib[pn]) all.cashOut[mi] += outAmt; }
+    if (inAmt) { own.cashIn[mi] += inAmt; if (!S.ib[pn]) all.cashIn[mi] += inAmt; addDetail(S, branch, 'cashIn', pn, fy, mi, inAmt); }
+    if (outAmt) { own.cashOut[mi] += outAmt; if (!S.ib[pn]) all.cashOut[mi] += outAmt; addDetail(S, branch, 'cashOut', pn, fy, mi, outAmt); }
   }
   return S;
 }
@@ -156,10 +172,125 @@ function finalize(S) {
   return out;
 }
 
+// ---- the expandable trees ---------------------------------------------------
+// One tree per branch per line, covering every year at once. The months of all the
+// years lie end to end in a single array -- Apr of the first year at 0, Mar of the
+// last at 12*n-1 -- which is exactly the layout the portal's buildTree already
+// handles (it takes monthCount), and exactly what the year columns need: a year's
+// total is the sum of its twelve slots, and opening a year reads those twelve.
+//
+// Sent sparse. A party that traded in one year of eleven would otherwise carry 132
+// zeroes, and there are thousands of parties; { slot: amount } cuts the payload by
+// an order of magnitude. expandYoyTree() in the portal puts the arrays back.
+const TREE_LINES = ['revenue', 'purchase', 'directExp', 'indirectExp', 'cashIn', 'cashOut'];
+
+function sparsify(node) {
+  const m = {};
+  for (let i = 0; i < node.monthly.length; i++) if (node.monthly[i]) m[i] = node.monthly[i];
+  const out = { n: node.name, t: node.type === 'ledger' ? 'l' : 'g', m };
+  if (node.children && node.children.length) out.c = node.children.map(sparsify);
+  if (node.ledgers && node.ledgers.length) out.l = node.ledgers.map(sparsify);
+  return out;
+}
+
+// Lay one branch's sparse-by-year detail out along the whole timeline.
+function flatten(byLedger, fys, fyIndex) {
+  const width = fys.length * 12;
+  const out = {};
+  for (const name of Object.keys(byLedger)) {
+    const years = byLedger[name];
+    const arr = new Array(width).fill(0);
+    let any = false;
+    for (const fy of Object.keys(years)) {
+      const base = fyIndex[fy];
+      if (base === undefined) continue;
+      const src = years[fy];
+      for (let i = 0; i < 12; i++) if (src[i]) { arr[base * 12 + i] += src[i]; any = true; }
+    }
+    if (any) out[name] = arr;
+  }
+  return out;
+}
+
+// Consolidated is the two branches added together with their claims on each other
+// dropped -- the same rule the totals above use, applied to the ledgers themselves.
+function mergeBranches(a, b, ib) {
+  const out = {};
+  for (const src of [a, b]) {
+    for (const name of Object.keys(src)) {
+      if (ib[name]) continue;
+      const arr = out[name] || (out[name] = new Array(src[name].length).fill(0));
+      for (let i = 0; i < arr.length; i++) arr[i] += src[name][i];
+    }
+  }
+  return out;
+}
+
+// What gets STORED is this detail, not the finished trees. A rebuild of one year has
+// to leave the other ten alone, and years can be spliced in and out of
+// ledger -> { fy: [12] } the same way the totals are; a nested tree cannot. The tree
+// itself is cheap to build (a few thousand ledgers, well under a second), so it is
+// built when a line is opened rather than stored eleven ways.
+function detailOf(S) {
+  const out = {};
+  const r2 = (n) => Math.round(n * 100) / 100;
+  for (const br of ['kol', 'ahm']) {
+    for (const line of TREE_LINES) {
+      const src = S.detail[br][line];
+      if (!src) continue;
+      const led = {};
+      for (const name of Object.keys(src)) {
+        const years = {};
+        for (const fy of Object.keys(src[name])) {
+          const a = src[name][fy].map(r2);
+          if (a.some((v) => Math.abs(v) > 0.005)) years[fy] = a;
+        }
+        if (Object.keys(years).length) led[name] = years;
+      }
+      out[br + '|' + line] = led;
+    }
+  }
+  return out;
+}
+
+// Replace only the years that were rescanned, dropping a ledger that no longer holds
+// any. Mirrors what the totals do above, one level deeper.
+function spliceDetail(prev, fresh, fys) {
+  const touched = new Set(fys || []);
+  const out = {};
+  for (const name of Object.keys(prev || {})) {
+    const years = {};
+    for (const fy of Object.keys(prev[name])) if (!touched.has(fy)) years[fy] = prev[name][fy];
+    if (Object.keys(years).length) out[name] = years;
+  }
+  for (const name of Object.keys(fresh || {})) {
+    const years = out[name] || (out[name] = {});
+    for (const fy of Object.keys(fresh[name])) years[fy] = fresh[name][fy];
+  }
+  for (const name of Object.keys(out)) if (!Object.keys(out[name]).length) delete out[name];
+  return out;
+}
+
+// detail (one branch's ledger -> { fy: [12] }, or two to be consolidated) -> the tree
+// the panel draws, sparse.
+function treeFrom(detailPerBranch, xd, fys) {
+  const fyIndex = {};
+  fys.forEach((fy, i) => { fyIndex[fy] = i; });
+  const width = fys.length * 12;
+  const lu = E.buildLookups(xd);
+  const flats = detailPerBranch.map((d) => flatten(d || {}, fys, fyIndex));
+  const data = flats.length > 1 ? mergeBranches(flats[0], flats[1], E.findIBLedgers(xd)) : (flats[0] || {});
+  return E.buildTree(data, xd, lu, width).map(sparsify);
+}
+
 function summarise(vouchers, xd) {
   const S = newSummary(xd);
   for (const v of vouchers || []) addVoucher(S, v);
   return finalize(S);
 }
 
-module.exports = { newSummary, addVoucher, finalize, summarise, fyOf, fyLabel, monthOf, LINES };
+module.exports = {
+  newSummary, addVoucher, finalize, summarise,
+  detailOf, spliceDetail, treeFrom,
+  fyOf, fyLabel, monthOf, LINES, TREE_LINES,
+};

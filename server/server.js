@@ -524,10 +524,30 @@ async function runYoySummary(fys) {
     for (const b of Object.keys(branches)) for (const f of Object.keys(branches[b])) s.add(f);
     allFys = [...s].sort();
   }
+  const updatedAt = new Date();
   await db.collection('yoy_summary').updateOne({ _id: 'summary' }, { $set: {
-    fys: allFys, branches, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt: new Date(),
+    fys: allFys, branches, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt,
   } }, { upsert: true });
+
+  // The per-ledger detail behind each line, one document per branch+line so no single
+  // one grows unbounded (cash flows are keyed by party, and there are thousands).
+  const fresh2 = yoy.detailOf(S);
+  for (const key of Object.keys(fresh2)) {
+    let ledgers = fresh2[key];
+    if (fys && fys.length) {
+      const prevDoc = await db.collection('yoy_detail').findOne({ _id: key });
+      ledgers = yoy.spliceDetail(prevDoc && prevDoc.ledgers, ledgers, fys);
+    }
+    await db.collection('yoy_detail').updateOne({ _id: key },
+      { $set: { ledgers, updatedAt } }, { upsert: true });
+  }
+  treeCache.clear();
 }
+
+// Building a tree walks a few thousand ledgers -- fast, but not per request, and the
+// same line gets opened by every viewer. Keyed by the summary's build time, so a
+// rebuild invalidates it without anyone having to remember to.
+const treeCache = new Map();
 
 // Coalescing worker: a rebuild asked for while one is running is remembered and run
 // straight after, so a backfill pushing several years never starts several scans.
@@ -572,6 +592,92 @@ app.get('/api/yoy', async (_req, res) => {
     res.json(Object.assign({ fys: [], branches: {}, updatedAt: null }, doc || {}, {
       running, progress: running ? yoyState.progress : 0, error: yoyState.error || null,
     }));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/yoy/tree?branch=all|kol|ahm&line=revenue|purchase|directExp|indirectExp|cashIn|cashOut
+// The accounts under one line, as the nested group tree the P&L tab draws, covering
+// every year at once. Fetched when a line is opened, not with the landing page: the
+// cash lines alone carry thousands of parties, and most visits never open them.
+app.get('/api/yoy/tree', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const line = String(req.query.line || '');
+    if (!yoy.TREE_LINES.includes(line)) {
+      return res.status(400).json({ ok: false, error: `unknown line "${line}"; expected one of ${yoy.TREE_LINES.join(', ')}` });
+    }
+    const db = await getDb();
+    const summary = await db.collection('yoy_summary').findOne({ _id: 'summary' }, { projection: { fys: 1, updatedAt: 1 } });
+    const fys = (summary && summary.fys) || [];
+    if (!fys.length) return res.json({ fys: [], tree: [], updatedAt: null });
+    const stamp = summary.updatedAt ? new Date(summary.updatedAt).getTime() : 0;
+    const ck = branch + '|' + line + '|' + stamp;
+    if (treeCache.has(ck)) return res.json(treeCache.get(ck));
+
+    const xd = { ledgers: {}, groups: {} };
+    for (const b of ['kol', 'ahm']) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+      if (!m) continue;
+      Object.assign(xd.ledgers, m.ledgers || {});
+      Object.assign(xd.groups, m.groups || {});
+    }
+    const want = branch === 'all' ? ['kol', 'ahm'] : [branch];
+    const parts = [];
+    for (const b of want) {
+      const doc = await db.collection('yoy_detail').findOne({ _id: b + '|' + line });
+      parts.push((doc && doc.ledgers) || {});
+    }
+    const out = { fys, line, branch, tree: yoy.treeFrom(parts, xd, fys), updatedAt: summary.updatedAt || null };
+    treeCache.clear();               // one line at a time; the trees are large
+    treeCache.set(ck, out);
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/yoy/vouchers?branch=&ledger=&from=&to=[&limit=]
+// The vouchers behind one account for one period -- what the P&L tab's drill-down
+// shows, except the vouchers are not in the browser here, so Mongo finds them.
+//
+// A ledger name is a KEY inside `ledgers`/`party_ledgers`, and Tally names carry dots
+// ("A.B. Traders"), which a dotted query path would read as nesting. So the match is
+// done on the key list instead, narrowed first by branch and date so only one year of
+// one branch is ever examined.
+app.get('/api/yoy/vouchers', async (req, res) => {
+  try {
+    const ledger = String(req.query.ledger || '');
+    if (!ledger) return res.status(400).json({ ok: false, error: 'ledger is required' });
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : null;
+    const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : null;
+    if (!from || !to) return res.status(400).json({ ok: false, error: 'from and to are required as YYYYMMDD' });
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 2000);
+
+    const match = { date: { $gte: from, $lte: to } };
+    if (branch !== 'all') match.branch = branch;
+    const db = await getDb();
+    const rows = await db.collection('vouchers').aggregate([
+      { $match: match },
+      { $addFields: { _k: { $concatArrays: [
+        { $map: { input: { $objectToArray: { $ifNull: ['$ledgers', {}] } }, in: '$$this.k' } },
+        { $map: { input: { $objectToArray: { $ifNull: ['$party_ledgers', {}] } }, in: '$$this.k' } },
+      ] } } },
+      { $match: { _k: ledger } },
+      { $sort: { date: 1 } },
+      { $limit: limit + 1 },
+      { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, narration: 1, guid: 1, ledgers: 1, party_ledgers: 1 } },
+    ], { allowDiskUse: true }).toArray();
+
+    const truncated = rows.length > limit;
+    if (truncated) rows.length = limit;
+    // The amount this account carries on each voucher -- what the drill-down column
+    // shows, so the caller does not have to know which side it was booked on.
+    for (const r of rows) {
+      const a = (r.ledgers && r.ledgers[ledger]) || 0;
+      const b = (r.party_ledgers && r.party_ledgers[ledger]) || 0;
+      r.amount = Math.round((a + b) * 100) / 100;
+      delete r.ledgers; delete r.party_ledgers;
+    }
+    res.json({ ledger, branch, from, to, count: rows.length, truncated, vouchers: rows });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
