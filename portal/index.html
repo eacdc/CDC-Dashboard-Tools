@@ -8,9 +8,33 @@
 <meta http-equiv="Expires" content="0">
 <title>CDC Finance Portal v1.1 (21-Jul-2026)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="../vendor/xlsx.full.min.js"></script>
+<script>window.XLSX||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');</script>
+<script src="../vendor/react.production.min.js"></script>
+<script>window.React||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"><\/script>');</script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script>window.ReactDOM||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"><\/script>');</script>
+<script>
+// A missing library used to mean a blank white page and one console line. Say it on
+// the page instead, naming what did not load, so the problem is legible without
+// opening devtools.
+window.addEventListener('DOMContentLoaded',function(){
+  var missing=[];
+  if(!window.React||!window.ReactDOM)missing.push('React');
+  if(!window.XLSX)missing.push('SheetJS (Excel)');
+  if(!missing.length)return;
+  document.body.innerHTML='<div style="max-width:640px;margin:80px auto;padding:24px;'+
+    'border:1px solid #fecaca;background:#fef2f2;border-radius:12px;'+
+    'font:14px/1.6 system-ui,sans-serif;color:#7f1d1d">'+
+    '<b style="font-size:16px">Could not load: '+missing.join(', ')+'</b>'+
+    '<p>The page needs these scripts before it can draw anything, so it has stopped '+
+    'here rather than showing an empty screen.</p>'+
+    '<p>They are served from <code>/vendor/</code> on this same server. If this page was '+
+    'opened straight from a file on disk, the <code>vendor</code> folder has to sit '+
+    'beside it; otherwise the network is blocking the fallback CDN '+
+    '(<code>cdnjs.cloudflare.com</code>).</p></div>';
+});
+</script>
 <style>
 
 :root{
