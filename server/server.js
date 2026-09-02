@@ -206,8 +206,26 @@ app.get('/api/voucher', async (req, res) => {
 });
 
 // ---- meta: coverage ---------------------------------------------------------
-app.get('/api/meta', async (_req, res) => {
+// GET /api/meta                                   -> whole-collection counts per branch
+// GET /api/meta?from=20250401[&to=20260331]       -> adds a `window` block per branch
+// GET /api/meta?from=...&byMonth=1                -> adds months: { '202504': n, ... }
+// GET /api/meta?from=...&byDay=1                  -> adds days:   { '20250401': n, ... }
+//
+// The window is what tells you whether a pull actually landed: a month or a day
+// that reads 0 (or far below its neighbours) is a gap to re-pull, not a quiet month.
+const DATE8 = /^\d{8}$/;
+app.get('/api/meta', async (req, res) => {
   try {
+    const q = req.query || {};
+    const from = DATE8.test(String(q.from || '')) ? String(q.from) : null;
+    const to = DATE8.test(String(q.to || '')) ? String(q.to) : null;
+    const byMonth = q.byMonth === '1' || q.byMonth === 'true';
+    const byDay = q.byDay === '1' || q.byDay === 'true';
+    const range = {};
+    if (from) range.$gte = from;
+    if (to) range.$lte = to;
+    const hasRange = from || to;
+
     const db = await getDb();
     const meta = {};
     for (const branch of ['kol', 'ahm']) {
@@ -215,12 +233,37 @@ app.get('/api/meta', async (_req, res) => {
       const min = await db.collection('vouchers').find({ branch }).sort({ date: 1 }).limit(1).toArray();
       const max = await db.collection('vouchers').find({ branch }).sort({ date: -1 }).limit(1).toArray();
       const master = await db.collection('masters').findOne({ branch }, { projection: { updatedAt: 1 } });
-      meta[branch] = {
+      const row = {
         vouchers: count,
         firstDate: min[0] ? min[0].date : null,
         lastDate: max[0] ? max[0].date : null,
         masterUpdatedAt: master ? master.updatedAt : null,
       };
+      if (hasRange) {
+        const sel = { branch, date: range };
+        const wMin = await db.collection('vouchers').find(sel).sort({ date: 1 }).limit(1).toArray();
+        const wMax = await db.collection('vouchers').find(sel).sort({ date: -1 }).limit(1).toArray();
+        row.window = {
+          from: from || null,
+          to: to || null,
+          vouchers: await db.collection('vouchers').countDocuments(sel),
+          firstDate: wMin[0] ? wMin[0].date : null,
+          lastDate: wMax[0] ? wMax[0].date : null,
+        };
+      }
+      if (byMonth || byDay) {
+        const sel = hasRange ? { branch, date: range } : { branch };
+        const key = byDay ? '$date' : { $substrBytes: ['$date', 0, 6] };
+        const rows = await db.collection('vouchers').aggregate([
+          { $match: sel },
+          { $group: { _id: key, n: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]).toArray();
+        const bag = {};
+        for (const r of rows) bag[r._id] = r.n;
+        row[byDay ? 'days' : 'months'] = bag;
+      }
+      meta[branch] = row;
     }
     res.json(meta);
   } catch (e) {

@@ -194,6 +194,25 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Reset `
 Then confirm at `https://YOUR-API-URL/api/meta` — each branch should show a voucher
 count and date range that match what Tally reports for that company alone.
 
+## Checking coverage for one period
+
+`/api/meta` counts the whole collection by default, which mixes the back-filled
+years in with the current one. Add a range to ask about a single period:
+
+| URL | Answers |
+|---|---|
+| `/api/meta` | totals and date range per branch, all years |
+| `/api/meta?from=20250401` | plus a `window` block: count and first/last date from Apr 2025 on |
+| `/api/meta?from=20250401&byMonth=1` | plus `months: { "202504": 1234, ... }` |
+| `/api/meta?from=20250501&to=20250531&byDay=1` | plus `days: { "20250509": 41, ... }` |
+
+`to` is optional and inclusive; both dates are `YYYYMMDD`.
+
+Read the breakdown for **absences**. A month missing from `months`, or a working
+day missing from `days`, holds nothing at all — that is a gap to re-pull, not a
+quiet month. A month whose count is a fraction of its neighbours is the same
+signal in softer form.
+
 - `-Reset` clears **only `-FromDate`..`-ToDate`** for that branch, so back-filled
   older years survive. `-ResetAll` clears every date instead — use it when you don't
   know how far the bad data spread.
