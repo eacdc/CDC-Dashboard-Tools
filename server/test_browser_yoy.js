@@ -9,7 +9,8 @@ function matches(doc, filter) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
       if ('$in' in cond && !cond.$in.includes(val)) return false;
-    } else if (val !== cond) return false;
+    } else if (Array.isArray(val)) { if (!val.includes(cond)) return false; }
+    else if (val !== cond) return false;
   }
   return true;
 }
@@ -31,6 +32,19 @@ class Col {
     return { sort() { return this; }, limit() { return this; }, batchSize() { return this; },
       async toArray() { return arr; },
       async *[Symbol.asyncIterator]() { for (const d of arr) yield d; } };
+  }
+  // The voucher drill-down matches a ledger by KEY LIST rather than a dotted path
+  // (Tally names contain dots); enough of that pipeline to answer it here.
+  aggregate(stages) {
+    let rows = this.docs.slice();
+    for (const st of stages) {
+      if (st.$match) rows = rows.filter((d) => matches(d, st.$match));
+      else if (st.$addFields) rows = rows.map((d) => ({ ...d, _k: Object.keys(d.ledgers || {}).concat(Object.keys(d.party_ledgers || {})) }));
+      else if (st.$sort) { const k = Object.keys(st.$sort)[0]; rows.sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * st.$sort[k]); }
+      else if (st.$limit) rows = rows.slice(0, st.$limit);
+      else if (st.$project) rows = rows.map((d) => { const o = {}; for (const k of Object.keys(st.$project)) if (st.$project[k] === 1) o[k] = d[k]; return o; });
+    }
+    return { async toArray() { return rows; } };
   }
   async countDocuments(filter = {}) { return this.docs.filter((d) => matches(d, filter)).length; }
   async findOne(filter = {}) { return this.docs.find((x) => matches(x, filter)) || null; }
@@ -188,6 +202,88 @@ const V = (branch, date, sales, salary) => ({
   await page.waitForFunction(() => !/10\.00 L/.test(document.body.innerText), null, { timeout: 5000 });
   txt = await page.evaluate(() => document.body.innerText);
   assert(/4\.00 L/.test(txt), 'the AHM branch shows only its own revenue');
+
+  // ---- opening a line down to its accounts, and then to the vouchers ----------
+  await page.click('span:text-is("KOL")');
+  await page.waitForFunction(() => /10\.00 L/.test(document.body.innerText), null, { timeout: 5000 });
+  // Rows are opened by clicking their name, one level at a time, exactly as the P&L
+  // tab's tree behaves -- a line first, then the group inside it.
+  const openRow = async (re) => page.evaluate((src) => {
+    const rx = new RegExp(src);
+    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && rx.test(x.cells[0].innerText.trim()));
+    if (!r) throw new Error('no row matching ' + src);
+    r.cells[0].click();
+  }, re);
+
+  await openRow('^.?\\s*Revenue$');
+  await page.waitForFunction(() => /Sales Accounts/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'opening Revenue shows the Tally group under it');
+  assert(!/Sales A\/c/.test(await page.evaluate(() => document.body.innerText)),
+    'and stops there -- a group opens on its own click, as in the P&L tab');
+
+  await openRow('Sales Accounts');
+  await page.waitForFunction(() => /Sales A\/c/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'opening the group shows the ledger itself');
+
+  // The account's figures must BE the line's figures, not a second calculation.
+  const cmp = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('tr')];
+    const pick = (re) => rows.find((r) => r.cells[0] && re.test(r.cells[0].innerText.trim()));
+    const num = (r) => r.cells[1].innerText.split('\n')[0];
+    return { line: num(pick(/^.?\s*Revenue$/)), group: num(pick(/Sales Accounts/)), ledger: num(pick(/Sales A\/c/)) };
+  });
+  assert(cmp.line === cmp.ledger && cmp.group === cmp.ledger,
+    'the only revenue ledger carries the whole line, through its group: '
+    + [cmp.line, cmp.group, cmp.ledger].join(' / '));
+
+  // The part-year rule belongs to the YEAR, so it has to reach the accounts too.
+  // Without it the newest column compared this ledger's two booked months against a
+  // full twelve and painted a growing account red.
+  const partRow = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('tr')];
+    const pick = (re) => rows.find((r) => r.cells[0] && re.test(r.cells[0].innerText.trim()));
+    const last = (r) => { const c = r.cells[r.cells.length - 1];
+      return { text: c.innerText.replace(/\n/g, ' '), bg: getComputedStyle(c).backgroundColor,
+        title: c.querySelector('div[title]') ? c.querySelector('div[title]').title : '' }; };
+    return { line: last(pick(/^.?\s*Revenue$/)), ledger: last(pick(/Sales A\/c/)) };
+  });
+  assert(/vs same months/.test(partRow.ledger.title),
+    'a ledger in the part year is compared like for like, as its line is: ' + partRow.ledger.title);
+  assert(partRow.ledger.text === partRow.line.text,
+    'so it reads the same as the line above it: ' + partRow.ledger.text + ' vs ' + partRow.line.text);
+  assert(/rgba?\(22,\s*163,\s*74/.test(partRow.ledger.bg),
+    'and is green like the line, not red from a five-months-against-twelve comparison: ' + partRow.ledger.bg);
+
+  // Clicking a figure on the ledger opens the vouchers behind it.
+  await page.evaluate(() => {
+    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /Sales A\/c/.test(x.cells[0].innerText));
+    r.cells[1].click();
+  });
+  await page.waitForFunction(() => /vouchers/.test(document.body.innerText), null, { timeout: 8000 });
+  txt = await page.evaluate(() => document.body.innerText);
+  assert(/Sales A\/c/.test(txt) && /2024-25/.test(txt), 'the voucher list names the account and the year');
+  assert(/10\.00 L/.test(txt), 'and its total is the figure that was clicked');
+  const vrows = await page.evaluate(() => {
+    const t = [...document.querySelectorAll('table')].pop();
+    return [...t.querySelectorAll('tbody tr')].map((r) => r.innerText.replace(/\s+/g, ' ').trim());
+  });
+  assert(vrows.length === 1 && /May-2024/.test(vrows[0]),
+    'exactly the one voucher of that year is listed, with its date: ' + JSON.stringify(vrows));
+  await page.screenshot({ path: '/tmp/yoy_drill.png' });
+  await page.click('text=Close');
+  await page.waitForFunction(() => !/Looking these up/.test(document.body.innerText), null, { timeout: 5000 });
+
+  // A group is not clickable through to vouchers -- it is many accounts, not one.
+  const groupClickable = await page.evaluate(() => {
+    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /Sales Accounts/.test(x.cells[0].innerText));
+    return getComputedStyle(r.cells[1]).cursor;
+  });
+  assert(groupClickable === 'default', 'a group row offers no voucher list: ' + groupClickable);
+
+  // Switching branch must not leave one branch's accounts under another's totals.
+  await page.click('span:text-is("AHM")');
+  await page.waitForFunction(() => !/Sales A\/c/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'changing branch re-asks for that branch’s accounts instead of reusing the last');
 
   assert(errors.length === 0, 'no console/page errors: ' + errors.join(' | '));
   await browser.close();

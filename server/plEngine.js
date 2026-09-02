@@ -32,7 +32,12 @@ const WANTED = [
   { name: 'getChain', re: /^function getChain\(name,xd,lu\)\{[\s\S]*?\n\}$/m },
   { name: 'classify', re: /^function classify\(name,xd,lu,overrides\)\{.*?\}$/m },
   { name: 'monthKey', re: /^function monthKey\(ds,startFY\)\{.*?\}$/m },
+  // buildTree turns ledger -> monthly[] into the nested group tree the P&L tab draws.
+  // The year-on-year drill-down shows that same tree, so it is lifted rather than
+  // rebuilt: one shape, one ordering, one set of group roll-ups.
+  { name: 'buildTree', re: /^function buildTree\(ledgerData,xd,lu,monthCount\)\{[\s\S]*?\n\}$/m },
 ];
+const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree';
 
 function loadEngine() {
   const html = fs.readFileSync(PORTAL, 'utf8');
@@ -49,9 +54,8 @@ function loadEngine() {
   }
   const sandbox = {};
   vm.createContext(sandbox);
-  new vm.Script(parts.join('\n') + '\n;({TPG,PL_CATS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey});',
-    { filename: 'portal-engine' }).runInContext(sandbox);
-  const api = vm.runInContext('({TPG:TPG,PL_CATS:PL_CATS,CASH_VCH:CASH_VCH,findIBLedgers:findIBLedgers,norm:norm,stem:stem,buildLookups:buildLookups,getChain:getChain,classify:classify,monthKey:monthKey})', sandbox);
+  new vm.Script(parts.join('\n'), { filename: 'portal-engine' }).runInContext(sandbox);
+  const api = vm.runInContext('({' + EXPORTS.split(',').map((k) => k + ':' + k).join(',') + '})', sandbox);
   for (const k of Object.keys(api)) if (!api[k]) throw new Error(`plEngine: ${k} came back empty`);
   return api;
 }

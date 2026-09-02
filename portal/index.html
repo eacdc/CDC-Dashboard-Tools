@@ -2649,6 +2649,60 @@ function flattenAliases(map){
   return out;
 }
 
+// The vouchers behind one account for one year (or one month of it).
+//
+// The P&L tab's drill-down works off the vouchers already in the browser. Here there
+// are none -- the landing page never loaded a decade of them -- so the server is
+// asked for just this account's, just this period's. A long list is capped rather
+// than streamed: the point is to see WHAT is in a figure, and two thousand rows
+// answers that as well as fifty thousand would.
+function YoYDrill(pr){
+  var d=pr.drill;
+  var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+  var when=(d.mi===null||d.mi===undefined)?d.fy:(MN[d.mi]+' '+d.fy);
+  function fmt(n){if(n===0||n==null)return'—';var a=Math.abs(n),s=n<0?'-':'';
+    if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';
+    if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
+  function fmtDate(ds){if(!ds||ds.length<8)return ds||'';var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return ds.slice(6,8)+'-'+M[parseInt(ds.slice(4,6),10)-1]+'-'+ds.slice(0,4);}
+  var rows=d.rows||[];
+  var total=rows.reduce(function(t,v){return t+(v.amount||0);},0);
+  var th={padding:'6px 10px',textAlign:'left',fontSize:'9.5px',fontFamily:'monospace',color:'#64748b',textTransform:'uppercase',borderBottom:'1px solid #e2e8f0',position:'sticky',top:0,background:'#f8fafc'};
+  var td={padding:'5px 10px',fontSize:'11px',borderBottom:'1px solid #f8fafc',whiteSpace:'nowrap'};
+  return e('div',{onClick:pr.onClose,style:{position:'fixed',inset:0,zIndex:500,background:'rgba(15,23,42,0.45)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}},
+    e('div',{onClick:function(ev){ev.stopPropagation();},style:{background:'#fff',borderRadius:'12px',width:'min(980px,100%)',maxHeight:'86vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 20px 50px rgba(0,0,0,0.3)'}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:'10px',padding:'11px 14px',borderBottom:'1px solid #e2e8f0',background:'#f0fdfa'}},
+        e('div',null,
+          e('div',{style:{fontSize:'12.5px',fontWeight:700,color:'#0f172a'}},d.ledger),
+          e('div',{style:{fontSize:'10px',color:'#64748b',fontFamily:'monospace'}},
+            when+' · '+(pr.branch==='all'?'Consolidated':pr.branch.toUpperCase()))),
+        e('span',{style:{marginLeft:'auto'}}),
+        !d.loading&&!d.err&&e('div',{style:{textAlign:'right',fontFamily:'monospace'}},
+          e('div',{style:{fontSize:'9px',color:'#64748b'}},rows.length+(d.truncated?'+ vouchers':' vouchers')),
+          e('div',{style:{fontSize:'12px',fontWeight:700,color:'#0f172a'}},fmt(total))),
+        e('button',{onClick:pr.onClose,style:{marginLeft:'10px',background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'4px 10px',borderRadius:'6px',cursor:'pointer',fontSize:'11px'}},'Close')),
+      d.err?e('div',{style:{padding:'14px',fontSize:'11.5px',color:'#dc2626',fontFamily:'monospace'}},d.err)
+      :d.loading?e('div',{style:{padding:'18px',fontSize:'11.5px',color:'#64748b'}},'Looking these up…')
+      :rows.length===0?e('div',{style:{padding:'18px',fontSize:'11.5px',color:'#64748b'}},'No vouchers found for this account in '+when+'.')
+      :e('div',{style:{overflow:'auto',flex:1}},
+        e('table',{style:{borderCollapse:'collapse',width:'100%'}},
+          e('thead',null,e('tr',null,
+            e('th',{style:th},'Date'),e('th',{style:th},'Type'),e('th',{style:th},'No'),
+            e('th',{style:th},'Party'),e('th',{style:th},'Branch'),
+            e('th',{style:Object.assign({},th,{textAlign:'right'})},'Amount'))),
+          e('tbody',null,rows.map(function(v,i){
+            return e('tr',{key:(v.guid||'')+i},
+              e('td',{style:td},fmtDate(v.date)),
+              e('td',{style:td},v.type||''),
+              e('td',{style:Object.assign({},td,{fontFamily:'monospace',color:'#475569'})},v.no||''),
+              e('td',{style:Object.assign({},td,{whiteSpace:'normal',maxWidth:'320px'})},v.party||v.narration||''),
+              e('td',{style:Object.assign({},td,{fontFamily:'monospace',fontSize:'10px',color:'#64748b'})},(v.branch||'').toUpperCase()),
+              e('td',{style:Object.assign({},td,{textAlign:'right',fontFamily:'monospace',fontWeight:600,color:(v.amount||0)<0?'#b91c1c':'#0f172a'})},fmt(v.amount)));
+          })))),
+      d.truncated&&e('div',{style:{padding:'7px 12px',fontSize:'10px',color:'#b45309',borderTop:'1px solid #fde68a',background:'#fffbeb'}},
+        'Only the first '+rows.length+' are listed — narrow it by opening a single month instead of the whole year.')));
+}
+
 // Every financial year side by side, on the landing page, before anything is loaded.
 //
 // The figures are the P&L / Cashflow lines the dashboards show, but folded on the
@@ -2664,6 +2718,14 @@ function YoYPanel(pr){
   var s5=useState({}),openFy=s5[0],setOpenFy=s5[1];    // which years show their months
   var s6=useState(false),busy=s6[0],setBusy=s6[1];
   var s7=useState(false),max=s7[0],setMax=s7[1];       // fill the window
+  // The accounts under a line. Not part of the summary: the cash lines alone carry
+  // thousands of parties across eleven years, and most visits never open them. So a
+  // line's tree is asked for the first time it is opened, and kept per branch.
+  var s8=useState({}),trees=s8[0],setTrees=s8[1];      // 'branch|line' -> {fys,tree}
+  var s9=useState({}),tbusy=s9[0],setTbusy=s9[1];      // 'branch|line' -> loading
+  var sA=useState({}),openLine=sA[0],setOpenLine=sA[1];// which lines are open
+  var sB=useState({}),openNode=sB[0],setOpenNode=sB[1];// which nodes inside them
+  var sC=useState(null),drill=sC[0],setDrill=sC[1];    // the voucher list, when open
   var poll=useRef(null);
   // Escape leaves the maximised view. Bound only while maximised, so it never steals
   // the key from anything else on the page.
@@ -2684,15 +2746,56 @@ function YoYPanel(pr){
   // waited for -- the same reason the party-merge scan works that way.
   function rebuild(){
     setBusy(true);setErr('');
+    // The open trees describe the summary that is being replaced; drop them so the
+    // next expand asks again rather than showing last build's accounts.
+    setTrees({});setDrill(null);
     fetch((pr.apiBase||'')+'/api/yoy/scan',{method:'POST'}).then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
       .then(function(){stopPoll();poll.current=setInterval(read,3000);read();})
       .catch(function(ex){setErr(ex.message||String(ex));setBusy(false);});
   }
   var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+  // ---- opening a line down to its accounts ----------------------------------
+  function treeKey(k){return br+'|'+k;}
+  function toggleLine(k){
+    var ck=treeKey(k);
+    setOpenLine(function(m){var x=Object.assign({},m);if(x[k])delete x[k];else x[k]=1;return x;});
+    if(trees[ck]||tbusy[ck])return;
+    setTbusy(function(m){var x=Object.assign({},m);x[ck]=1;return x;});
+    fetch((pr.apiBase||'')+'/api/yoy/tree?branch='+encodeURIComponent(br)+'&line='+encodeURIComponent(k))
+      .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){if(d&&d.error)throw new Error(d.error);
+        setTrees(function(m){var x=Object.assign({},m);x[ck]={fys:(d&&d.fys)||[],tree:(d&&d.tree)||[]};return x;});})
+      .catch(function(ex){setErr('Could not open that line: '+(ex.message||ex));})
+      .then(function(){setTbusy(function(m){var x=Object.assign({},m);delete x[ck];return x;});});
+  }
+  function toggleNode(key){setOpenNode(function(m){var x=Object.assign({},m);if(x[key])delete x[key];else x[key]=1;return x;});}
+  // A financial year (or one month of it) as the two dates Mongo needs.
+  function periodOf(fy,mi){
+    var y0=parseInt(String(fy).slice(0,4),10);
+    if(mi===null||mi===undefined)return [y0+'0401',(y0+1)+'0331'];
+    var yr=mi<=8?y0:y0+1, mo=mi<=8?mi+4:mi-8;
+    var last=new Date(yr,mo,0).getDate();
+    var p=function(v){return (v<10?'0':'')+v;};
+    return [yr+p(mo)+'01',yr+p(mo)+p(last)];
+  }
+  function openDrill(name,fy,mi){
+    var rg=periodOf(fy,mi);
+    setDrill({ledger:name,fy:fy,mi:mi,loading:true,rows:null,err:''});
+    fetch((pr.apiBase||'')+'/api/yoy/vouchers?branch='+encodeURIComponent(br)
+      +'&ledger='+encodeURIComponent(name)+'&from='+rg[0]+'&to='+rg[1])
+      .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){if(d&&d.error)throw new Error(d.error);
+        setDrill({ledger:name,fy:fy,mi:mi,loading:false,rows:(d&&d.vouchers)||[],truncated:!!(d&&d.truncated),err:''});})
+      .catch(function(ex){setDrill({ledger:name,fy:fy,mi:mi,loading:false,rows:[],err:ex.message||String(ex)});});
+  }
+  // A node's months are sent sparse ({slot: amount}); the slots of all the years lie
+  // end to end, so year i owns slots i*12 .. i*12+11.
+  function slot(nd,fi,mi){var v=nd.m[fi*12+mi];return v||0;}
+  function yearOf(nd,fi){var t=0;for(var i=fi*12;i<fi*12+12;i++)if(nd.m[i])t+=nd.m[i];return Math.round(t*100)/100;}
   var ROWS=tab==='pl'
-    ? [{k:'revenue',l:'Revenue',up:'value'},{k:'purchase',l:'Purchases',up:'cost'},{k:'directExp',l:'Direct Expenses',up:'cost'},
-       {k:'gp',l:'Gross Profit',up:'value',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost'},{k:'np',l:'Net Profit',up:'value',strong:true}]
-    : [{k:'cashIn',l:'Inflows',up:'value'},{k:'cashOut',l:'Outflows',up:'cost'},{k:'cashNet',l:'Net Cashflow',up:'value',strong:true}];
+    ? [{k:'revenue',l:'Revenue',up:'value',tree:1},{k:'purchase',l:'Purchases',up:'cost',tree:1},{k:'directExp',l:'Direct Expenses',up:'cost',tree:1},
+       {k:'gp',l:'Gross Profit',up:'value',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost',tree:1},{k:'np',l:'Net Profit',up:'value',strong:true}]
+    : [{k:'cashIn',l:'Inflows',up:'value',tree:1},{k:'cashOut',l:'Outflows',up:'cost',tree:1},{k:'cashNet',l:'Net Cashflow',up:'value',strong:true}];
   function fmtM(n){if(n===0||n==null)return'—';var a=Math.abs(n),s=n<0?'-':'';
     if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';
     if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
@@ -2768,35 +2871,106 @@ function YoYPanel(pr){
             if(on)MN.forEach(function(m){head.push(e('th',{key:fy+m,style:{padding:'7px 6px',textAlign:'right',fontFamily:'monospace',fontSize:'9px',color:'#94a3b8',fontWeight:500,background:'#f0fdfa'}},m));});
             return head;
           }))),
-        e('tbody',null,ROWS.map(function(r,ri){
-          return e('tr',{key:r.k,style:{borderTop:'1px solid #f1f5f9',background:r.strong?'#f8fafc':'transparent'}},
-            e('td',{style:{padding:'6px 12px',whiteSpace:'nowrap',fontWeight:r.strong?700:500,color:'#0f172a',position:'sticky',left:0,background:r.strong?'#f8fafc':'#fff',zIndex:1}},r.l),
-            fys.map(function(fy,fi){
-              var row=bd[fy],prev=fi>0?bd[fys[fi-1]]:null;
-              var val=row?row.totals[r.k]:null;
+        e('tbody',null,(function(){
+          // Every row -- the six lines, and whatever accounts are opened under them --
+          // is drawn by one function, so an account's column reads exactly like the
+          // line's above it: same growth rule, same colour scale, same months.
+          // Only where the numbers come FROM differs: a line reads the summary the
+          // landing page already holds, an account reads the slots of its tree node.
+          function valueCells(kind,strong,getVal,getMonth,lastMonth,onCell){
+            var out=[];
+            fys.forEach(function(fy,fi){
+              var val=getVal(fi),prevVal=fi>0?getVal(fi-1):null;
               // A year still in progress is compared over the months it HAS, against
               // the same months last year. Five months against twelve would read as
               // a collapse; Apr-Aug against Apr-Aug is the real comparison.
-              var part=row&&fi===fys.length-1&&row.lastMonth>=0&&row.lastMonth<11;
+              var part=fi===fys.length-1&&lastMonth>=0&&lastMonth<11;
               var g=null,note='';
-              if(row&&prev){
+              if(fi>0&&prevVal!==null&&prevVal!==undefined&&val!==null&&val!==undefined){
                 if(part){
-                  var a=0,b=0;for(var mi=0;mi<=row.lastMonth;mi++){a+=row[r.k][mi];b+=prev[r.k][mi];}
-                  g=growth(a,b,r.up);note=' ('+MN[0]+'-'+MN[row.lastMonth]+' vs same months)';
-                } else { g=growth(val,prev.totals[r.k],r.up); }
+                  var a=0,b=0;for(var k=0;k<=lastMonth;k++){a+=getMonth(fi,k);b+=getMonth(fi-1,k);}
+                  g=growth(a,b,kind);note=' ('+MN[0]+'-'+MN[lastMonth]+' vs same months)';
+                } else { g=growth(val,prevVal,kind); }
               }
-              var tn=tint(g,r.up);
-              var cells=[e('td',{key:fy,style:Object.assign({},cell,{borderLeft:'2px solid #e2e8f0',fontWeight:r.strong?700:400,background:tn.bg!=='transparent'?tn.bg:(openFy[fy]?'#f0fdfa':'transparent')})},
-                e('div',null,row?fmtM(val):'—'),
-                g!==null&&e('div',{title:'vs '+fys[fi-1]+note,style:{fontSize:'9px',color:tn.fg,fontWeight:600}},(g>=0?'+':'')+g.toFixed(0)+'%'))];
+              var tn=tint(g,kind);
+              out.push(e('td',{key:fy,onClick:onCell?function(){onCell(fy,null);}:null,
+                title:onCell?('the vouchers behind this, in '+fy):null,
+                style:Object.assign({},cell,{borderLeft:'2px solid #e2e8f0',fontWeight:strong?700:400,cursor:onCell?'pointer':'default',
+                  background:tn.bg!=='transparent'?tn.bg:(openFy[fy]?'#f0fdfa':'transparent')})},
+                e('div',null,(val===null||val===undefined)?'—':fmtM(val)),
+                g!==null&&e('div',{title:'vs '+fys[fi-1]+note,style:{fontSize:'9px',color:tn.fg,fontWeight:600}},(g>=0?'+':'')+g.toFixed(0)+'%')));
               if(openFy[fy])MN.forEach(function(m,mi){
-                cells.push(e('td',{key:fy+m,style:Object.assign({},cell,{fontSize:'10px',color:'#475569',background:'#f8fffe',borderLeft:'1px solid #f1f5f9'})},row?fmtM(row[r.k][mi]):'—'));
+                out.push(e('td',{key:fy+m,onClick:onCell?function(){onCell(fy,mi);}:null,
+                  title:onCell?('the vouchers behind this, in '+m+' '+fy):null,
+                  style:Object.assign({},cell,{fontSize:'10px',color:'#475569',background:'#f8fffe',borderLeft:'1px solid #f1f5f9',cursor:onCell?'pointer':'default'})},
+                  fmtM(getMonth(fi,mi))));
               });
-              return cells;
-            }));
-        }))),
+            });
+            return out;
+          }
+          // The tree carries its own year list. Line its slots up with the columns on
+          // screen rather than assuming the two lists agree -- they will not, the day
+          // a year holds a P&L entry and no cash movement.
+          function slotIndex(tfys){return fys.map(function(fy){return tfys.indexOf(fy);});}
+          // lastMonth belongs to the YEAR, not to the row: if the newest column holds
+          // five months, that is as true of one ledger inside it as of the line's
+          // total. Passing -1 here compared two months against a full twelve and
+          // painted a growing account red.
+          function nodeRows(nodes,idx,depth,prefix,kind,lastMonth,out){
+            nodes.forEach(function(nd,i){
+              var key=prefix+'>'+nd.n+'#'+i;
+              var kids=(nd.c||[]).concat(nd.l||[]);
+              var isO=!!openNode[key];
+              var leaf=nd.t==='l';
+              out.push(e('tr',{key:key,style:{borderTop:'1px solid #f8fafc'}},
+                e('td',{onClick:kids.length?function(){toggleNode(key);}:null,
+                  title:kids.length?'open this group':null,
+                  style:{padding:'4px 12px 4px '+(14+depth*16)+'px',whiteSpace:'nowrap',fontSize:'11px',cursor:kids.length?'pointer':'default',
+                  color:leaf?'#334155':'#0f172a',fontWeight:leaf?400:600,position:'sticky',left:0,background:'#fff',zIndex:1}},
+                  e('span',{style:{marginRight:'5px',color:kids.length?'#0f766e':'#cbd5e1'}},kids.length?(isO?'▾':'▸'):'·'),
+                  nd.n),
+                valueCells(kind,false,
+                  function(fi){var s=idx[fi];return s<0?null:yearOf(nd,s);},
+                  function(fi,mi){var s=idx[fi];return s<0?0:slot(nd,s,mi);},
+                  lastMonth,
+                  leaf?function(fy,mi){openDrill(nd.n,fy,mi);}:null)));
+              if(isO&&kids.length)nodeRows(kids,idx,depth+1,key,kind,lastMonth,out);
+            });
+            return out;
+          }
+          var rows=[];
+          var lastRow=bd[fys[fys.length-1]];
+          ROWS.forEach(function(r){
+            var ck=treeKey(r.k),isO=!!openLine[r.k];
+            rows.push(e('tr',{key:r.k,style:{borderTop:'1px solid #f1f5f9',background:r.strong?'#f8fafc':'transparent'}},
+              e('td',{onClick:r.tree?function(){toggleLine(r.k);}:null,
+                title:r.tree?'open this line down to the accounts under it':null,
+                style:{padding:'6px 12px',whiteSpace:'nowrap',fontWeight:r.strong?700:500,color:'#0f172a',
+                  position:'sticky',left:0,background:r.strong?'#f8fafc':'#fff',zIndex:1,cursor:r.tree?'pointer':'default'}},
+                r.tree?e('span',{style:{color:'#0f766e',marginRight:'5px'}},isO?'▾':'▸'):null,
+                r.l,
+                (r.tree&&tbusy[ck])?e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#0f766e'}},'opening…'):null),
+              valueCells(r.up,r.strong,
+                function(fi){var row=bd[fys[fi]];return row?row.totals[r.k]:null;},
+                function(fi,mi){var row=bd[fys[fi]];return row?row[r.k][mi]:0;},
+                lastRow?lastRow.lastMonth:-1,null)));
+            if(!isO)return;
+            var t=trees[ck];
+            if(!t){
+              rows.push(e('tr',{key:r.k+'_l'},e('td',{colSpan:200,style:{padding:'6px 12px 6px 32px',fontSize:'10.5px',color:'#0f766e'}},
+                'Reading the accounts under '+r.l+'…')));
+            } else if(!t.tree.length){
+              rows.push(e('tr',{key:r.k+'_e'},e('td',{colSpan:200,style:{padding:'6px 12px 6px 32px',fontSize:'10.5px',color:'#94a3b8'}},
+                'Nothing under this line — press ↻ Rebuild to read the history once.')));
+            } else {
+              nodeRows(t.tree,slotIndex(t.fys),1,r.k,r.up,lastRow?lastRow.lastMonth:-1,rows);
+            }
+          });
+          return rows;
+        })())),
       e('div',{style:{padding:'7px 12px',fontSize:'9.5px',color:'#64748b',borderTop:'1px solid #f1f5f9'}},
-        'April–March financial years. Cost lines are compared by size (a bill a tenth bigger reads +10%); profit and net cash by signed change over last year, so a profit turning into a loss reads as the fall it is. A year still in progress is compared against the SAME months of the year before, and its column says so. Colour depth follows the size of the move, green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied.')));
+        'April–March financial years. Cost lines are compared by size (a bill a tenth bigger reads +10%); profit and net cash by signed change over last year, so a profit turning into a loss reads as the fall it is. A year still in progress is compared against the SAME months of the year before, and its column says so. Colour depth follows the size of the move, green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied. Click a line to open the accounts under it, and click any figure on an account to see the vouchers behind it.')),
+    drill&&e(YoYDrill,{drill:drill,branch:br,onClose:function(){setDrill(null);}}));
 }
 
 // Pairs the server thinks are one party under two names (server/aliasSuggest.js).
