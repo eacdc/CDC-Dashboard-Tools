@@ -68,13 +68,13 @@ Historical backfill (1 Apr -> today), one company at a time:
 powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
   -FromDate 20250401 -ToDate 20260716 -Branch ahm `
   -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26" `
-  -IngestUrl "https://cdc-dashboard-api.onrender.com" -IngestToken "YOUR_TOKEN"
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "YOUR_TOKEN"
 
 # Kolkata (adjust company name to the exact Tally name)
 powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
   -FromDate 20250401 -ToDate 20260716 -Branch kol `
   -Company "CDC PRINTERS 2025-26" `
-  -IngestUrl "https://cdc-dashboard-api.onrender.com" -IngestToken "YOUR_TOKEN"
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "YOUR_TOKEN"
 ```
 
 Daily incremental (schedule in Windows Task Scheduler, off-hours). Re-running a
@@ -85,7 +85,7 @@ $today = (Get-Date).ToString('yyyyMMdd')
 powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
   -FromDate $today -ToDate $today -Branch ahm `
   -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26" `
-  -IngestUrl "https://cdc-dashboard-api.onrender.com" -IngestToken "YOUR_TOKEN"
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "YOUR_TOKEN"
 ```
 
 ### If the Tally server has no outbound internet
