@@ -1,5 +1,22 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.12 (server) — September 2026 — /diag names the gap between the bills file and the range
+
+Used in anger on a customer whose two bills were open in Tally and absent here, and it
+answered in one search: the uploaded Bills Receivable file was uploaded in **August
+2026** but the newest bill *inside* it is **31 March 2025**, while the pages were being
+read from **1 April 2026**. The whole of FY 2025-26 falls between the two sources and
+appears in neither.
+
+So the section now leads with what a file **covers up to** rather than when it was
+uploaded — that is the date that matters — and says the remedy in as many words:
+export Bills Receivable again as of today, or widen the range back to where the file
+ends. The allocation list also went from 400 rows to 2000: a ten-year customer carries
+hundreds, and cutting it short hid the very receipt being looked for, making a settled
+bill read as still open.
+
+---
+
 ## v2.11 (server) — September 2026 — /diag now explains an outstanding bill too
 
 "Tally says these two bills are open and our site does not show them" has the same
