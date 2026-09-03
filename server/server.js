@@ -838,11 +838,14 @@ app.get('/api/yoy/diag', async (req, res) => {
       { $addFields: { _bl: { $map: { input: { $ifNull: ['$bills', []] }, in: '$$this.ledger' } } } },
       { $match: { _bl: { $in: [...all] } } },
       { $sort: { date: 1 } },
-      { $limit: 401 },
+      // A customer of ten years carries hundreds of allocations, and cutting the list
+      // short hides the very receipt being looked for -- it made a settled bill read
+      // as still open. High enough to cover the largest party here.
+      { $limit: 2001 },
       { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, bills: 1 } },
     ], { allowDiskUse: true }).toArray();
-    bills.truncated = bRows.length > 400;
-    if (bills.truncated) bRows.length = 400;
+    bills.truncated = bRows.length > 2000;
+    if (bills.truncated) bRows.length = 2000;
     for (const r of bRows) {
       for (const b of (r.bills || [])) {
         if (!all.has(b.ledger)) continue;

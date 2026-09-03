@@ -185,7 +185,7 @@
         : '<div class="muted" style="font-size:12px;margin-top:4px">this party has no bill in this file</div>';
       return '<div style="margin-bottom:12px"><b>'+esc(CSVNAME[k]||k)+'</b>'+tag
         +'<span class="tag">'+c.rows+' bills in file</span>'
-        +'<span class="tag'+(c.newestBill?'':' warn')+'">newest bill in it: '+esc(newest)+'</span>'
+        +'<span class="tag'+(c.newestBill?' warn':' warn')+'">covers up to '+esc(newest)+'</span>'
         +mine+'</div>';
     }).join('');
 
@@ -210,7 +210,7 @@
       +esc(b.onlyInVouchers.slice(0,20).join(', '))+'</span>. If one of these is still unpaid in Tally, the file is older than the bill — export Bills Receivable again and upload it.</div>';
 
     return '<div class="body">'+csv+'</div>'+vch+gaps
-      +'<div class="note">A party\'s outstanding on the Projected page is <b>the uploaded CSV plus the invoices inside the loaded date range</b>, less its receipts. A bill from a year the range does not cover, and older than the file, is in neither — which is what a missing bill usually is.</div>';
+      +'<div class="note">A party\'s outstanding on the Projected page is <b>the uploaded CSV plus the invoices inside the loaded date range</b>, less its receipts. <b>Mind the gap:</b> what the file <i>covers up to</i> matters more than when it was uploaded — if the loaded range starts LATER than that, every unpaid bill raised in between is in neither source, and simply does not appear. Either export Bills Receivable again as of today, or widen the range back to where the file ends.</div>';
   }
 
   function render(d){
