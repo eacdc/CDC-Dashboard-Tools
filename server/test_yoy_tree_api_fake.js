@@ -166,6 +166,32 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const cap = await get('/api/yoy/vouchers?branch=kol&ledger=' + encodeURIComponent(DOTTED) + '&from=20240401&to=20250331&limit=1');
   assert(cap.count === 1 && cap.truncated === true, 'a long list is capped and says so');
 
+  // ---- a ledger name that lives in BOTH companies ----------------------------
+  // Tally lets each company have its own ledger called the same thing, under a
+  // different group. The dashboards resolve that with mergeHierarchies, KOLKATA
+  // FIRST; the server built the same table with Object.assign, which is last-wins,
+  // and the two then disagreed about where the customer sits -- directly under
+  // Sundry Debtors on one page, inside a salesperson's group on the other, which
+  // reads as a row that is simply not there.
+  const E = require('./plEngine');
+  const kolM = fakeDb.collection('masters').docs.find((d) => d.branch === 'kol');
+  const ahmM = fakeDb.collection('masters').docs.find((d) => d.branch === 'ahm');
+  kolM.ledgers['Two Company Customer'] = 'Export - S/Dr';
+  kolM.groups['Export - S/Dr'] = 'Sundry Debtors';
+  ahmM.ledgers['Two Company Customer'] = 'Sundry Debtors';
+  const merged = E.mergeHierarchies(kolM, ahmM);
+  assert(merged.ledgers['Two Company Customer'] === 'Export - S/Dr',
+    "the merged table takes KOLKATA's group for a name both companies have, as the browser does");
+  assert(merged.ledgers['Sales A/c'] === 'Sales Accounts' && merged.ledgers['Other Customer'] === 'Sundry Debtors',
+    'and Ahmedabad still fills in everything Kolkata does not have');
+  assert(merged.groups['Revenue Account'] === null || 'Revenue Account' in merged.groups,
+    'the default group parents are applied, which the hand-rolled merge never did');
+
+  const diag = await get('/api/yoy/diag?q=Two%20Company&branch=all');
+  assert(diag.ok && diag.ledgers.length === 1 && diag.ledgers[0].parent === 'Export - S/Dr',
+    'and the server reads it that way too -- the endpoints share that one merge: '
+    + JSON.stringify(diag.ledgers.map((l) => l.parent)));
+
   // ---- a customer merged from an older name ----------------------------------
   // The fold stores the party under its CURRENT name, but the vouchers keep whatever
   // was typed at the time. Looking up only the current name found nothing for the

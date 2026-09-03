@@ -295,6 +295,23 @@ The three answers that account for nearly every "missing" row, all visible in (3
 stored figures — `test_yoy_diag_fake.js` folds the same fixture independently and
 checks every party the diagnostic names carries that figure to the rupee.
 
+### The two companies' ledger tables are merged Kolkata-first
+
+Each Tally company has its own ledger list, and the same NAME can exist in both under
+a different group — `Carbonlite Print & Publishing` is a Sundry Debtor sitting directly
+under the group in one company and inside a salesperson's group in the other.
+
+`mergeHierarchies` (portal) settles it: **h1 wins, h2 only fills the gaps**, called as
+`mergeHierarchies(kolkata, ahmedabad)`, with `TPG`'s default group parents applied at
+the end. The server built the same table by hand with `Object.assign` in a `kol, ahm`
+loop — which is **last** wins — so a shared name classified one way on the P&L tab and
+another in the year-on-year fold. The customer then appeared directly under
+SALES · SUNDRY DEBTORS in one view and one level down inside a salesperson's group in
+the other, which reads as a row that is simply not there.
+
+`mergeHierarchies` is now lifted like the rest, and `mergedHierarchy(db)` is the only
+way the server builds that table — the fold, both trees and the diagnostic share it.
+
 ### One customer, two names
 
 A party renamed in Tally — or simply entered twice under two spellings — is one

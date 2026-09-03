@@ -66,7 +66,8 @@ panel — none of which exist in its "sources". Running it would silently delete
 Edit `portal/index.html` directly.
 
 **The server does not re-implement the dashboard's accounting.** `server/plEngine.js`
-lifts `classify`, `getChain`, `monthKey`, `buildTree`, `__cdcCanon`, `CASH_VCH`, `PL_CATS` etc. out
+lifts `classify`, `getChain`, `monthKey`, `buildTree`, `mergeHierarchies`, `__cdcCanon`,
+`CASH_VCH`, `PL_CATS` etc. out
 of `portal/index.html` **by regex** and runs them in `vm`. Renaming or reshaping one of
 those functions in the portal throws a named error at server startup — that is
 deliberate, and the fix is to update `WANTED` in `plEngine.js`, never to copy the logic.
@@ -122,6 +123,11 @@ of vouchers cannot travel to a browser. Three collections back it:
   not fit one document. Consolidated is accumulated in its own pass, not merged from
   the branches — dropping the inter-branch ledgers changes which party is dominant,
   and the dominant party takes the whole invoice.
+
+**The two companies' ledger tables merge Kolkata-first.** `mergeHierarchies(kol, ahm)`
+is first-wins; a `kol, ahm` `Object.assign` loop is last-wins, and a ledger name living
+in both companies under different groups then classifies differently here and in the
+browser. `mergedHierarchy(db)` in `server.js` is the only way to build it.
 
 **A party's name is merged before it is folded.** One customer under two spellings is
 one row: the fold runs every voucher's ledger names through the portal's own
