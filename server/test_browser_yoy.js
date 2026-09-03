@@ -45,7 +45,14 @@ class Col {
     let rows = this.docs.slice();
     for (const st of stages) {
       if (st.$match) rows = rows.filter((d) => matches(d, st.$match));
-      else if (st.$addFields) rows = rows.map((d) => ({ ...d, _k: Object.keys(d.ledgers || {}).concat(Object.keys(d.party_ledgers || {})) }));
+      else if (st.$addFields) rows = rows.map((d) => {
+        const add = {};
+        // _k = every ledger key on the voucher; _bl = the ledger each bill allocation
+        // names. Which one the stage asks for decides what is computed.
+        if ('_k' in st.$addFields) add._k = Object.keys(d.ledgers || {}).concat(Object.keys(d.party_ledgers || {}));
+        if ('_bl' in st.$addFields) add._bl = (d.bills || []).map((b) => b.ledger);
+        return { ...d, ...add };
+      });
       else if (st.$sort) { const k = Object.keys(st.$sort)[0]; rows.sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * st.$sort[k]); }
       else if (st.$limit) rows = rows.slice(0, st.$limit);
       else if (st.$project) rows = rows.map((d) => { const o = {}; for (const k of Object.keys(st.$project)) if (st.$project[k] === 1) o[k] = d[k]; return o; });
@@ -103,6 +110,14 @@ const V = (branch, date, sales, salary) => ({
   const errors = [];
   // Rows are opened by clicking their name, one level at a time, exactly as the P&L
   // tab's tree behaves -- a line first, then the group inside it.
+  // The voucher list is the table with Date and Party columns. Waiting for a date to
+  // appear anywhere in the page raced the modal's own render; waiting for the table
+  // itself is the same thing the assertions then read.
+  const voucherTable = () => page.waitForFunction(() => {
+    const t = [...document.querySelectorAll('table')]
+      .find((x) => x.tHead && /date/i.test(x.tHead.innerText) && /party/i.test(x.tHead.innerText));
+    return !!(t && t.tBodies[0] && t.tBodies[0].rows.length);
+  }, null, { timeout: 8000 });
   // A drill-down's fetch can resolve just after Close and put the modal straight
   // back, and the next click then lands on the overlay instead of the table. So
   // closing means closing, and waiting until it is really gone.
@@ -182,7 +197,7 @@ const V = (branch, date, sales, salary) => ({
     const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /A Customer/.test(x.cells[0].innerText));
     r.cells[1].click();
   });
-  await page.waitForFunction(() => /\d{2}-\w{3}-\d{4}/.test(document.body.innerText), null, { timeout: 8000 });
+  await voucherTable();
   assert(/A Customer/.test(await page.evaluate(() => document.body.innerText)),
     'clicking a customer figure lists that customer vouchers for the year');
   await closeDrill();
@@ -325,7 +340,7 @@ const V = (branch, date, sales, salary) => ({
     const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /Sales A\/c/.test(x.cells[0].innerText));
     r.cells[1].click();
   });
-  await page.waitForFunction(() => /\d{2}-\w{3}-\d{4}/.test(document.body.innerText), null, { timeout: 8000 });
+  await voucherTable();
   txt = await page.evaluate(() => document.body.innerText);
   assert(/Sales A\/c/.test(txt) && /2024-25/.test(txt), 'the voucher list names the account and the year');
   assert(/10\.00 L/.test(txt), 'and its total is the figure that was clicked');

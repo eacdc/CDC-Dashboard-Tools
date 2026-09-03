@@ -809,10 +809,65 @@ app.get('/api/yoy/diag', async (req, res) => {
     if (truncated) rows.length = 200;
     const vouchers = rows.map((v) => yoy.explainVoucher(S, v, branch));
 
+    // 4. the bills -- where the outstanding figure actually comes from
+    //
+    // A party's outstanding on the Projected page is the uploaded Bills CSV plus the
+    // invoices inside the LOADED DATE RANGE, less its receipts. A bill from a year
+    // the range does not cover, and older than the CSV snapshot, is in neither -- and
+    // simply is not there. Both sources are checked here, across every year, so which
+    // of the two is missing it is visible rather than guessed at.
+    const bills = { csv: {}, refs: {}, allocations: [], truncated: false };
+    const files = (await db.collection('inputfiles').findOne({ _id: 'inputs' })) || {};
+    for (const key of ['kolBillsRecv', 'kolBillsPay', 'ahmBillsPay']) {
+      const stamp = files[key + 'UpdatedAt'] || files.updatedAt || null;
+      if (files[key] == null) { bills.csv[key] = { uploaded: null, rows: 0, mine: [] }; continue; }
+      let rows = [];
+      try { rows = E.parseBillsCSV(String(files[key])); } catch (e) { rows = []; }
+      const mine = rows.filter((b) => all.has(b.party) || names.has(S.canon(b.party || '')));
+      let newest = null;
+      for (const b of rows) if (!newest || b.date > newest) newest = b.date;
+      bills.csv[key] = {
+        uploaded: stamp ? new Date(stamp).toISOString() : null,
+        rows: rows.length, newestBill: newest,
+        mine: mine.map((b) => ({ ref: b.refNo, date: b.date, party: b.party, amount: b.amount, dueDate: b.dueDate, overdueDays: b.overdueDays, isAdvance: b.isAdvance })),
+      };
+    }
+    // Bill-wise allocations carried by the vouchers themselves, every year.
+    const bRows = await db.collection('vouchers').aggregate([
+      { $match: branch === 'all' ? {} : { branch } },
+      { $addFields: { _bl: { $map: { input: { $ifNull: ['$bills', []] }, in: '$$this.ledger' } } } },
+      { $match: { _bl: { $in: [...all] } } },
+      { $sort: { date: 1 } },
+      { $limit: 401 },
+      { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, bills: 1 } },
+    ], { allowDiskUse: true }).toArray();
+    bills.truncated = bRows.length > 400;
+    if (bills.truncated) bRows.length = 400;
+    for (const r of bRows) {
+      for (const b of (r.bills || [])) {
+        if (!all.has(b.ledger)) continue;
+        const row = { ref: b.ref, billType: b.type, amount: b.amount, date: r.date, no: r.no, type: r.type, branch: r.branch, ledger: b.ledger };
+        bills.allocations.push(row);
+        const k = b.ref || '(no reference)';
+        const acc = bills.refs[k] || (bills.refs[k] = { ref: k, raised: 0, settled: 0, net: 0, first: r.date, last: r.date });
+        // Tally signs: a debtor's bill is raised Dr (-ve) and settled Cr (+ve).
+        if (b.amount < 0) acc.raised += -b.amount; else acc.settled += b.amount;
+        acc.net = Math.round((acc.raised - acc.settled) * 100) / 100;
+        if (r.date < acc.first) acc.first = r.date;
+        if (r.date > acc.last) acc.last = r.date;
+      }
+    }
+    // Which references the CSV knows and the vouchers do not, and the other way round.
+    const csvRefs = new Set();
+    for (const key of Object.keys(bills.csv)) for (const b of bills.csv[key].mine) csvRefs.add(b.ref);
+    const vchRefs = new Set(Object.keys(bills.refs));
+    bills.onlyInCsv = [...csvRefs].filter((r) => r && !vchRefs.has(r));
+    bills.onlyInVouchers = [...vchRefs].filter((r) => r !== '(no reference)' && !csvRefs.has(r));
+
     res.json({
       ok: true, q, branch, fy,
       aliasesFor: Object.keys(aliases).filter((v) => names.has(aliases[v]) || all.has(v)).map((v) => ({ from: v, to: aliases[v] })),
-      ledgers, matched: matches.length, stored, truncated, vouchers,
+      ledgers, matched: matches.length, stored, truncated, vouchers, bills,
     });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
