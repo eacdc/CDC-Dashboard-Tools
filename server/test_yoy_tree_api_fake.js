@@ -15,7 +15,13 @@ function matches(doc, filter) {
     if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
-      if ('$in' in cond && !cond.$in.includes(val)) return false;
+      // Mongo matches $in against an ARRAY field element-wise: the doc matches if any
+      // element is in the list. The voucher drill-down relies on that to find a party
+      // under every name it has been merged from.
+      if ('$in' in cond) {
+        const hit = Array.isArray(val) ? val.some((x) => cond.$in.includes(x)) : cond.$in.includes(val);
+        if (!hit) return false;
+      }
       if ('$exists' in cond && (val !== undefined) !== cond.$exists) return false;
     } else if (Array.isArray(val)) { if (!val.includes(cond)) return false; }
     else if (val !== cond) return false;
@@ -159,6 +165,20 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
 
   const cap = await get('/api/yoy/vouchers?branch=kol&ledger=' + encodeURIComponent(DOTTED) + '&from=20240401&to=20250331&limit=1');
   assert(cap.count === 1 && cap.truncated === true, 'a long list is capped and says so');
+
+  // ---- a customer merged from an older name ----------------------------------
+  // The fold stores the party under its CURRENT name, but the vouchers keep whatever
+  // was typed at the time. Looking up only the current name found nothing for the
+  // years booked under the old one -- the row was there, and clicking it was empty.
+  fakeDb.collection('aliases').docs.push({ _id: 'party', map: { 'Old Customer': 'Other Customer' } });
+  vs.push(V('kol', '20240820', { 'Sales A/c': 70 }, { 'Old Customer': -70 }));
+  const mergedV = await get('/api/yoy/vouchers?branch=kol&ledger=Other%20Customer&from=20240401&to=20250331');
+  assert(mergedV.count === 2, 'a merged customer finds the vouchers raised under its old name too');
+  assert(mergedV.vouchers.map((v) => v.amount).sort((a, b) => a - b).join(',') === '-250,-70',
+    'and each carries its own amount, whichever spelling it was booked under');
+  const oldName = await get('/api/yoy/vouchers?branch=kol&ledger=Old%20Customer&from=20240401&to=20250331');
+  assert(oldName.count === 1,
+    'asking for the old name still answers for itself -- the merge is one-way, it does not hide a name');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== year-on-year drill-down API passed ==');

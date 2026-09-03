@@ -36,6 +36,13 @@ const WANTED = [
   // The year-on-year drill-down shows that same tree, so it is lifted rather than
   // rebuilt: one shape, one ordering, one set of group roll-ups.
   { name: 'buildTree', re: /^function buildTree\(ledgerData,xd,lu,monthCount\)\{[\s\S]*?\n\}$/m },
+  // The name-merge the dashboards apply to every voucher before anything is added
+  // up: a party renamed in Tally, or entered twice under two spellings, is one
+  // party. Identity is the ledger's GUID, with the shared alias map bridging an old
+  // name that no longer exists in the master. Lifted for the same reason as the
+  // rest -- the year-on-year fold has to merge the same names the P&L tab merges,
+  // or a customer shows up whole on one page and split in two on the other.
+  { name: '__cdcCanon', re: /^window\.__cdcCanon=function\(xd,vouchers,bills\)\{[\s\S]*?\n\};$/m },
 ];
 const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree';
 
@@ -52,11 +59,20 @@ function loadEngine() {
     }
     parts.push(m[0]);
   }
-  const sandbox = {};
+  // __cdcCanon hangs itself off `window` and reads its alias map from there, so the
+  // sandbox needs one. It stays reachable as `canonWindow`: the map is set on it
+  // once per rebuild, just before the canonicaliser is built.
+  const sandbox = { window: {} };
   vm.createContext(sandbox);
   new vm.Script(parts.join('\n'), { filename: 'portal-engine' }).runInContext(sandbox);
   const api = vm.runInContext('({' + EXPORTS.split(',').map((k) => k + ':' + k).join(',') + '})', sandbox);
   for (const k of Object.keys(api)) if (!api[k]) throw new Error(`plEngine: ${k} came back empty`);
+  api.canonWindow = sandbox.window;
+  api.makeCanon = function (xd, aliases) {
+    sandbox.window.__cdcAliases = aliases || {};
+    return sandbox.window.__cdcCanon(xd, null, null);   // returns the name mapper
+  };
+  if (typeof sandbox.window.__cdcCanon !== 'function') throw new Error('plEngine: __cdcCanon came back empty');
   return api;
 }
 

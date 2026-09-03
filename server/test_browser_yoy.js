@@ -8,7 +8,13 @@ function matches(doc, filter) {
     if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
-      if ('$in' in cond && !cond.$in.includes(val)) return false;
+      // Mongo matches $in against an ARRAY field element-wise: the doc matches if any
+      // element is in the list. The voucher drill-down relies on that to find a party
+      // under every name it has been merged from.
+      if ('$in' in cond) {
+        const hit = Array.isArray(val) ? val.some((x) => cond.$in.includes(x)) : cond.$in.includes(val);
+        if (!hit) return false;
+      }
     } else if (Array.isArray(val)) { if (!val.includes(cond)) return false; }
     else if (val !== cond) return false;
   }
@@ -314,8 +320,12 @@ const V = (branch, date, sales, salary) => ({
   txt = await page.evaluate(() => document.body.innerText);
   assert(/Sales A\/c/.test(txt) && /2024-25/.test(txt), 'the voucher list names the account and the year');
   assert(/10\.00 L/.test(txt), 'and its total is the figure that was clicked');
+  // The voucher list is the table with a Date column, not simply the last one in the
+  // document -- picking by position raced the modal's own render.
   const vrows = await page.evaluate(() => {
-    const t = [...document.querySelectorAll('table')].pop();
+    const t = [...document.querySelectorAll('table')]
+      .find((x) => x.tHead && /date/i.test(x.tHead.innerText) && /party/i.test(x.tHead.innerText));
+    if (!t) return ['NO VOUCHER TABLE'];
     return [...t.querySelectorAll('tbody tr')].map((r) => r.innerText.replace(/\s+/g, ' ').trim());
   });
   assert(vrows.length === 1 && /May-2024/.test(vrows[0]),

@@ -35,10 +35,15 @@ function monthOf(date) { return (parseInt(String(date).substring(4, 6), 10) - 4 
 
 // xd = the merged ledger hierarchy (both branches, hist included). Everything that
 // only depends on the hierarchy is worked out once here, not per voucher.
-function newSummary(xd) {
+function newSummary(xd, aliases) {
   const lu = E.buildLookups(xd);
   return {
     xd, lu,
+    // The dashboards merge a party renamed in Tally (or entered twice) into one name
+    // before adding anything up. This has to do the same, or a customer is whole on
+    // the P&L tab and split across two rows here -- and searching the name that lost
+    // finds nothing on one page while the other still shows it.
+    canon: E.makeCanon(xd, aliases),
     ib: E.findIBLedgers(xd),          // inter-branch ledgers, dropped from consolidated
     cat: new Map(),                    // ledger -> P&L category, memoised
     chain: new Map(),                  // ledger -> is it a bank/cash/OD account
@@ -160,6 +165,18 @@ function isCashAccount(S, name) {
   return v;
 }
 
+// One voucher's ledger map with the names merged. Two spellings of one party on the
+// same voucher add together, exactly as __cdcCanon's own key-merge does it.
+function canonKeys(S, obj) {
+  if (!obj) return {};
+  const out = {};
+  for (const k in obj) {
+    const ck = S.canon(k);
+    out[ck] = (out[ck] || 0) + obj[k];
+  }
+  return out;
+}
+
 function addVoucher(S, v) {
   if (!v || !v.date) return S;
   const branch = v.branch || v._branch;
@@ -173,9 +190,9 @@ function addVoucher(S, v) {
   const own = bucket(S, branch, fy);
   const all = bucket(S, 'all', fy);
 
-  const ledgers = v.ledgers || {};
-  const parties = v.party_ledgers || {};
-  addPartyVoucher(S, v, branch, fy, mi);
+  const ledgers = canonKeys(S, v.ledgers);
+  const parties = canonKeys(S, v.party_ledgers);
+  addPartyVoucher(S, { ledgers, party_ledgers: parties }, branch, fy, mi);
   for (const ln in ledgers) {
     const line = CAT2LINE[catOf(S, ln)];
     if (!line) continue;
@@ -422,8 +439,8 @@ function partyTreeFrom(byLedger, xd, fys, section) {
   return { root: s.m, tree: (s.c || []).concat(s.l || []) };
 }
 
-function summarise(vouchers, xd) {
-  const S = newSummary(xd);
+function summarise(vouchers, xd, aliases) {
+  const S = newSummary(xd, aliases);
   for (const v of vouchers || []) addVoucher(S, v);
   return finalize(S);
 }
