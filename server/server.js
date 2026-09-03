@@ -740,6 +740,99 @@ app.get('/api/yoy/party', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// GET /api/yoy/diag?q=<name fragment>[&fy=2026-27][&branch=all|kol|ahm]
+// Why a party's figure is what it is -- the question that otherwise takes a
+// conversation and a screenshot. Read-only, and it changes nothing.
+//
+// Three things, in the order you need them:
+//   1. every ledger whose name contains `q`, with its group chain -- the usual
+//      answer is that the customer has two or three ledgers and each view is
+//      showing a different one;
+//   2. what the stored fold holds for each of those names, per month;
+//   3. every voucher of that year touching any of them, and for each, whether it
+//      reached a party's row and WHY -- straight from the fold's own attribution().
+app.get('/api/yoy/diag', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) return res.status(400).json({ ok: false, error: 'q is required (at least two characters of the name)' });
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const fy = /^\d{4}-\d{2}$/.test(String(req.query.fy || '')) ? String(req.query.fy) : null;
+    const db = await getDb();
+
+    const xd = { ledgers: {}, groups: {}, ids: {} };
+    for (const b of ['kol', 'ahm']) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+      if (!m) continue;
+      Object.assign(xd.ledgers, m.ledgers || {});
+      Object.assign(xd.groups, m.groups || {});
+      for (const k of Object.keys(m.ids || {})) if (!xd.ids[k]) xd.ids[k] = m.ids[k];
+    }
+    const aliases = await readAliasMap(db);
+    const S = yoy.newSummary(xd, aliases);
+
+    // 1. the ledgers this name could mean
+    const needle = q.toLowerCase();
+    const matches = Object.keys(xd.ledgers).filter((n) => n.toLowerCase().includes(needle)).sort();
+    const canonOf = {};
+    const ledgers = matches.slice(0, 60).map((name) => {
+      const canon = S.canon(name);
+      canonOf[name] = canon;
+      return {
+        name, canonical: canon, mergedAway: canon !== name,
+        parent: xd.ledgers[name] || null,
+        chain: yoy.chainOf(S, name),
+        role: yoy.sundryOf(S, name) || 'not a Sundry Debtor or Creditor',
+        plCategory: yoy.catOf(S, name) || 'not a P&L account',
+        interBranch: !!S.ib[name],
+        guid: xd.ids[name] || null,
+      };
+    });
+
+    // 2. what the stored fold holds, per month, for each measure
+    const names = new Set(ledgers.map((l) => l.canonical));
+    const stored = {};
+    for (const section of Object.keys(yoy.PARTY_SECTIONS)) {
+      for (const measure of yoy.PARTY_MEASURES) {
+        const doc = await readPartyChunks(db, branch + '|' + section + '|' + measure);
+        for (const name of names) {
+          if (!doc[name]) continue;
+          const years = fy ? (doc[name][fy] ? { [fy]: doc[name][fy] } : {}) : doc[name];
+          if (Object.keys(years).length) (stored[name] || (stored[name] = {}))[section + '|' + measure] = years;
+        }
+      }
+    }
+
+    // 3. the vouchers, and what the fold made of each
+    const all = new Set([...matches, ...Object.keys(aliases).filter((v) => names.has(aliases[v]))]);
+    const match = {};
+    if (branch !== 'all') match.branch = branch;
+    if (fy) {
+      const y = parseInt(fy.slice(0, 4), 10);
+      match.date = { $gte: y + '0401', $lte: (y + 1) + '0331' };
+    }
+    const rows = await db.collection('vouchers').aggregate([
+      { $match: match },
+      { $addFields: { _k: { $concatArrays: [
+        { $map: { input: { $objectToArray: { $ifNull: ['$ledgers', {}] } }, in: '$$this.k' } },
+        { $map: { input: { $objectToArray: { $ifNull: ['$party_ledgers', {}] } }, in: '$$this.k' } },
+      ] } } },
+      { $match: { _k: { $in: [...all] } } },
+      { $sort: { date: 1 } },
+      { $limit: 201 },
+      { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, ledgers: 1, party_ledgers: 1 } },
+    ], { allowDiskUse: true }).toArray();
+    const truncated = rows.length > 200;
+    if (truncated) rows.length = 200;
+    const vouchers = rows.map((v) => yoy.explainVoucher(S, v, branch));
+
+    res.json({
+      ok: true, q, branch, fy,
+      aliasesFor: Object.keys(aliases).filter((v) => names.has(aliases[v]) || all.has(v)).map((v) => ({ from: v, to: aliases[v] })),
+      ledgers, matched: matches.length, stored, truncated, vouchers,
+    });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // GET /api/yoy/vouchers?branch=&ledger=&from=&to=[&limit=]
 // The vouchers behind one account for one period -- what the P&L tab's drill-down
 // shows, except the vouchers are not in the browser here, so Mongo finds them.
@@ -829,6 +922,8 @@ app.use('/projected', express.static(path.join(REPO_ROOT, 'projected')));
 app.use('/dashboard', express.static(path.join(REPO_ROOT, 'dashboard')));
 app.use('/portal', express.static(path.join(REPO_ROOT, 'portal')));
 app.use('/voucher', express.static(path.join(REPO_ROOT, 'voucher')));
+// Read-only: explains one party's figure. Changes nothing, so it is not gated.
+app.use('/diag', express.static(path.join(REPO_ROOT, 'diag')));
 // React and SheetJS, served from here rather than a public CDN. Every page is a
 // single React file, so a CDN the office network cannot reach used to leave a
 // silently blank page -- nothing renders, and the console only says "React is not

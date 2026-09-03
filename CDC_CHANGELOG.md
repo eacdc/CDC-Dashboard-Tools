@@ -1,5 +1,24 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.9 (server) — September 2026 — A page that explains one party's figure
+
+`/diag/` — type part of a customer or supplier name and it says, in plain rows, why
+that party's figure is what it is: which ledgers in Tally carry that name and what
+group each sits under, what the Year on Year fold has stored for them month by month,
+and then **every voucher, with what the fold did with it and why**.
+
+Built for a question that kept costing a conversation: a customer showing in Year on
+Year and missing from the date-range view. Three things account for nearly all of it,
+and all three are now visible at a glance — the invoice went to a **bigger debtor on
+the same voucher**, the voucher has **no revenue leg** (an adjustment journal, counted
+for nobody on either page), or the income is **not under Sales Accounts** (in Net +
+charges, out of Net (P&L)).
+
+Read-only: it changes no figure and needs no token. The reasons come from the same
+`attribution()` the fold itself uses, so they cannot drift from the stored numbers.
+
+---
+
 ## v2.8 (server) — September 2026 — Year on Year now honours the party name-merge
 
 A customer entered in Tally under two names — say `Carbonlite Print & Publishing` and

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDC · Why is this party's figure what it is?</title>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--ink:#0f172a;--dim:#64748b;--teal:#0f766e;--red:#dc2626;--amber:#b45309;--green:#15803d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{margin:0;font-size:16px}
+  .sub{font-size:12px;color:var(--dim);margin-top:3px}
+  main{padding:18px 20px;max-width:1200px}
+  form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  input,select,button{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--card)}
+  input{min-width:260px}
+  button{background:var(--teal);color:#fff;border-color:var(--teal);cursor:pointer;font-weight:600}
+  button:disabled{opacity:.55;cursor:progress}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:16px;overflow:hidden}
+  h2{margin:0;padding:10px 14px;font-size:12.5px;background:#f1f5f9;border-bottom:1px solid var(--line);
+     font-family:ui-monospace,monospace;letter-spacing:.03em;color:#334155}
+  .body{padding:12px 14px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--dim);
+     font-family:ui-monospace,monospace;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  td.num{text-align:right;font-family:ui-monospace,monospace;white-space:nowrap}
+  .mono{font-family:ui-monospace,monospace}
+  .muted{color:var(--dim)}
+  .tag{display:inline-block;font-size:10px;font-family:ui-monospace,monospace;padding:1px 6px;
+       border-radius:5px;background:#f1f5f9;color:#475569;margin-left:5px}
+  .tag.warn{background:#fef3c7;color:var(--amber)}
+  .tag.good{background:#dcfce7;color:var(--green)}
+  .tag.bad{background:#fee2e2;color:var(--red)}
+  .note{font-size:12px;color:var(--dim);padding:0 14px 12px}
+  .err{color:var(--red);font-family:ui-monospace,monospace;font-size:12.5px}
+  details>summary{cursor:pointer;font-size:12px;color:var(--teal);padding:4px 0}
+  pre{margin:6px 0 0;font-size:11.5px;background:#f8fafc;border:1px solid var(--line);
+      border-radius:6px;padding:8px;overflow-x:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>Why is this party's figure what it is?</h1>
+  <div class="sub">Type part of a customer or supplier name. Nothing here changes any figure &mdash; it only explains one.</div>
+</header>
+<main>
+  <form id="f">
+    <input id="q" placeholder="e.g. Carbonlite" autofocus>
+    <select id="branch"><option value="all">Consolidated</option><option value="kol">KOL</option><option value="ahm">AHM</option></select>
+    <select id="fy"></select>
+    <button id="go">Explain</button>
+  </form>
+  <div id="out"></div>
+</main>
+<script>
+(function(){
+  var out=document.getElementById('out');
+  var MN=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+  // The page is served from the same origin as the API, but it also has to work when
+  // opened straight off disk, which is how it gets used on the office machine.
+  var BASE=(location.protocol==='file:')?'https://cdc-finance-automated.onrender.com':'';
+
+  (function fillYears(){
+    var sel=document.getElementById('fy');
+    var now=new Date(), y=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+    sel.innerHTML='<option value="">every year</option>';
+    for(var i=0;i<12;i++){var f=(y-i)+'-'+String((y-i+1)%100).padStart(2,'0');
+      sel.innerHTML+='<option value="'+f+'"'+(i===0?' selected':'')+'>'+f+'</option>';}
+  })();
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function money(n){
+    if(n===0||n==null)return '—';
+    var a=Math.abs(n),s=n<0?'-':'';
+    if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';
+    if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';
+    if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';
+    return s+Math.round(a);
+  }
+  function fmtDate(d){if(!d||d.length<8)return d||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+
+  // ---- 1. the ledgers this name could mean ---------------------------------
+  function ledgersTable(d){
+    if(!d.ledgers.length) return '<div class="body muted">No ledger in Tally has that in its name. Check the spelling, or try a shorter fragment.</div>';
+    var rows=d.ledgers.map(function(l){
+      var tags='';
+      if(l.mergedAway) tags+='<span class="tag warn">merged into '+esc(l.canonical)+'</span>';
+      if(l.interBranch) tags+='<span class="tag warn">inter-branch</span>';
+      tags+='<span class="tag '+(l.role==='debtor'?'good':(l.role==='creditor'?'good':'bad'))+'">'+esc(l.role)+'</span>';
+      return '<tr><td class="mono">'+esc(l.name)+tags+'</td>'
+        +'<td class="mono muted">'+esc(l.chain.join(' › '))+'</td></tr>';
+    }).join('');
+    var note=d.ledgers.length>1
+      ? '<div class="note"><b>'+d.ledgers.length+' separate ledgers</b> carry this name. Each page shows whichever of them has activity, so the same customer can look like different rows in different places. To make them one, use <b>🔗 Merge names</b> on the portal.'
+      : '';
+    return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th></tr></thead>'
+      +'<tbody>'+rows+'</tbody></table></div>'+note;
+  }
+
+  // ---- 2. what the stored year-on-year fold holds ---------------------------
+  function storedTable(d){
+    var names=Object.keys(d.stored||{});
+    if(!names.length) return '<div class="body muted">The Year on Year fold holds nothing for these names'
+      +(d.fy?(' in '+esc(d.fy)):'')+'. If the date-range page does show something, the difference is below, voucher by voucher.</div>';
+    var head='<tr><th>Ledger</th><th>Section &middot; measure</th><th>Year</th>'
+      +MN.map(function(m){return '<th style="text-align:right">'+m+'</th>';}).join('')+'<th style="text-align:right">Total</th></tr>';
+    var body='';
+    names.forEach(function(n){
+      var byKey=d.stored[n];
+      Object.keys(byKey).forEach(function(k){
+        Object.keys(byKey[k]).sort().forEach(function(fy){
+          var a=byKey[k][fy],t=a.reduce(function(x,y){return x+y;},0);
+          body+='<tr><td class="mono">'+esc(n)+'</td><td class="mono muted">'+esc(k)+'</td><td class="mono">'+esc(fy)+'</td>'
+            +a.map(function(v){return '<td class="num">'+money(v)+'</td>';}).join('')
+            +'<td class="num"><b>'+money(t)+'</b></td></tr>';
+        });
+      });
+    });
+    return '<div class="scroll"><table><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>';
+  }
+
+  // ---- 3. the vouchers, and what the fold made of each ----------------------
+  function voucherRows(d){
+    if(!d.vouchers.length) return '<div class="body muted">No voucher in this period touches any of those ledgers.</div>';
+    var body=d.vouchers.map(function(v){
+      var s=v.sale, p=v.purchase, verdict, cls;
+      if(s.attributedTo){ verdict='Sale → <b>'+esc(s.attributedTo)+'</b>'; cls='good'; }
+      else if(p.attributedTo){ verdict='Purchase → <b>'+esc(p.attributedTo)+'</b>'; cls='good'; }
+      else { verdict='counted for nobody — '+esc(s.why); cls='bad'; }
+      var amounts=s.attributedTo
+        ? 'Net (P&amp;L) '+money(s.netpl)+' &middot; Net+charges '+money(s.net)+' &middot; Gross '+money(s.gross)
+        : (p.attributedTo ? 'Net (P&amp;L) '+money(p.netpl)+' &middot; Net+charges '+money(p.net)+' &middot; Gross '+money(p.gross) : '');
+      var legs=(v.revenueLegs||[]).concat(v.purchaseLegs||[]).map(function(l){
+        return esc(l.ledger)+' '+money(l.amount)+(l.salesAccount===false||l.purchaseAccount===false?' <span class="tag warn">not a Sales/Purchase A/c</span>':'');
+      }).join('<br>')||'<span class="muted">no revenue or purchase leg</span>';
+      var parties=(v.debtors||[]).concat(v.creditors||[]).map(function(x){
+        return esc(x.party)+' '+money(x.amount);
+      }).join('<br>')||'<span class="muted">no Sundry Debtor or Creditor</span>';
+      var dropped=(v.interBranchDropped||[]).length
+        ? '<div class="muted" style="font-size:11px;margin-top:4px">dropped as inter-branch: '+esc(v.interBranchDropped.join(', '))+'</div>' : '';
+      return '<tr>'
+        +'<td class="mono">'+fmtDate(v.date)+'<div class="muted" style="font-size:11px">'+esc(v.type||'')+' '+esc(v.no||'')+' &middot; '+esc((v.branch||'').toUpperCase())+'</div></td>'
+        +'<td>'+legs+'</td>'
+        +'<td>'+parties+dropped+'</td>'
+        +'<td><span class="tag '+cls+'">'+verdict+'</span>'
+        +(amounts?'<div class="muted" style="font-size:11px;margin-top:4px">'+amounts+'</div>':'')+'</td>'
+        +'</tr>';
+    }).join('');
+    return '<div class="scroll"><table><thead><tr><th>Voucher</th><th>Sale / purchase legs</th>'
+      +'<th>Parties on it</th><th>What the fold did with it</th></tr></thead><tbody>'+body+'</tbody></table></div>'
+      +(d.truncated?'<div class="note">Only the first 200 vouchers are shown. Pick one financial year to narrow it.</div>':'')
+      +'<div class="note">The whole invoice goes to the <b>largest</b> Sundry Debtor on the voucher (or the largest Sundry Creditor, for a purchase). A voucher with no revenue leg, or with no debtor on it, is counted for nobody in the sales sections &mdash; both pages agree on that.</div>';
+  }
+
+  function render(d){
+    out.innerHTML=
+      '<section><h2>1 &middot; WHICH LEDGERS THIS NAME COULD MEAN</h2>'+ledgersTable(d)+'</section>'
+      +'<section><h2>2 &middot; WHAT YEAR ON YEAR HAS STORED</h2>'+storedTable(d)+'</section>'
+      +'<section><h2>3 &middot; EVERY VOUCHER, AND WHY IT COUNTED OR DID NOT</h2>'+voucherRows(d)+'</section>'
+      +'<section><h2>THE RAW ANSWER</h2><div class="body">'
+      +'<details><summary>Show the JSON (paste this if you are asking someone to look)</summary>'
+      +'<pre>'+esc(JSON.stringify(d,null,1))+'</pre></details></div></section>';
+  }
+
+  document.getElementById('f').addEventListener('submit',function(ev){
+    ev.preventDefault();
+    var q=document.getElementById('q').value.trim();
+    if(q.length<2){out.innerHTML='<section><div class="body err">Type at least two characters of the name.</div></section>';return;}
+    var btn=document.getElementById('go');btn.disabled=true;btn.textContent='Looking…';
+    out.innerHTML='<section><div class="body muted">Reading the ledgers, the stored fold and the vouchers…</div></section>';
+    var url=BASE+'/api/yoy/diag?q='+encodeURIComponent(q)
+      +'&branch='+encodeURIComponent(document.getElementById('branch').value)
+      +'&fy='+encodeURIComponent(document.getElementById('fy').value);
+    fetch(url).then(function(r){return r.json();}).then(function(d){
+      if(!d||d.ok===false)throw new Error((d&&d.error)||'the server said no');
+      render(d);
+    }).catch(function(e){
+      out.innerHTML='<section><div class="body err">Could not read it: '+esc(e.message||e)+'</div></section>';
+    }).then(function(){btn.disabled=false;btn.textContent='Explain';});
+  });
+})();
+</script>
+</body>
+</html>
