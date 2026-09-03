@@ -2713,7 +2713,7 @@ function YoYPanel(pr){
   var s0=useState(false),open=s0[0],setOpen=s0[1];
   var s1=useState(null),data=s1[0],setData=s1[1];
   var s2=useState(''),err=s2[0],setErr=s2[1];
-  var s3=useState('pl'),tab=s3[0],setTab=s3[1];        // pl | cf
+  var s3=useState('sa'),tab=s3[0],setTab=s3[1];        // sa | pl | cf
   var s4=useState('all'),br=s4[0],setBr=s4[1];         // all | kol | ahm
   var s5=useState({}),openFy=s5[0],setOpenFy=s5[1];    // which years show their months
   var s6=useState(false),busy=s6[0],setBusy=s6[1];
@@ -2726,6 +2726,13 @@ function YoYPanel(pr){
   var sA=useState({}),openLine=sA[0],setOpenLine=sA[1];// which lines are open
   var sB=useState({}),openNode=sB[0],setOpenNode=sB[1];// which nodes inside them
   var sC=useState(null),drill=sC[0],setDrill=sC[1];    // the voucher list, when open
+  // The Sales Analysis tab: the same party-anchored sections that page shows, but
+  // every year at once. Held per branch AND per measure, because the three measures
+  // are three different folds of the same invoices, not three views of one.
+  var sD=useState('netpl'),meas=sD[0],setMeas=sD[1];   // netpl | net | gross
+  var sE=useState({}),parties=sE[0],setParties=sE[1];  // 'branch|section|measure' -> {fys,root,tree}
+  var sF=useState({}),pbusy=sF[0],setPbusy=sF[1];
+  var sG=useState({sales:1}),openSec=sG[0],setOpenSec=sG[1];
   var poll=useRef(null);
   // Escape leaves the maximised view. Bound only while maximised, so it never steals
   // the key from anything else on the page.
@@ -2748,7 +2755,7 @@ function YoYPanel(pr){
     setBusy(true);setErr('');
     // The open trees describe the summary that is being replaced; drop them so the
     // next expand asks again rather than showing last build's accounts.
-    setTrees({});setDrill(null);
+    setTrees({});setParties({});setDrill(null);
     fetch((pr.apiBase||'')+'/api/yoy/scan',{method:'POST'}).then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
       .then(function(){stopPoll();poll.current=setInterval(read,3000);read();})
       .catch(function(ex){setErr(ex.message||String(ex));setBusy(false);});
@@ -2769,6 +2776,36 @@ function YoYPanel(pr){
       .then(function(){setTbusy(function(m){var x=Object.assign({},m);delete x[ck];return x;});});
   }
   function toggleNode(key){setOpenNode(function(m){var x=Object.assign({},m);if(x[key])delete x[key];else x[key]=1;return x;});}
+  // ---- the party-anchored sections ------------------------------------------
+  var SECS=[{k:'sales',l:'SALES · SUNDRY DEBTORS',up:'value'},
+            {k:'purchase',l:'PURCHASES · SUNDRY CREDITORS',up:'cost'}];
+  var MEAS=[['netpl','Net (P&L)','Sales/Purchase Accounts only — matches the P&L'],
+            ['net','Net + charges','Includes shipping/freight & other incomes'],
+            ['gross','Gross','Full invoice incl GST']];
+  function partyKey(sec){return br+'|'+sec+'|'+meas;}
+  function fetchParty(sec){
+    var ck=partyKey(sec);
+    if(parties[ck]||pbusy[ck])return;
+    setPbusy(function(m){var x=Object.assign({},m);x[ck]=1;return x;});
+    fetch((pr.apiBase||'')+'/api/yoy/party?branch='+encodeURIComponent(br)
+      +'&section='+encodeURIComponent(sec)+'&measure='+encodeURIComponent(meas))
+      .then(function(r){if(!r.ok)throw new Error('API '+r.status);return r.json();})
+      .then(function(d){if(d&&d.error)throw new Error(d.error);
+        setParties(function(m){var x=Object.assign({},m);x[ck]={fys:(d&&d.fys)||[],root:(d&&d.root)||{},tree:(d&&d.tree)||[]};return x;});})
+      .catch(function(ex){setErr('Could not open that section: '+(ex.message||ex));})
+      .then(function(){setPbusy(function(m){var x=Object.assign({},m);delete x[ck];return x;});});
+  }
+  function toggleSec(sec){
+    setOpenSec(function(m){var x=Object.assign({},m);if(x[sec])delete x[sec];else x[sec]=1;return x;});
+    fetchParty(sec);
+  }
+  // A section shows its own total in the header, so an open one has to be fetched
+  // even when nothing was clicked -- on first open of the tab, and again whenever the
+  // branch or the measure changes underneath it.
+  React.useEffect(function(){
+    if(!open||tab!=='sa')return;
+    Object.keys(openSec).forEach(function(sec){if(openSec[sec])fetchParty(sec);});
+  },[open,tab,br,meas,openSec,parties,pbusy]);
   // A financial year (or one month of it) as the two dates Mongo needs.
   function periodOf(fy,mi){
     var y0=parseInt(String(fy).slice(0,4),10);
@@ -2792,7 +2829,8 @@ function YoYPanel(pr){
   // end to end, so year i owns slots i*12 .. i*12+11.
   function slot(nd,fi,mi){var v=nd.m[fi*12+mi];return v||0;}
   function yearOf(nd,fi){var t=0;for(var i=fi*12;i<fi*12+12;i++)if(nd.m[i])t+=nd.m[i];return Math.round(t*100)/100;}
-  var ROWS=tab==='pl'
+  var ROWS=tab==='sa'?[]
+    :tab==='pl'
     ? [{k:'revenue',l:'Revenue',up:'value',tree:1},{k:'purchase',l:'Purchases',up:'cost',tree:1},{k:'directExp',l:'Direct Expenses',up:'cost',tree:1},
        {k:'gp',l:'Gross Profit',up:'value',strong:true},{k:'indirectExp',l:'Indirect Expenses',up:'cost',tree:1},{k:'np',l:'Net Profit',up:'value',strong:true}]
     : [{k:'cashIn',l:'Inflows',up:'value',tree:1},{k:'cashOut',l:'Outflows',up:'cost',tree:1},{k:'cashNet',l:'Net Cashflow',up:'value',strong:true}];
@@ -2841,7 +2879,9 @@ function YoYPanel(pr){
   return e('div',{style:shell},
     e('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'9px 12px',borderBottom:'1px solid #99f6e4',flexWrap:'wrap'}},
       e('span',{style:{fontSize:'11px',fontWeight:700,color:'#0f766e',fontFamily:'monospace'}},'YEAR ON YEAR'),
-      ['pl','cf'].map(function(t){return e('span',{key:t,onClick:function(){setTab(t);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:tab===t?'#0f766e':'#fff',color:tab===t?'#fff':'#475569',border:'1px solid #99f6e4'}},t==='pl'?'P&L':'CASHFLOW');}),
+      ['sa','pl','cf'].map(function(t){return e('span',{key:t,onClick:function(){setTab(t);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:tab===t?'#0f766e':'#fff',color:tab===t?'#fff':'#475569',border:'1px solid #99f6e4'}},t==='sa'?'SALES ANALYSIS':(t==='pl'?'P&L':'CASHFLOW'));}),
+      tab==='sa'&&e('span',{style:{display:'flex',gap:'2px'}},MEAS.map(function(g){var on=meas===g[0];
+        return e('span',{key:g[0],onClick:function(){setMeas(g[0]);},title:g[2],style:{cursor:'pointer',fontSize:'9.5px',fontFamily:'monospace',fontWeight:600,padding:'3px 8px',borderRadius:'5px',background:on?'#0891b2':'#fff',color:on?'#fff':'#475569',border:'1px solid #bae6fd'}},g[1]);})),
       e('span',{style:{width:'6px'}}),
       ['all','kol','ahm'].map(function(b){return e('span',{key:b,onClick:function(){setBr(b);},style:{cursor:'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:700,padding:'3px 9px',borderRadius:'6px',background:br===b?'#0891b2':'#fff',color:br===b?'#fff':'#475569',border:'1px solid #bae6fd'}},b==='all'?'CONSOL':b.toUpperCase());}),
       data&&data.updatedAt&&e('span',{style:{fontSize:'9.5px',color:'#64748b',fontFamily:'monospace'}},'built '+new Date(data.updatedAt).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})),
@@ -2940,6 +2980,36 @@ function YoYPanel(pr){
           }
           var rows=[];
           var lastRow=bd[fys[fys.length-1]];
+          var lastM=lastRow?lastRow.lastMonth:-1;
+          // The Sales Analysis tab. Same columns, same growth rules, same drill-down
+          // as the lines above -- the only difference is where a row's figure comes
+          // from: a customer's invoices rather than an income account's postings.
+          if(tab==='sa')SECS.forEach(function(r){
+            var ck=partyKey(r.k),isO=!!openSec[r.k],t=parties[ck];
+            var idx=t?slotIndex(t.fys):null;
+            var root=t?{m:t.root||{}}:null;
+            rows.push(e('tr',{key:'sec_'+r.k,style:{borderTop:'1px solid #f1f5f9',background:'#f8fafc'}},
+              e('td',{onClick:function(){toggleSec(r.k);},title:'open this section down to the parties under it',
+                style:{padding:'6px 12px',whiteSpace:'nowrap',fontWeight:700,color:'#0f172a',fontSize:'11px',
+                  position:'sticky',left:0,background:'#f8fafc',zIndex:1,cursor:'pointer'}},
+                e('span',{style:{color:'#0f766e',marginRight:'5px'}},isO?'▾':'▸'),
+                r.l,
+                pbusy[ck]?e('span',{style:{marginLeft:'6px',fontSize:'9px',color:'#0f766e'}},'opening…'):null),
+              valueCells(r.up,true,
+                function(fi){var s=idx?idx[fi]:-1;return (!root||s<0)?null:yearOf(root,s);},
+                function(fi,mi){var s=idx?idx[fi]:-1;return (!root||s<0)?0:slot(root,s,mi);},
+                lastM,null)));
+            if(!isO)return;
+            if(!t){
+              rows.push(e('tr',{key:'sec_'+r.k+'_l'},e('td',{colSpan:200,style:{padding:'6px 12px 6px 32px',fontSize:'10.5px',color:'#0f766e'}},
+                'Reading the parties under '+r.l+'…')));
+            } else if(!t.tree.length){
+              rows.push(e('tr',{key:'sec_'+r.k+'_e'},e('td',{colSpan:200,style:{padding:'6px 12px 6px 32px',fontSize:'10.5px',color:'#94a3b8'}},
+                'No invoices attributable to a party in this section — press ↻ Rebuild to read the history once.')));
+            } else {
+              nodeRows(t.tree,idx,1,'sec_'+r.k,r.up,lastM,rows);
+            }
+          });
           ROWS.forEach(function(r){
             var ck=treeKey(r.k),isO=!!openLine[r.k];
             rows.push(e('tr',{key:r.k,style:{borderTop:'1px solid #f1f5f9',background:r.strong?'#f8fafc':'transparent'}},
@@ -2982,7 +3052,7 @@ function YoYPanel(pr){
           return rows;
         })())),
       e('div',{style:{padding:'7px 12px',fontSize:'9.5px',color:'#64748b',borderTop:'1px solid #f1f5f9'}},
-        'April–March financial years. Cost lines are compared by size (a bill a tenth bigger reads +10%); profit and net cash by signed change over last year, so a profit turning into a loss reads as the fall it is. A year still in progress is compared against the SAME months of the year before, and its column says so. Colour depth follows the size of the move, green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied. Click a line to open the accounts under it, and click any figure on an account to see the vouchers behind it.')),
+        'April–March financial years. Cost lines are compared by size (a bill a tenth bigger reads +10%); profit and net cash by signed change over last year, so a profit turning into a loss reads as the fall it is. A year still in progress is compared against the SAME months of the year before, and its column says so. Colour depth follows the size of the move, green where it helps profit, red where it hurts. Stock change is not included (it comes from an uploaded template covering the current period only), so Gross Profit here is Revenue + Purchases + Direct Expenses. Per-browser ledger overrides are not applied. Click a line to open the accounts under it, and click any figure on an account to see the vouchers behind it. The Sales Analysis tab shows the same sections that page does: every sale attributed to the largest Sundry Debtor on the voucher, every purchase to the largest Sundry Creditor, nested under the Tally groups of that party \u2014 salesperson, then company, then the party itself. Its three measures are the same three: Net (P&L) counts only the Sales/Purchase Accounts legs, Net + charges adds shipping and other incomes, Gross is the full invoice with GST. A voucher list opened from a party shows the posting made to that party on each voucher, which is the gross figure whichever measure the column is on.')),
     drill&&e(YoYDrill,{drill:drill,branch:br,onClose:function(){setDrill(null);}}));
 }
 

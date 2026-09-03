@@ -1,5 +1,28 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.7 (portal) — September 2026 — Year on Year opens on Sales Analysis
+
+The year-on-year panel now leads with the **Sales Analysis** view instead of the P&L:
+the same two party-anchored sections that page shows — **SALES · SUNDRY DEBTORS** and
+**PURCHASES · SUNDRY CREDITORS** — across every financial year, with the same three
+measures (Net (P&L) / Net + charges / Gross).
+
+Each section expands the way the Sales Analysis page does — salesperson group, then
+the company under it, then the party — and any figure on a party opens the vouchers
+behind it, for the year or for a single month. P&L and Cashflow are still there as
+tabs; the year columns, the part-year comparison and the month expansion are unchanged.
+
+Server side: a `yoy_party` collection stores the attribution per
+branch/section/measure in chunked documents, refreshed by the same partial rebuild
+that keeps `yoy_summary` current, and served by `GET /api/yoy/party`. The figures are
+checked against the dashboard's own Sales Analysis in Chromium
+(`test_yoy_party_fake.js`), party by party.
+
+**After deploying, press ↻ Rebuild once** — the new sections have nothing stored until
+a rebuild has run.
+
+---
+
 ## v2.6 (voucher) — July 2026 — Item-less invoices synthesise a goods line
 
 A sale/purchase with **no stock items** (an accounting purchase/sale booked
