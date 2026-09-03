@@ -50,8 +50,15 @@ const WANTED = [
   // living in both companies under different groups then classified one way on the
   // P&L tab and another in the year-on-year fold.
   { name: 'mergeHierarchies', re: /^function mergeHierarchies\(h1,h2\)\{[\s\S]*?\n\}$/m },
+  // The Bills Receivable / Payable CSV, as the dashboards read it. Tally's export has
+  // a preamble, quoted commas and Dr/Cr suffixes, and the diagnostic has to see the
+  // very same rows the projection sees -- otherwise it would explain a file nobody
+  // is actually using.
+  { name: 'toYMD', re: /^function toYMD\(d\)\{.*?\}$/m },
+  { name: 'parseTD', re: /^function parseTD\(s\)\{.*?\}$/m },
+  { name: 'parseBillsCSV', re: /^function parseBillsCSV\(text\)\{[\s\S]*?return bills;\}$/m },
 ];
-const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree,mergeHierarchies';
+const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree,mergeHierarchies,parseBillsCSV';
 
 function loadEngine() {
   const html = fs.readFileSync(PORTAL, 'utf8');

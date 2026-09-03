@@ -1,5 +1,27 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.11 (server) — September 2026 — /diag now explains an outstanding bill too
+
+"Tally says these two bills are open and our site does not show them" has the same
+shape as the last question and the same cure: see both sources instead of guessing.
+
+`/diag/` gains a fourth section for one party's bills — **when each Bills CSV was
+uploaded** and the newest bill in it, that party's rows in it, and from the vouchers
+themselves (every year, whatever range the pages are showing) each bill reference with
+what was raised, what was settled and what is still open. Two lists finish it:
+references **only in the CSV**, and references **only on vouchers** — the second
+meaning the uploaded file is older than the bill and wants re-exporting.
+
+Outstanding is the uploaded CSV **plus the invoices inside the loaded date range**, so
+a bill from a year the range does not cover, newer than the snapshot, is in neither.
+The section says so in as many words. It also flags that bill-wise allocations exist
+only for vouchers pulled since August 2026; older ones settle oldest-bill-first.
+
+The CSV is parsed with the portal's own `parseBillsCSV`, lifted, so the diagnostic
+reads the file exactly as the projection reads it.
+
+---
+
 ## v2.10 (server) — September 2026 — Year on Year groups a customer where the dashboards do
 
 A ledger NAME can exist in both Tally companies under a different group. The

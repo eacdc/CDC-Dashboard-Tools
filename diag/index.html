@@ -81,6 +81,13 @@
     if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';
     return s+Math.round(a);
   }
+  // Bills get reconciled against Tally to the rupee, so they are shown to the rupee
+  // rather than in the lakhs-and-crores the rest of the page uses.
+  function rupees(n){
+    if(n==null)return '\u2014';
+    var neg=n<0,a=Math.round(Math.abs(n));
+    return (neg?'-':'')+'\u20b9'+a.toLocaleString('en-IN');
+  }
   function fmtDate(d){if(!d||d.length<8)return d||'';
     var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
@@ -158,11 +165,60 @@
       +'<div class="note">The whole invoice goes to the <b>largest</b> Sundry Debtor on the voucher (or the largest Sundry Creditor, for a purchase). A voucher with no revenue leg, or with no debtor on it, is counted for nobody in the sales sections &mdash; both pages agree on that.</div>';
   }
 
+  // ---- 4. the bills behind the outstanding figure ---------------------------
+  // Outstanding = the uploaded CSV + the invoices inside the loaded date range.
+  // A bill in neither is simply not there, and this says which of the two is short.
+  function billsSection(d){
+    var b=d.bills; if(!b) return '<div class="body muted">No bill information.</div>';
+    var CSVNAME={kolBillsRecv:'Kol Bills Receivable',kolBillsPay:'Kol Bills Payable',ahmBillsPay:'Ahm Bills Payable'};
+    var csv=Object.keys(b.csv).map(function(k){
+      var c=b.csv[k];
+      var when=c.uploaded?new Date(c.uploaded).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):null;
+      var newest=c.newestBill?fmtDate(c.newestBill):'—';
+      var tag=c.uploaded?('<span class="tag">uploaded '+esc(when)+'</span>'):'<span class="tag bad">never uploaded</span>';
+      var mine=c.mine.length
+        ? '<table style="margin-top:6px"><thead><tr><th>Bill</th><th>Raised</th><th>Due</th>'
+          +'<th style="text-align:right">Outstanding in the file</th></tr></thead><tbody>'
+          +c.mine.map(function(x){return '<tr><td class="mono">'+esc(x.ref||'(no ref)')+(x.isAdvance?'<span class="tag">advance</span>':'')
+            +'</td><td class="mono">'+fmtDate(x.date)+'</td><td class="mono muted">'+esc(String(x.overdueDays||0))+' days overdue</td>'
+            +'<td class="num">'+rupees(x.amount)+'</td></tr>';}).join('')+'</tbody></table>'
+        : '<div class="muted" style="font-size:12px;margin-top:4px">this party has no bill in this file</div>';
+      return '<div style="margin-bottom:12px"><b>'+esc(CSVNAME[k]||k)+'</b>'+tag
+        +'<span class="tag">'+c.rows+' bills in file</span>'
+        +'<span class="tag'+(c.newestBill?'':' warn')+'">newest bill in it: '+esc(newest)+'</span>'
+        +mine+'</div>';
+    }).join('');
+
+    var refs=Object.keys(b.refs||{});
+    var vch='<div class="body" style="padding-top:0"><b>What the vouchers themselves say</b>'
+      +'<div class="muted" style="font-size:12px">every year, whatever date range the pages are showing</div></div>'
+      +(refs.length
+      ? '<div class="scroll"><table><thead><tr><th>Bill reference</th><th>First seen</th><th>Last touched</th>'
+        +'<th style="text-align:right">Raised</th><th style="text-align:right">Settled</th>'
+        +'<th style="text-align:right">Still open</th></tr></thead><tbody>'
+        +refs.map(function(k){var r=b.refs[k];
+          return '<tr><td class="mono">'+esc(r.ref)+'</td><td class="mono">'+fmtDate(r.first)+'</td>'
+            +'<td class="mono muted">'+fmtDate(r.last)+'</td><td class="num">'+rupees(r.raised)+'</td>'
+            +'<td class="num">'+rupees(r.settled)+'</td><td class="num"><b>'+rupees(r.net)+'</b></td></tr>';}).join('')
+        +'</tbody></table></div>'
+      : '<div class="body muted">No voucher of this party carries a bill reference. Bill-wise capture was added to the pipeline in <b>August 2026</b> — anything pulled before that has no allocations, and a receipt is matched oldest-bill-first instead.</div>');
+
+    var gaps='';
+    if((b.onlyInCsv||[]).length) gaps+='<div class="note"><b>In the uploaded file but on no voucher we hold:</b> <span class="mono">'
+      +esc(b.onlyInCsv.slice(0,20).join(', '))+'</span>. These come from a year the loaded date range does not cover — widen the range, or they exist only in the file.</div>';
+    if((b.onlyInVouchers||[]).length) gaps+='<div class="note"><b>On a voucher but not in the uploaded file:</b> <span class="mono">'
+      +esc(b.onlyInVouchers.slice(0,20).join(', '))+'</span>. If one of these is still unpaid in Tally, the file is older than the bill — export Bills Receivable again and upload it.</div>';
+
+    return '<div class="body">'+csv+'</div>'+vch+gaps
+      +'<div class="note">A party\'s outstanding on the Projected page is <b>the uploaded CSV plus the invoices inside the loaded date range</b>, less its receipts. A bill from a year the range does not cover, and older than the file, is in neither — which is what a missing bill usually is.</div>';
+  }
+
   function render(d){
     out.innerHTML=
       '<section><h2>1 &middot; WHICH LEDGERS THIS NAME COULD MEAN</h2>'+ledgersTable(d)+'</section>'
       +'<section><h2>2 &middot; WHAT YEAR ON YEAR HAS STORED</h2>'+storedTable(d)+'</section>'
       +'<section><h2>3 &middot; EVERY VOUCHER, AND WHY IT COUNTED OR DID NOT</h2>'+voucherRows(d)+'</section>'
+      +'<section><h2>4 &middot; THE BILLS BEHIND THE OUTSTANDING FIGURE</h2>'+billsSection(d)+'</section>'
       +'<section><h2>THE RAW ANSWER</h2><div class="body">'
       +'<details><summary>Show the JSON (paste this if you are asking someone to look)</summary>'
       +'<pre>'+esc(JSON.stringify(d,null,1))+'</pre></details></div></section>';

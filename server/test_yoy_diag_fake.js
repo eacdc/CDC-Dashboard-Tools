@@ -47,7 +47,14 @@ class Col {
     let rows = this.docs.slice();
     for (const st of stages) {
       if (st.$match) rows = rows.filter((d) => matches(d, st.$match));
-      else if (st.$addFields) rows = rows.map((d) => ({ ...d, _k: Object.keys(d.ledgers || {}).concat(Object.keys(d.party_ledgers || {})) }));
+      else if (st.$addFields) rows = rows.map((d) => {
+        const add = {};
+        // _k = every ledger key on the voucher; _bl = the ledger each bill allocation
+        // names. Which one the stage asks for decides what is computed.
+        if ('_k' in st.$addFields) add._k = Object.keys(d.ledgers || {}).concat(Object.keys(d.party_ledgers || {}));
+        if ('_bl' in st.$addFields) add._bl = (d.bills || []).map((b) => b.ledger);
+        return { ...d, ...add };
+      });
       else if (st.$sort) { const k = Object.keys(st.$sort)[0]; rows.sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * st.$sort[k]); }
       else if (st.$limit) rows = rows.slice(0, st.$limit);
       else if (st.$project) rows = rows.map((d) => { const o = {}; for (const k of Object.keys(st.$project)) if (st.$project[k] === 1 && d[k] !== undefined) o[k] = d[k]; return o; });
@@ -177,6 +184,54 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const d2 = await get('/api/yoy/diag?q=Carbonlite&branch=ahm&fy=2026-27');
   assert(d2.stored['Carbonlite Print & Publishing']['sales|netpl']['2026-27'][1] === 5110000,
     'the stored month is shown, so a stale rebuild is visible rather than guessed at');
+
+  // ---- the bills behind the outstanding figure -------------------------------
+  // A party's outstanding is the uploaded CSV plus the invoices inside the loaded
+  // date range. The question that brought this on -- "Tally says two bills are open
+  // and the site does not show them" -- is answered by seeing both sources at once.
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:b1', guid: 'gb1', branch: 'kol', date: '20251007', no: 'CDC/4919/25-26', type: 'Sales',
+    ledgers: { 'Export Sales': 61705 },
+    party_ledgers: { 'Carbonlite Print & Publishing': -61705 },
+    bills: [{ ledger: 'Carbonlite Print & Publishing', ref: 'CDC/4919/25-26', type: 'New Ref', amount: -61705 }],
+  });
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:b2', guid: 'gb2', branch: 'kol', date: '20251120', no: 'BR/9', type: 'Bank Receipt',
+    ledgers: {}, party_ledgers: { 'Carbonlite Print & Publishing': 15064 },
+    bills: [{ ledger: 'Carbonlite Print & Publishing', ref: 'CDC/4919/25-26', type: 'Agst Ref', amount: 15064 }],
+  });
+  fakeDb.collection('inputfiles').docs.push({
+    _id: 'inputs',
+    kolBillsRecv: 'Ledger Outstandings\nDate,Ref. No.,Party,Amount,Due on,Overdue\n'
+      + '7-Oct-25,CDC/4919/25-26,Carbonlite Print & Publishing,"46,641.00 Dr",6-Dec-25,271\n',
+    kolBillsRecvUpdatedAt: new Date('2026-06-01T00:00:00Z'),
+  });
+
+  const b = (await get('/api/yoy/diag?q=Carbonlite&branch=kol')).bills;
+  assert(b.csv.kolBillsRecv.uploaded && b.csv.kolBillsRecv.uploaded.slice(0, 10) === '2026-06-01',
+    'the uploaded file says WHEN it was uploaded -- a stale snapshot is the usual answer');
+  assert(b.csv.kolBillsRecv.mine.length === 1 && b.csv.kolBillsRecv.mine[0].ref === 'CDC/4919/25-26'
+    && b.csv.kolBillsRecv.mine[0].amount === 46641,
+    "and this party's own bills in it, at the figure the file carries");
+  assert(b.csv.kolBillsPay.uploaded === null,
+    'a file that was never uploaded says so rather than looking empty');
+
+  const r = b.refs['CDC/4919/25-26'];
+  assert(r && r.raised === 61705 && r.settled === 15064 && r.net === 46641,
+    'the vouchers themselves show the bill raised, what was settled against it and what is still open: '
+    + JSON.stringify(r));
+  assert(b.allocations.length === 2, 'every allocation on that reference is listed, receipts included');
+
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:b3', guid: 'gb3', branch: 'kol', date: '20260128', no: 'CDC/10310/25-26', type: 'Sales',
+    ledgers: { 'Export Sales': 23423 }, party_ledgers: { 'Carbonlite Print & Publishing': -23423 },
+    bills: [{ ledger: 'Carbonlite Print & Publishing', ref: 'CDC/10310/25-26', type: 'New Ref', amount: -23423 }],
+  });
+  const b2 = (await get('/api/yoy/diag?q=Carbonlite&branch=kol')).bills;
+  assert(b2.onlyInVouchers.indexOf('CDC/10310/25-26') >= 0,
+    'a bill the vouchers carry and the uploaded file does not is named -- the file is older than the bill');
+  assert(b2.onlyInCsv.length === 0,
+    'and nothing is wrongly reported as file-only when the vouchers have it too');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');

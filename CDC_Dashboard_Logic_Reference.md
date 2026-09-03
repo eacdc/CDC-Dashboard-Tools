@@ -312,6 +312,34 @@ the other, which reads as a row that is simply not there.
 `mergeHierarchies` is now lifted like the rest, and `mergedHierarchy(db)` is the only
 way the server builds that table — the fold, both trees and the diagnostic share it.
 
+### Where an outstanding bill comes from
+
+A party's outstanding on the Projected page is not one source but two, added together
+by `combinedFIFO`:
+
+```
+outstanding = the uploaded Bills CSV (a Tally snapshot, stored in `inputfiles`)
+            + the invoices inside the LOADED DATE RANGE
+            - that range's receipts
+```
+
+So a bill can be open in Tally and absent here for a reason that is nobody's mistake:
+it belongs to a financial year the range does not cover, **and** it is newer than the
+CSV snapshot, so neither source carries it. The CSV is uploaded by hand and kept
+("upload once, retained"), which is exactly how it goes stale.
+
+`/diag/`'s fourth section shows both sources at once for one party: when each CSV was
+uploaded, the newest bill in it, that party's rows in it, and — from the vouchers,
+**every year regardless of the loaded range** — each bill reference with what was
+raised, what was settled against it and what is still open. Two lists close the
+question: references **only in the CSV** (a year the range does not reach) and
+references **only on vouchers** (the file is older than the bill).
+
+One caveat it also surfaces: bill-wise allocations have only been captured since
+**19 August 2026** (`Collect-BillAllocs`). A voucher pushed before that carries no
+allocations, so its receipts fall back to oldest-bill-first instead of settling the
+bill Tally settled. Re-pulling that year fixes it.
+
 ### One customer, two names
 
 A party renamed in Tally — or simply entered twice under two spellings — is one
