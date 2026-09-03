@@ -221,6 +221,7 @@ drifting the numbers apart. `npm run test:yoy` then runs the same vouchers throu
 | `GET /api/yoy/tree?branch=&line=` | the accounts under one line, every year at once |
 | `GET /api/yoy/vouchers?branch=&ledger=&from=&to=` | the vouchers behind one account |
 | `GET /api/yoy/party?branch=&section=&measure=` | the Sales Analysis sections, every year at once |
+| `GET /api/yoy/diag?q=&fy=&branch=` | why one party's figure is what it is (read-only) |
 
 The whole payload, month detail included, is one small request — so opening a year
 costs nothing. Rebuilds run in the background (Render's proxy will not wait for a
@@ -262,6 +263,37 @@ every year, the accounts in the tree sum back to the line's own total — which
 `test_yoy_fake.js` has already matched against the browser. A ledger dropped for
 landing in no group, a year read at the wrong offset, or consolidated forgetting to
 eliminate the branch account all surface as a mismatch there.
+
+### Explaining one party's figure — `/diag`
+
+"This customer is in Year on Year and not in the date-range view, why?" took a
+conversation and three screenshots to answer, and still ended in a guess. `/diag/`
+answers it in one search, and `/api/yoy/diag` behind it returns three things:
+
+1. **Every ledger whose name contains the search** — with its group chain, whether it
+   is a Sundry Debtor or Creditor, and whether the merge map folded it into another
+   name. The usual answer lives here: **one customer has two or three ledgers**
+   (`… - DR`, `… (AHD)`), and each page shows whichever of them had activity.
+2. **What the stored fold holds** for those names, month by month, per section and
+   measure — so a stale rebuild is visible instead of assumed.
+3. **Every voucher touching any of them, and what the fold did with it**: its revenue
+   and purchase legs, the parties on it, and which party took the invoice — or why
+   nobody did.
+
+The three answers that account for nearly every "missing" row, all visible in (3):
+
+- the invoice went to a **bigger debtor on the same voucher** (the whole invoice
+  follows the largest party, so a customer can be on a voucher and absent from its
+  own row);
+- the voucher has **no revenue leg** (an adjustment journal), so it counts for nobody
+  in the sales sections — on *both* pages;
+- the income is **not under Sales Accounts**, so it shows in Net + charges and not in
+  Net (P&L).
+
+**The explanation is the fold, not a retelling of it.** `explainVoucher` calls the same
+`attribution()` that `addPartyVoucher` calls, so the reasons cannot disagree with the
+stored figures — `test_yoy_diag_fake.js` folds the same fixture independently and
+checks every party the diagnostic names carries that figure to the rupee.
 
 ### One customer, two names
 

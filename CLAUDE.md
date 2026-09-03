@@ -28,6 +28,7 @@ npm run test:sync              # incremental sync + the delete guards
 npm run test:yoy               # year-on-year fold, its API, the drill-down trees,
                                # and the Sales Analysis sections
 npm run test:meta              # /api/meta coverage windows
+                               # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
 npm run test:alias             # party name-merge suggestions
 npm run test:backfill          # historical (--historical) pushes
@@ -174,3 +175,8 @@ python3 -c "import re;s=open('portal/index.html',encoding='utf-8').read();open('
   `/api/meta` coverage checks.
 - `pipeline/README.md`, `server/README.md` — per-layer detail.
 - `CDC_CHANGELOG.md` — user-visible changes, newest first.
+
+When a figure is questioned, reach for `/diag/?` before theorising: it names the
+ledgers behind one party, what the fold stored, and what it did with every voucher.
+Its reasons come from the fold's own `attribution()`, so they cannot drift from the
+numbers — keep it that way.

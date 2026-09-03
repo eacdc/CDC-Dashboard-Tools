@@ -103,6 +103,15 @@ const V = (branch, date, sales, salary) => ({
   const errors = [];
   // Rows are opened by clicking their name, one level at a time, exactly as the P&L
   // tab's tree behaves -- a line first, then the group inside it.
+  // A drill-down's fetch can resolve just after Close and put the modal straight
+  // back, and the next click then lands on the overlay instead of the table. So
+  // closing means closing, and waiting until it is really gone.
+  const closeDrill = async () => {
+    await page.click('text=Close');
+    await page.waitForFunction(() => ![...document.querySelectorAll('table')]
+      .some((x) => x.tHead && /date/i.test(x.tHead.innerText) && /party/i.test(x.tHead.innerText)),
+      null, { timeout: 8000 });
+  };
   const openRow = async (re) => page.evaluate((src) => {
     const rx = new RegExp(src);
     const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && rx.test(x.cells[0].innerText.trim()));
@@ -176,7 +185,7 @@ const V = (branch, date, sales, salary) => ({
   await page.waitForFunction(() => /\d{2}-\w{3}-\d{4}/.test(document.body.innerText), null, { timeout: 8000 });
   assert(/A Customer/.test(await page.evaluate(() => document.body.innerText)),
     'clicking a customer figure lists that customer vouchers for the year');
-  await page.click('text=Close');
+  await closeDrill();
 
   // The three measures are three different folds, so switching must re-ask.
   const beforeMeas = await page.evaluate(() => performance.getEntriesByType('resource').filter((r) => /yoy\/party/.test(r.name)).length);
@@ -331,7 +340,7 @@ const V = (branch, date, sales, salary) => ({
   assert(vrows.length === 1 && /May-2024/.test(vrows[0]),
     'exactly the one voucher of that year is listed, with its date: ' + JSON.stringify(vrows));
   await page.screenshot({ path: '/tmp/yoy_drill.png' });
-  await page.click('text=Close');
+  await closeDrill();
   await page.waitForFunction(() => !/Looking these up/.test(document.body.innerText), null, { timeout: 5000 });
 
   // A group is not clickable through to vouchers -- it is many accounts, not one.

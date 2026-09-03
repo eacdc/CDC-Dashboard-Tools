@@ -106,6 +106,40 @@ function addParty(S, branch, key, name, fy, mi, amt) {
   const arr = led[fy] || (led[fy] = new Array(12).fill(0));
   arr[mi] += amt;
 }
+// What one voucher contributes, before it is added anywhere: the revenue and purchase
+// legs, and the debtor and creditor the invoice is attributed to. Split out so the
+// diagnostic can EXPLAIN a voucher using the very code that folded it -- an
+// explanation that is a second implementation is worth nothing.
+function attribution(S, ledgers, parties, dropIB) {
+  let nr = 0, np = 0, nrPL = 0, npPL = 0;
+  const revLegs = [], purLegs = [], ibDropped = [];
+  for (const ln in ledgers) {
+    if (dropIB && S.ib[ln]) { ibDropped.push(ln); continue; }
+    const c = catOf(S, ln);
+    if (c === 'revenue') {
+      nr += ledgers[ln];
+      const pl = acctOf(S, ln) === 'sales';
+      if (pl) nrPL += ledgers[ln];
+      revLegs.push({ ledger: ln, amount: ledgers[ln], salesAccount: pl });
+    } else if (c === 'purchase') {
+      np += ledgers[ln];
+      const pl = acctOf(S, ln) === 'purchase';
+      if (pl) npPL += ledgers[ln];
+      purLegs.push({ ledger: ln, amount: ledgers[ln], purchaseAccount: pl });
+    }
+  }
+  let dg = 0, cg = 0, dd = null, dda = 0, dc = null, dca = 0;
+  const debtors = [], creditors = [];
+  for (const pn in parties) {
+    if (dropIB && S.ib[pn]) { ibDropped.push(pn); continue; }
+    const av = Math.abs(parties[pn]);
+    const s = sundryOf(S, pn);
+    if (s === 'debtor') { debtors.push({ party: pn, amount: parties[pn] }); dg += av; if (av > dda) { dda = av; dd = pn; } }
+    else if (s === 'creditor') { creditors.push({ party: pn, amount: parties[pn] }); cg += av; if (av > dca) { dca = av; dc = pn; } }
+  }
+  return { nr, np, nrPL, npPL, dg, cg, dd, dc, revLegs, purLegs, debtors, creditors, ibDropped };
+}
+
 // One voucher's contribution to the party-anchored sections, for one scope (the
 // voucher's own branch, and consolidated). Kept deliberately close to the
 // dashboard's __saBuild: the same dominant-party rule, the same three measures, and
@@ -115,21 +149,8 @@ function addPartyVoucher(S, v, branch, fy, mi) {
   const parties = v.party_ledgers || {};
   for (const scope of [branch, 'all']) {
     const dropIB = scope === 'all';
-    let nr = 0, np = 0, nrPL = 0, npPL = 0;
-    for (const ln in ledgers) {
-      if (dropIB && S.ib[ln]) continue;
-      const c = catOf(S, ln);
-      if (c === 'revenue') { nr += ledgers[ln]; if (acctOf(S, ln) === 'sales') nrPL += ledgers[ln]; }
-      else if (c === 'purchase') { np += ledgers[ln]; if (acctOf(S, ln) === 'purchase') npPL += ledgers[ln]; }
-    }
-    let dg = 0, cg = 0, dd = null, dda = 0, dc = null, dca = 0;
-    for (const pn in parties) {
-      if (dropIB && S.ib[pn]) continue;
-      const av = Math.abs(parties[pn]);
-      const s = sundryOf(S, pn);
-      if (s === 'debtor') { dg += av; if (av > dda) { dda = av; dd = pn; } }
-      else if (s === 'creditor') { cg += av; if (av > dca) { dca = av; dc = pn; } }
-    }
+    const a = attribution(S, ledgers, parties, dropIB);
+    const { nr, np, nrPL, npPL, dg, cg, dd, dc } = a;
     if (nr !== 0 && dd) {
       addParty(S, scope, 'sales|net', dd, fy, mi, Math.abs(nr));
       addParty(S, scope, 'sales|gross', dd, fy, mi, dg);
@@ -439,6 +460,34 @@ function partyTreeFrom(byLedger, xd, fys, section) {
   return { root: s.m, tree: (s.c || []).concat(s.l || []) };
 }
 
+// The group chain the classification actually walked, for the diagnostic to show.
+function chainOf(S, name) { return E.getChain(name, S.xd, S.lu); }
+
+// Why one voucher did or did not reach a party's row. Every number here comes from
+// attribution() -- the same call the fold makes -- so the answer cannot disagree
+// with what was actually stored.
+function explainVoucher(S, v, scope) {
+  const ledgers = canonKeys(S, v.ledgers);
+  const parties = canonKeys(S, v.party_ledgers);
+  const branch = v.branch || v._branch || null;
+  const a = attribution(S, ledgers, parties, scope === 'all');
+  const sale = (a.nr !== 0 && a.dd)
+    ? { attributedTo: a.dd, netpl: a.nrPL !== 0 ? Math.abs(a.nrPL) : 0, net: Math.abs(a.nr), gross: a.dg }
+    : { attributedTo: null, why: a.nr === 0 ? 'no revenue leg on this voucher' : 'no Sundry Debtor among its parties' };
+  const purchase = (a.np !== 0 && a.dc)
+    ? { attributedTo: a.dc, netpl: a.npPL !== 0 ? Math.abs(a.npPL) : 0, net: Math.abs(a.np), gross: a.cg }
+    : { attributedTo: null, why: a.np === 0 ? 'no purchase leg on this voucher' : 'no Sundry Creditor among its parties' };
+  return {
+    date: v.date, no: v.no, type: v.type, branch, party: v.party || null,
+    fy: fyLabel(fyOf(v.date)), month: monthOf(v.date),
+    ledgers, party_ledgers: parties,
+    revenueLegs: a.revLegs, purchaseLegs: a.purLegs,
+    debtors: a.debtors, creditors: a.creditors,
+    interBranchDropped: scope === 'all' ? a.ibDropped : [],
+    sale, purchase,
+  };
+}
+
 function summarise(vouchers, xd, aliases) {
   const S = newSummary(xd, aliases);
   for (const v of vouchers || []) addVoucher(S, v);
@@ -449,5 +498,6 @@ module.exports = {
   newSummary, addVoucher, finalize, summarise,
   detailOf, spliceDetail, treeFrom,
   partyDetailOf, partyTreeFrom, PARTY_SECTIONS, PARTY_MEASURES, PARTY_KEYS,
+  explainVoucher, chainOf, sundryOf, acctOf, catOf,
   fyOf, fyLabel, monthOf, LINES, TREE_LINES,
 };
