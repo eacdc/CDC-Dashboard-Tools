@@ -1,5 +1,24 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.10 (server) — September 2026 — Year on Year groups a customer where the dashboards do
+
+A ledger NAME can exist in both Tally companies under a different group. The
+dashboards settle that with `mergeHierarchies(kolkata, ahmedabad)` — **Kolkata wins,
+Ahmedabad fills the gaps** — but the server built the same table with `Object.assign`,
+which is **last** wins. A shared name was therefore grouped one way on the P&L and
+Sales Analysis pages and another in Year on Year: the customer sat directly under
+SALES · SUNDRY DEBTORS in one view and inside a salesperson's group in the other,
+which reads as a row that is not there at all.
+
+Found with `/diag/`, on `Carbonlite Print & Publishing` — a name both companies carry.
+The server now uses the portal's own `mergeHierarchies`, lifted like `classify` and
+`buildTree`, everywhere it builds that table. It also picks up the default group
+parents the hand-rolled merge never applied.
+
+**Press ↻ Rebuild once after deploying.**
+
+---
+
 ## v2.9 (server) — September 2026 — A page that explains one party's figure
 
 `/diag/` — type part of a customer or supplier name and it says, in plain rows, why

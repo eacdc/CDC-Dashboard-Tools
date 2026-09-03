@@ -43,8 +43,15 @@ const WANTED = [
   // rest -- the year-on-year fold has to merge the same names the P&L tab merges,
   // or a customer shows up whole on one page and split in two on the other.
   { name: '__cdcCanon', re: /^window\.__cdcCanon=function\(xd,vouchers,bills\)\{[\s\S]*?\n\};$/m },
+  // How the two companies' ledger tables become one. FIRST WINS -- Kolkata's answer
+  // for a name that exists in both, Ahmedabad only filling the gaps -- and TPG's
+  // default group parents are applied at the end. Lifted because the server built
+  // the same table by hand with Object.assign, which is LAST wins: a ledger name
+  // living in both companies under different groups then classified one way on the
+  // P&L tab and another in the year-on-year fold.
+  { name: 'mergeHierarchies', re: /^function mergeHierarchies\(h1,h2\)\{[\s\S]*?\n\}$/m },
 ];
-const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree';
+const EXPORTS = 'TPG,PL_CATS,SKIP_ROOTS,CASH_VCH,findIBLedgers,norm,stem,buildLookups,getChain,classify,monthKey,buildTree,mergeHierarchies';
 
 function loadEngine() {
   const html = fs.readFileSync(PORTAL, 'utf8');

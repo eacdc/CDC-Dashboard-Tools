@@ -11,6 +11,7 @@ const { getDb, close } = require('./db');
 const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = require('./ingest');
 const { suggestAliases, newProfiles, addVoucher, finalizeProfiles } = require('./aliasSuggest');
 const yoy = require('./yoySummary');
+const E = require('./plEngine');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -483,6 +484,18 @@ function yoyRunning() {
 
 // fys: null = every year; otherwise only those FY labels, and only those are replaced
 // in the stored summary. The daily sync touches one year, so it costs one year.
+// The two companies' ledger tables as ONE, exactly as the dashboards merge them:
+// the portal's own mergeHierarchies, Kolkata first. Built by hand here once, with
+// Object.assign -- which is last-wins -- so a ledger NAME living in both companies
+// under different groups was classified one way on the P&L tab and another in the
+// year-on-year fold. A customer then sat directly under Sundry Debtors in one view
+// and inside a salesperson's group in the other, which reads as a missing row.
+async function mergedHierarchy(db) {
+  const empty = { ledgers: {}, groups: {}, ids: {} };
+  const of = async (b) => readMaster(await db.collection('masters').findOne({ branch: b })) || empty;
+  return E.mergeHierarchies(await of('kol'), await of('ahm'));
+}
+
 // The shared name-merge map, as the dashboards read it. Chains are already
 // flattened by the editor that writes it, so one lookup is enough.
 async function readAliasMap(db) {
@@ -532,17 +545,7 @@ async function readPartyChunks(db, key) {
 
 async function runYoySummary(fys) {
   const db = await getDb();
-  // `ids` (ledger name -> Tally GUID) is carried too: the name-merge resolves a
-  // renamed party by GUID first, and only falls back to the alias map for an old
-  // name the master no longer holds.
-  const xd = { ledgers: {}, groups: {}, ids: {} };
-  for (const b of ['kol', 'ahm']) {
-    const m = readMaster(await db.collection('masters').findOne({ branch: b }));
-    if (!m) continue;
-    Object.assign(xd.ledgers, m.ledgers || {});
-    Object.assign(xd.groups, m.groups || {});
-    for (const k of Object.keys(m.ids || {})) if (!xd.ids[k]) xd.ids[k] = m.ids[k];
-  }
+  const xd = await mergedHierarchy(db);
   const aliases = await readAliasMap(db);
   const q = {};
   if (fys && fys.length) {
@@ -679,13 +682,7 @@ app.get('/api/yoy/tree', async (req, res) => {
     const ck = branch + '|' + line + '|' + stamp;
     if (treeCache.has(ck)) return res.json(treeCache.get(ck));
 
-    const xd = { ledgers: {}, groups: {} };
-    for (const b of ['kol', 'ahm']) {
-      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
-      if (!m) continue;
-      Object.assign(xd.ledgers, m.ledgers || {});
-      Object.assign(xd.groups, m.groups || {});
-    }
+    const xd = await mergedHierarchy(db);
     const want = branch === 'all' ? ['kol', 'ahm'] : [branch];
     const parts = [];
     for (const b of want) {
@@ -725,13 +722,7 @@ app.get('/api/yoy/party', async (req, res) => {
     const ck = 'party|' + branch + '|' + section + '|' + measure + '|' + stamp;
     if (treeCache.has(ck)) return res.json(treeCache.get(ck));
 
-    const xd = { ledgers: {}, groups: {} };
-    for (const b of ['kol', 'ahm']) {
-      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
-      if (!m) continue;
-      Object.assign(xd.ledgers, m.ledgers || {});
-      Object.assign(xd.groups, m.groups || {});
-    }
+    const xd = await mergedHierarchy(db);
     const built = yoy.partyTreeFrom(await readPartyChunks(db, branch + '|' + section + '|' + measure), xd, fys, section);
     const out = { fys, branch, section, measure, root: built.root, tree: built.tree, updatedAt: summary.updatedAt || null };
     treeCache.clear();               // one section at a time; the trees are large
@@ -759,14 +750,7 @@ app.get('/api/yoy/diag', async (req, res) => {
     const fy = /^\d{4}-\d{2}$/.test(String(req.query.fy || '')) ? String(req.query.fy) : null;
     const db = await getDb();
 
-    const xd = { ledgers: {}, groups: {}, ids: {} };
-    for (const b of ['kol', 'ahm']) {
-      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
-      if (!m) continue;
-      Object.assign(xd.ledgers, m.ledgers || {});
-      Object.assign(xd.groups, m.groups || {});
-      for (const k of Object.keys(m.ids || {})) if (!xd.ids[k]) xd.ids[k] = m.ids[k];
-    }
+    const xd = await mergedHierarchy(db);
     const aliases = await readAliasMap(db);
     const S = yoy.newSummary(xd, aliases);
 
