@@ -220,6 +220,7 @@ drifting the numbers apart. `npm run test:yoy` then runs the same vouchers throu
 | `POST /api/yoy/scan[?fy=2019-20]` | rebuild everything, or only those years |
 | `GET /api/yoy/tree?branch=&line=` | the accounts under one line, every year at once |
 | `GET /api/yoy/vouchers?branch=&ledger=&from=&to=` | the vouchers behind one account |
+| `GET /api/yoy/party?branch=&section=&measure=` | the Sales Analysis sections, every year at once |
 
 The whole payload, month detail included, is one small request — so opening a year
 costs nothing. Rebuilds run in the background (Render's proxy will not wait for a
@@ -261,6 +262,42 @@ every year, the accounts in the tree sum back to the line's own total — which
 `test_yoy_fake.js` has already matched against the browser. A ledger dropped for
 landing in no group, a year read at the wrong offset, or consolidated forgetting to
 eliminate the branch account all surface as a mismatch there.
+
+### The Sales Analysis tab, year on year
+
+The panel opens on **Sales Analysis**, not the P&L — the office reads a year by
+customer before it reads it by income account. It is the Sales Analysis page's own two
+sections, over every financial year at once:
+
+- **SALES · SUNDRY DEBTORS** — each sale attributed to the **largest Sundry Debtor on
+  the voucher**, nested under that party's Tally groups, so it opens salesperson →
+  company → party.
+- **PURCHASES · SUNDRY CREDITORS** — the same for purchases, on the creditor side.
+
+and the same three measures, which are three different folds of the same invoices:
+
+| | |
+|---|---|
+| `netpl` | the **Sales/Purchase Accounts** legs only — ties to the P&L's Sales line |
+| `net` | every revenue/purchase leg, so shipping, freight and other incomes count |
+| `gross` | the party's own leg — the full invoice, GST included |
+
+**Consolidated is not the sum of the two branches here.** Dropping the inter-branch
+ledgers changes *which party is dominant* on a voucher, and the dominant party is who
+the whole invoice is attributed to — so `all` is accumulated in its own pass rather
+than merged afterwards. The dashboard makes the same distinction: its branch filter
+clears `ibLedgers` when one branch is shown alone.
+
+Storage follows `yoy_detail`, one level wider: `yoy_party` holds
+`branch|section|measure` as a **run of chunk documents** (`…#0`, `…#1`, 1500 parties
+each), because every customer and every supplier × three measures × a decade would run
+at Mongo's 16MB ceiling in one document. The chunks are read back as one map, spliced
+per year exactly as the line detail is, and the tail of a run that shrank is deleted.
+
+`test_yoy_party_fake.js` pins the claim that matters: the same vouchers through the
+browser's `processData` in Chromium and through `yoySummary.js`, comparing **every
+party, measure, branch and year** — including the dominant-party switch that
+consolidation causes.
 
 Two things the drill-down does NOT do, both on purpose: a **group** row offers no
 voucher list (it is many accounts, not one), and a long list is **capped** at 500 with

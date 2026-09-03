@@ -479,6 +479,34 @@ function yoyRunning() {
 
 // fys: null = every year; otherwise only those FY labels, and only those are replaced
 // in the stored summary. The daily sync touches one year, so it costs one year.
+// The party-anchored detail is far larger than the line detail -- every customer and
+// every supplier, three measures each -- so one document per branch/section/measure
+// would run at Mongo's 16MB ceiling on a decade of history. Each is stored as a run
+// of chunk documents instead, `<key>#0`, `<key>#1`, ..., and read back as one map.
+const PARTY_CHUNK = 1500;               // parties per document
+
+async function writePartyChunks(db, key, ledgers, updatedAt) {
+  const names = Object.keys(ledgers);
+  const coll = db.collection('yoy_party');
+  let i = 0, part = 0;
+  do {
+    const slice = {};
+    for (const name of names.slice(i, i + PARTY_CHUNK)) slice[name] = ledgers[name];
+    await coll.updateOne({ _id: key + '#' + part },
+      { $set: { key, part, ledgers: slice, updatedAt } }, { upsert: true });
+    i += PARTY_CHUNK; part++;
+  } while (i < names.length);
+  // A rebuild that shrank this section must not leave the tail of the old run behind.
+  await coll.deleteMany({ key, part: { $gte: part } });
+}
+
+async function readPartyChunks(db, key) {
+  const out = {};
+  const docs = await db.collection('yoy_party').find({ key }).sort({ part: 1 }).toArray();
+  for (const d of docs) Object.assign(out, d.ledgers || {});
+  return out;
+}
+
 async function runYoySummary(fys) {
   const db = await getDb();
   const xd = { ledgers: {}, groups: {} };
@@ -540,6 +568,15 @@ async function runYoySummary(fys) {
     }
     await db.collection('yoy_detail').updateOne({ _id: key },
       { $set: { ledgers, updatedAt } }, { upsert: true });
+  }
+
+  // The same again for the party-anchored sections, spliced the same way so a
+  // one-year rebuild leaves the other ten years of every customer untouched.
+  const fresh3 = yoy.partyDetailOf(S);
+  for (const key of Object.keys(fresh3)) {
+    let ledgers = fresh3[key];
+    if (fys && fys.length) ledgers = yoy.spliceDetail(await readPartyChunks(db, key), ledgers, fys);
+    await writePartyChunks(db, key, ledgers, updatedAt);
   }
   treeCache.clear();
 }
@@ -629,6 +666,47 @@ app.get('/api/yoy/tree', async (req, res) => {
     }
     const out = { fys, line, branch, tree: yoy.treeFrom(parts, xd, fys), updatedAt: summary.updatedAt || null };
     treeCache.clear();               // one line at a time; the trees are large
+    treeCache.set(ck, out);
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/yoy/party?branch=all|kol|ahm&section=sales|purchase&measure=netpl|net|gross
+// The Sales Analysis page's own tree, year on year: every sale attributed to its
+// Sundry-Debtor party (every purchase to its Sundry-Creditor one) and nested by that
+// party's Tally groups, so it opens salesperson -> company -> party.
+//
+// `root` carries the section's own months, so the header total comes from the same
+// fold the rows do rather than being re-added in the browser.
+app.get('/api/yoy/party', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const section = String(req.query.section || 'sales');
+    const measure = String(req.query.measure || 'netpl');
+    if (!yoy.PARTY_SECTIONS[section]) {
+      return res.status(400).json({ ok: false, error: `unknown section "${section}"; expected one of ${Object.keys(yoy.PARTY_SECTIONS).join(', ')}` });
+    }
+    if (!yoy.PARTY_MEASURES.includes(measure)) {
+      return res.status(400).json({ ok: false, error: `unknown measure "${measure}"; expected one of ${yoy.PARTY_MEASURES.join(', ')}` });
+    }
+    const db = await getDb();
+    const summary = await db.collection('yoy_summary').findOne({ _id: 'summary' }, { projection: { fys: 1, updatedAt: 1 } });
+    const fys = (summary && summary.fys) || [];
+    if (!fys.length) return res.json({ fys: [], root: {}, tree: [], updatedAt: null });
+    const stamp = summary.updatedAt ? new Date(summary.updatedAt).getTime() : 0;
+    const ck = 'party|' + branch + '|' + section + '|' + measure + '|' + stamp;
+    if (treeCache.has(ck)) return res.json(treeCache.get(ck));
+
+    const xd = { ledgers: {}, groups: {} };
+    for (const b of ['kol', 'ahm']) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: b }));
+      if (!m) continue;
+      Object.assign(xd.ledgers, m.ledgers || {});
+      Object.assign(xd.groups, m.groups || {});
+    }
+    const built = yoy.partyTreeFrom(await readPartyChunks(db, branch + '|' + section + '|' + measure), xd, fys, section);
+    const out = { fys, branch, section, measure, root: built.root, tree: built.tree, updatedAt: summary.updatedAt || null };
+    treeCache.clear();               // one section at a time; the trees are large
     treeCache.set(ck, out);
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }

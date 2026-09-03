@@ -25,7 +25,8 @@ All from `server/`:
 npm start                      # http://localhost:3000 (needs MONGODB_URI in .env)
 
 npm run test:sync              # incremental sync + the delete guards
-npm run test:yoy               # year-on-year fold, its API, the drill-down trees
+npm run test:yoy               # year-on-year fold, its API, the drill-down trees,
+                               # and the Sales Analysis sections
 npm run test:meta              # /api/meta coverage windows
 npm run test:reset             # /admin/reset scoping
 npm run test:alias             # party name-merge suggestions
@@ -106,7 +107,7 @@ and refilled days later.
 ## Year-on-year: what is stored vs what is computed
 
 The landing page shows every financial year before anything is loaded, because a decade
-of vouchers cannot travel to a browser. Two documents back it:
+of vouchers cannot travel to a browser. Three collections back it:
 
 - `yoy_summary` — one small doc: six lines × 12 months × FY × branch (`all`/`kol`/`ahm`),
   where `all` drops inter-branch ledgers. Sent whole, so opening a year costs no request.
@@ -114,6 +115,12 @@ of vouchers cannot travel to a browser. Two documents back it:
   Trees are **not** stored: a one-year rebuild must leave the other ten alone, and years
   splice in and out of that shape where a nested tree cannot. `GET /api/yoy/tree` builds
   the tree on demand (portal's own `buildTree`) and caches it until the next rebuild.
+- `yoy_party` — the Sales Analysis sections (sale → its largest Sundry Debtor, purchase
+  → its largest Sundry Creditor), keyed `branch|section|measure` and split into chunk
+  docs `…#0`, `…#1` of 1500 parties: every customer × three measures × a decade does
+  not fit one document. Consolidated is accumulated in its own pass, not merged from
+  the branches — dropping the inter-branch ledgers changes which party is dominant,
+  and the dominant party takes the whole invoice.
 
 Rebuilds run in the background (Render's proxy will not wait) and coalesce. `/ingest`
 and `/sync` refresh only the FYs their payload touched — endpoints *and* the years

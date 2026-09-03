@@ -95,6 +95,14 @@ const V = (branch, date, sales, salary) => ({
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = [];
+  // Rows are opened by clicking their name, one level at a time, exactly as the P&L
+  // tab's tree behaves -- a line first, then the group inside it.
+  const openRow = async (re) => page.evaluate((src) => {
+    const rx = new RegExp(src);
+    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && rx.test(x.cells[0].innerText.trim()));
+    if (!r) throw new Error('no row matching ' + src);
+    r.cells[0].click();
+  }, re);
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|favicon|file:\/\/\/api\//.test(m.text())) errors.push(m.text()); });
   const reactJs = fsx.readFileSync(path.join(__dirname, 'node_modules/react/umd/react.production.min.js'), 'utf8');
@@ -122,7 +130,57 @@ const V = (branch, date, sales, salary) => ({
 
   await page.click('text=Rebuild');
   await page.waitForFunction(() => /2024-25/.test(document.body.innerText), null, { timeout: 20000 });
+
+  // ---- the Sales Analysis tab, which is where the panel opens ----------------
+  // The office reads the year by customer before it reads it by income account, so
+  // this is the default view, and its sections are party-anchored: the sale is
+  // attributed to the debtor it was invoiced to, not to the ledger it was posted to.
   let txt = await page.evaluate(() => document.body.innerText);
+  assert(/SALES . SUNDRY DEBTORS/.test(txt), 'the panel opens on the Sales Analysis tab');
+  assert(/PURCHASES . SUNDRY CREDITORS/.test(txt), 'with the purchase section under it');
+  const plRows = await page.evaluate(() => [...document.querySelectorAll('tbody tr')]
+    .some((r) => r.cells[0] && /^.?\s*(Gross Profit|Net Profit)$/.test(r.cells[0].innerText.trim())));
+  assert(!plRows, 'and the P&L lines are not mixed into it');
+  await page.waitForFunction(() => /10\.00 L/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'the sales section carries its own total without being expanded');
+
+  // The sales section starts open -- the customers are the point of the tab, not
+  // something to go looking for -- and the parties hang off it by their Tally groups.
+  await page.waitForFunction(() => /A Customer/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'the customers are listed without anything being clicked');
+  await openRow('SALES . SUNDRY DEBTORS');
+  await page.waitForFunction(() => !/A Customer/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(true, 'and the section closes again on its own click');
+  await openRow('SALES . SUNDRY DEBTORS');
+  await page.waitForFunction(() => /A Customer/.test(document.body.innerText), null, { timeout: 8000 });
+  const saCmp = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('tr')];
+    const pick = (re) => rows.find((r) => r.cells[0] && re.test(r.cells[0].innerText.trim()));
+    const num = (r) => r.cells[1].innerText.split('\n')[0];
+    return { section: num(pick(/SALES . SUNDRY DEBTORS/)), party: num(pick(/A Customer/)) };
+  });
+  assert(saCmp.section === saCmp.party,
+    'the only customer carries the whole section: ' + saCmp.section + ' vs ' + saCmp.party);
+
+  // A party is a leaf, so its figures open the vouchers behind them.
+  await page.evaluate(() => {
+    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /A Customer/.test(x.cells[0].innerText));
+    r.cells[1].click();
+  });
+  await page.waitForFunction(() => /\d{2}-\w{3}-\d{4}/.test(document.body.innerText), null, { timeout: 8000 });
+  assert(/A Customer/.test(await page.evaluate(() => document.body.innerText)),
+    'clicking a customer figure lists that customer vouchers for the year');
+  await page.click('text=Close');
+
+  // The three measures are three different folds, so switching must re-ask.
+  const beforeMeas = await page.evaluate(() => performance.getEntriesByType('resource').filter((r) => /yoy\/party/.test(r.name)).length);
+  await page.click('span:text-is("Gross")');
+  await page.waitForFunction((n) => performance.getEntriesByType('resource').filter((r) => /yoy\/party/.test(r.name)).length > n, beforeMeas, { timeout: 8000 });
+  assert(true, 'switching to Gross asks the server for that measure rather than reusing Net');
+
+  await page.click('span:text-is("P&L")');
+  await page.waitForFunction(() => /Gross Profit/.test(document.body.innerText), null, { timeout: 8000 });
+  txt = await page.evaluate(() => document.body.innerText);
   assert(/2024-25/.test(txt) && /2025-26/.test(txt), 'both financial years become columns');
   assert(/Revenue/.test(txt) && /Gross Profit/.test(txt) && /Net Profit/.test(txt), 'the P&L lines are the rows');
   assert(/10\.00 L/.test(txt), 'FY 2024-25 revenue shows as 10.00 L');
@@ -208,13 +266,6 @@ const V = (branch, date, sales, salary) => ({
   await page.waitForFunction(() => /10\.00 L/.test(document.body.innerText), null, { timeout: 5000 });
   // Rows are opened by clicking their name, one level at a time, exactly as the P&L
   // tab's tree behaves -- a line first, then the group inside it.
-  const openRow = async (re) => page.evaluate((src) => {
-    const rx = new RegExp(src);
-    const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && rx.test(x.cells[0].innerText.trim()));
-    if (!r) throw new Error('no row matching ' + src);
-    r.cells[0].click();
-  }, re);
-
   await openRow('^.?\\s*Revenue$');
   await page.waitForFunction(() => /Sales Accounts/.test(document.body.innerText), null, { timeout: 8000 });
   assert(true, 'opening Revenue shows the Tally group under it');
@@ -259,7 +310,7 @@ const V = (branch, date, sales, salary) => ({
     const r = [...document.querySelectorAll('tr')].find((x) => x.cells[0] && /Sales A\/c/.test(x.cells[0].innerText));
     r.cells[1].click();
   });
-  await page.waitForFunction(() => /vouchers/.test(document.body.innerText), null, { timeout: 8000 });
+  await page.waitForFunction(() => /\d{2}-\w{3}-\d{4}/.test(document.body.innerText), null, { timeout: 8000 });
   txt = await page.evaluate(() => document.body.innerText);
   assert(/Sales A\/c/.test(txt) && /2024-25/.test(txt), 'the voucher list names the account and the year');
   assert(/10\.00 L/.test(txt), 'and its total is the figure that was clicked');
