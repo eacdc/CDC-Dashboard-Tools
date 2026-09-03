@@ -337,7 +337,11 @@ app.post('/api/aliases', async (req, res) => {
     // than no suggestion. Omitted here = leave whatever is stored alone.
     if (Array.isArray(b.dismissed)) set.dismissed = b.dismissed.map(String).slice(0, 5000);
     await db.collection('aliases').updateOne({ _id: 'party' }, { $set: set }, { upsert: true });
-    res.json({ ok: true, updatedAt: updatedAt.toISOString() });
+    // Merging two names changes which party every year's figures belong to, so the
+    // stored summary is now wrong for all of them, not just the current one.
+    // Rebuilt in the background; it coalesces, so saving twice costs one pass.
+    requestYoy(null);
+    res.json({ ok: true, updatedAt: updatedAt.toISOString(), rebuilding: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -479,6 +483,25 @@ function yoyRunning() {
 
 // fys: null = every year; otherwise only those FY labels, and only those are replaced
 // in the stored summary. The daily sync touches one year, so it costs one year.
+// The shared name-merge map, as the dashboards read it. Chains are already
+// flattened by the editor that writes it, so one lookup is enough.
+async function readAliasMap(db) {
+  const doc = await db.collection('aliases').findOne({ _id: 'party' });
+  return (doc && doc.map && typeof doc.map === 'object') ? doc.map : {};
+}
+
+// Every name that now reads as `canonical`: the name itself, plus the old spellings
+// merged into it. The fold stores a party under its canonical name, but the VOUCHERS
+// still carry whatever was typed at the time -- so a drill-down that looked only for
+// the canonical name found nothing for the years booked under the old one.
+function aliasVariants(map, canonical) {
+  const out = [canonical];
+  for (const variant of Object.keys(map || {})) {
+    if (map[variant] === canonical && variant !== canonical) out.push(variant);
+  }
+  return out;
+}
+
 // The party-anchored detail is far larger than the line detail -- every customer and
 // every supplier, three measures each -- so one document per branch/section/measure
 // would run at Mongo's 16MB ceiling on a decade of history. Each is stored as a run
@@ -509,20 +532,25 @@ async function readPartyChunks(db, key) {
 
 async function runYoySummary(fys) {
   const db = await getDb();
-  const xd = { ledgers: {}, groups: {} };
+  // `ids` (ledger name -> Tally GUID) is carried too: the name-merge resolves a
+  // renamed party by GUID first, and only falls back to the alias map for an old
+  // name the master no longer holds.
+  const xd = { ledgers: {}, groups: {}, ids: {} };
   for (const b of ['kol', 'ahm']) {
     const m = readMaster(await db.collection('masters').findOne({ branch: b }));
     if (!m) continue;
     Object.assign(xd.ledgers, m.ledgers || {});
     Object.assign(xd.groups, m.groups || {});
+    for (const k of Object.keys(m.ids || {})) if (!xd.ids[k]) xd.ids[k] = m.ids[k];
   }
+  const aliases = await readAliasMap(db);
   const q = {};
   if (fys && fys.length) {
     // FY labels -> the date window they span, so Mongo filters instead of us.
     const years = fys.map((f) => parseInt(String(f).slice(0, 4), 10)).filter((y) => y > 1900);
     if (years.length) q.date = { $gte: Math.min(...years) + '0401', $lte: (Math.max(...years) + 1) + '0331' };
   }
-  const S = yoy.newSummary(xd);
+  const S = yoy.newSummary(xd, aliases);
   let n = 0;
   const cursor = db.collection('vouchers')
     .find(q, { projection: { _id: 0, branch: 1, date: 1, type: 1, ledgers: 1, party_ledgers: 1 } })
@@ -733,13 +761,14 @@ app.get('/api/yoy/vouchers', async (req, res) => {
     const match = { date: { $gte: from, $lte: to } };
     if (branch !== 'all') match.branch = branch;
     const db = await getDb();
+    const names = aliasVariants(await readAliasMap(db), ledger);
     const rows = await db.collection('vouchers').aggregate([
       { $match: match },
       { $addFields: { _k: { $concatArrays: [
         { $map: { input: { $objectToArray: { $ifNull: ['$ledgers', {}] } }, in: '$$this.k' } },
         { $map: { input: { $objectToArray: { $ifNull: ['$party_ledgers', {}] } }, in: '$$this.k' } },
       ] } } },
-      { $match: { _k: ledger } },
+      { $match: { _k: { $in: names } } },
       { $sort: { date: 1 } },
       { $limit: limit + 1 },
       { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, narration: 1, guid: 1, ledgers: 1, party_ledgers: 1 } },
@@ -750,12 +779,15 @@ app.get('/api/yoy/vouchers', async (req, res) => {
     // The amount this account carries on each voucher -- what the drill-down column
     // shows, so the caller does not have to know which side it was booked on.
     for (const r of rows) {
-      const a = (r.ledgers && r.ledgers[ledger]) || 0;
-      const b = (r.party_ledgers && r.party_ledgers[ledger]) || 0;
-      r.amount = Math.round((a + b) * 100) / 100;
+      let amt = 0;
+      for (const n of names) {
+        amt += (r.ledgers && r.ledgers[n]) || 0;
+        amt += (r.party_ledgers && r.party_ledgers[n]) || 0;
+      }
+      r.amount = Math.round(amt * 100) / 100;
       delete r.ledgers; delete r.party_ledgers;
     }
-    res.json({ ledger, branch, from, to, count: rows.length, truncated, vouchers: rows });
+    res.json({ ledger, branch, from, to, names, count: rows.length, truncated, vouchers: rows });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

@@ -65,7 +65,7 @@ panel — none of which exist in its "sources". Running it would silently delete
 Edit `portal/index.html` directly.
 
 **The server does not re-implement the dashboard's accounting.** `server/plEngine.js`
-lifts `classify`, `getChain`, `monthKey`, `buildTree`, `CASH_VCH`, `PL_CATS` etc. out
+lifts `classify`, `getChain`, `monthKey`, `buildTree`, `__cdcCanon`, `CASH_VCH`, `PL_CATS` etc. out
 of `portal/index.html` **by regex** and runs them in `vm`. Renaming or reshaping one of
 those functions in the portal throws a named error at server startup — that is
 deliberate, and the fix is to update `WANTED` in `plEngine.js`, never to copy the logic.
@@ -121,6 +121,13 @@ of vouchers cannot travel to a browser. Three collections back it:
   not fit one document. Consolidated is accumulated in its own pass, not merged from
   the branches — dropping the inter-branch ledgers changes which party is dominant,
   and the dominant party takes the whole invoice.
+
+**A party's name is merged before it is folded.** One customer under two spellings is
+one row: the fold runs every voucher's ledger names through the portal's own
+`__cdcCanon` (GUID first, then the shared `/api/aliases` map). Skipping that put the
+customer whole on the P&L tab and split in two in the year-on-year panel. Saving the
+merge map rebuilds every year, and `/api/yoy/vouchers` looks up every spelling merged
+into a name, because the vouchers keep whatever was typed at the time.
 
 Rebuilds run in the background (Render's proxy will not wait) and coalesce. `/ingest`
 and `/sync` refresh only the FYs their payload touched — endpoints *and* the years

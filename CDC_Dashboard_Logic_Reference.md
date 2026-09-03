@@ -263,6 +263,32 @@ every year, the accounts in the tree sum back to the line's own total — which
 landing in no group, a year read at the wrong offset, or consolidated forgetting to
 eliminate the branch account all surface as a mismatch there.
 
+### One customer, two names
+
+A party renamed in Tally — or simply entered twice under two spellings — is one
+customer, and the dashboards merge it before adding anything up: `__cdcCanon` resolves
+a ledger by its **GUID**, with the shared alias map (`/api/aliases`, the `🔗 Merge
+names` editor) bridging an old name the master no longer holds.
+
+**The year-on-year fold applies the same merge**, using the same lifted function
+(`plEngine` takes `__cdcCanon` out of the portal alongside `classify` and `buildTree`).
+It did not, once, and the result was a customer whole on the Sales Analysis page and
+split across two rows in the year-on-year panel — with the name that lost the merge
+showing on one page and missing from the other. That is what
+`test_yoy_party_fake.js` now pins: a customer invoiced under the old name in one year
+and the current one in the next has to be a single row, matching the browser.
+
+Two consequences worth knowing:
+
+- **Saving the merge map rebuilds every year.** Merging two names changes which party
+  each year's figures belong to, so `POST /api/aliases` triggers a full background
+  rebuild rather than leaving a decade of stored figures keyed on the old split.
+- **The drill-down looks up every spelling.** The fold stores a party under its
+  current name, but the vouchers keep whatever was typed at the time, so
+  `/api/yoy/vouchers` matches the canonical name **and every variant merged into it**
+  (`aliasVariants`). Without that, a merged customer's row was there and clicking it
+  came back empty for the years booked under the old name.
+
 ### The Sales Analysis tab, year on year
 
 The panel opens on **Sales Analysis**, not the P&L — the office reads a year by

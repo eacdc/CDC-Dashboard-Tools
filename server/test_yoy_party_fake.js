@@ -33,6 +33,9 @@ const xd = {
     'Modern Herbo': 'Ratna Sagar Group', 'Gleebuds': 'Ratna Sagar Group',
     'Hi Scan Pvt. Ltd. - Unit I': 'Export - S/Dr',
     'A.B. Traders': 'Pintu Ghosh',                 // a dotted name, as Tally has
+    // The same customer, entered twice. Only the second name survives in the master;
+    // the merge map bridges the first, which is how the office fixes this in the UI.
+    'Carbonlite Print & Publishing (AHD)': 'Export - S/Dr',
     'Paper Supplier': 'Sundry Creditors', 'Ink Supplier': 'Sundry Creditors',
     'HDFC Current': 'Bank Accounts',
     'CDC Ahmedabad': 'Branch / Divisions',
@@ -50,7 +53,10 @@ const xd = {
     'Current Assets': 'Capital Account', 'Current Liabilities': 'Capital Account',
     'Revenue Account': null, 'Capital Account': null,
   },
+  ids: { 'Carbonlite Print & Publishing (AHD)': 'guid-carbon' },
 };
+// variant -> current name, exactly the shape /api/aliases stores.
+const aliases = { 'Carbonlite Print & Publishing': 'Carbonlite Print & Publishing (AHD)' };
 
 let n = 0;
 const mk = (branch, date, type, ledgers, party_ledgers) =>
@@ -85,13 +91,27 @@ const vouchers = [
   mk('kol', '20250612', 'Sales', { 'Export Sales': 33000 }, { 'A.B. Traders': -33000 }),
   mk('kol', '20250815', 'Purchase', { 'Paper Purchase': -75000 }, { 'Paper Supplier': 75000 }),
   mk('ahm', '20250910', 'Sales', { 'Export Sales': 90000 }, { 'Hi Scan Pvt. Ltd. - Unit I': -90000 }),
+  // The merged customer, invoiced under the OLD name in one year and the CURRENT
+  // one in the next. Both have to land on one row, or the year-on-year growth for
+  // this customer is nonsense.
+  mk('kol', '20241118', 'Sales', { 'Export Sales': 51100 }, { 'Carbonlite Print & Publishing': -51100 }),
+  mk('kol', '20250715', 'Sales', { 'Export Sales': 40010 }, { 'Carbonlite Print & Publishing (AHD)': -40010 }),
 ];
 
-const S = yoy.newSummary(xd);
+const S = yoy.newSummary(xd, aliases);
 for (const v of vouchers) yoy.addVoucher(S, v);
 const summary = yoy.finalize(S);
 const party = yoy.partyDetailOf(S);
 const fys = summary.fys;
+
+function leaves(nodes, out) {
+  out = out || [];
+  for (const nd of nodes || []) {
+    if (nd.t === 'l') out.push(nd.n);
+    leaves(nd.c, out); leaves(nd.l, out);
+  }
+  return out;
+}
 
 (async () => {
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
@@ -118,8 +138,12 @@ const fys = summary.fys;
 
   // The Sales Analysis nodes the tab itself would draw, for one branch and one year.
   async function browserFY(branch, fyStart) {
-    return page.evaluate(({ vouchers, xd, branch, fyStart }) => {
-      const upto = vouchers.filter((v) => v.date < String(fyStart + 1) + '0401');
+    return page.evaluate(({ vouchers, xd, branch, fyStart, aliases }) => {
+      // The dashboards canonicalise every voucher before anything is added up. It
+      // mutates in place, so each call gets its own copy.
+      const upto = JSON.parse(JSON.stringify(vouchers.filter((v) => v.date < String(fyStart + 1) + '0401')));
+      window.__cdcAliases = aliases;
+      window.__cdcCanon(xd, upto, null);
       const last = upto.map((v) => v.date).sort().pop();
       const lastFY = (+last.slice(4, 6) >= 4) ? +last.slice(0, 4) : +last.slice(0, 4) - 1;
       const ib = window.findIBLedgers(xd);
@@ -141,7 +165,7 @@ const fys = summary.fys;
         salesRoot: sa.salesNetPL ? sa.salesNetPL.monthly : null,
         topNames: (sa.salesNetPL ? (sa.salesNetPL.children || []).map((c) => c.name) : []),
       };
-    }, { vouchers, xd, branch, fyStart });
+    }, { vouchers, xd, branch, fyStart, aliases });
   }
 
   const same = (a, b) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) < 0.005);
@@ -200,6 +224,23 @@ const fys = summary.fys;
   });
   assert(!treeWorst, 'each year of the tree adds up to the section header' + (treeWorst ? ' -- ' + treeWorst : ''));
 
+  // ---- a party merged under two names is ONE row ----------------------------
+  // The bug this guards: the dashboards merged the two spellings and the fold did
+  // not, so the customer was whole on the Sales Analysis page and split in two here
+  // -- and searching the name that lost found nothing on one page while the other
+  // still listed it.
+  const carbon = 'Carbonlite Print & Publishing (AHD)';
+  const merged = party['kol|sales|netpl'][carbon] || {};
+  assert(!party['kol|sales|netpl']['Carbonlite Print & Publishing'],
+    'the old spelling is gone from the fold -- it is not a party of its own');
+  assert(merged['2024-25'] && merged['2024-25'][7] === 51100,
+    'the invoice raised under the old name counts for the merged customer');
+  assert(merged['2025-26'] && merged['2025-26'][3] === 40010,
+    'and so does the one raised under the current name, a year later');
+  const carbonLeaves = leaves(yoy.partyTreeFrom(party['kol|sales|netpl'], xd, fys, 'sales').tree);
+  assert(carbonLeaves.filter((x) => /Carbonlite/.test(x)).length === 1,
+    'the tree shows the customer once, not once per spelling: ' + JSON.stringify(carbonLeaves.filter((x) => /Carbonlite/.test(x))));
+
   // ---- a journal with no debtor stays out ----------------------------------
   assert(!party['kol|sales|net']['Salary'] && !party['kol|sales|net']['HDFC Current'],
     'a salary journal reaches neither section -- these are party-anchored, not P&L lines');
@@ -212,7 +253,7 @@ const fys = summary.fys;
     'the sale settled against the other branch still lands on its debtor, consolidated or not');
 
   // ---- a one-year rebuild leaves the other year alone -----------------------
-  const S2 = yoy.newSummary(xd);
+  const S2 = yoy.newSummary(xd, aliases);
   for (const v of vouchers) if (v.date >= '20250401') yoy.addVoucher(S2, v);
   const p2 = yoy.partyDetailOf(S2);
   const spliced = yoy.spliceDetail(party['kol|sales|netpl'], p2['kol|sales|netpl'], ['2025-26']);

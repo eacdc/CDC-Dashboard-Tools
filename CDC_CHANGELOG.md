@@ -1,5 +1,29 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.8 (server) — September 2026 — Year on Year now honours the party name-merge
+
+A customer entered in Tally under two names — say `Carbonlite Print & Publishing` and
+`Carbonlite Print & Publishing (AHD)` — is merged into one by the `🔗 Merge names`
+map, and the date-range dashboards have always applied that merge before adding
+anything up. **The year-on-year panel did not**, so the same customer appeared whole
+on one page and split in two on the other: searching the merged-away name found
+nothing by date range while Year on Year still listed it, and per-customer figures
+disagreed by a few percent.
+
+The fold now applies the same merge, using the dashboard's own `__cdcCanon` lifted
+into the server (GUID first, alias map for an old name the master no longer holds).
+Alongside it:
+
+- **Saving the merge map rebuilds every year** — merging two names changes which party
+  each year's figures belong to.
+- **The drill-down finds every spelling** — vouchers keep the name typed at the time,
+  so a merged customer's voucher list now covers the old names too.
+
+Totals were never wrong; the money sat under the wrong customer. **Press ↻ Rebuild
+once after deploying.**
+
+---
+
 ## v2.7 (portal) — September 2026 — Year on Year opens on Sales Analysis
 
 The year-on-year panel now leads with the **Sales Analysis** view instead of the P&L:
