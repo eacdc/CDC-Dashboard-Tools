@@ -1,5 +1,26 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.13 (server) — September 2026 — Measure whether the bills upload is still needed
+
+Fair question after the last fix: if the pipeline pulls everything automatically, why
+is anyone exporting a Bills Receivable file from Tally at all? It has pulled bill-wise
+allocations with every voucher since August 2026, so the outstanding figure could come
+from the vouchers alone — no upload, nothing to go stale, no gap between a snapshot and
+a date range.
+
+`/diag/bills.html` measures it rather than assuming it. Two counts: how far back the
+vouchers carry allocations, month by month per branch; and every bill the uploaded
+files still show **open**, matched by reference against the vouchers — found, not
+found, and what the unfound ones are worth, with the first 25 named. The verdict is
+stated in words at the top. Zero unfound bills and the upload can be retired; anything
+else says exactly what dropping it would cost and which years to re-pull first.
+
+Read-only, and it changes no figure. Also on `/diag/`: a one-click **Copy JSON**, and
+the year picker now opens on "every year" — a missing bill sits precisely in the year
+nobody is looking at.
+
+---
+
 ## v2.12 (server) — September 2026 — /diag names the gap between the bills file and the range
 
 Used in anger on a customer whose two bills were open in Tally and absent here, and it

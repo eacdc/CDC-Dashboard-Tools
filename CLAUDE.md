@@ -182,6 +182,11 @@ python3 -c "import re;s=open('portal/index.html',encoding='utf-8').read();open('
 - `pipeline/README.md`, `server/README.md` — per-layer detail.
 - `CDC_CHANGELOG.md` — user-visible changes, newest first.
 
+`/diag/bills.html` answers the standing question of whether the manual Bills CSV
+upload can be retired now that the pipeline pulls bill-wise allocations
+(`/api/bills/coverage`): it counts the bills the file shows open that no voucher
+carries. Retire the file only when that count is zero.
+
 When a figure is questioned, reach for `/diag/?` before theorising: it names the
 ledgers behind one party, what the fold stored, and what it did with every voucher.
 Its reasons come from the fold's own `attribution()`, so they cannot drift from the

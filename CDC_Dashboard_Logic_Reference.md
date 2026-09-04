@@ -340,6 +340,28 @@ One caveat it also surfaces: bill-wise allocations have only been captured since
 allocations, so its receipts fall back to oldest-bill-first instead of settling the
 bill Tally settled. Re-pulling that year fixes it.
 
+### Can the uploaded bills file be retired?
+
+The Bills CSV exists because the pipeline once pulled vouchers and masters but not
+the bill-wise allocations. It has pulled them since **August 2026**
+(`Collect-BillAllocs`), so outstanding could in principle come from the vouchers
+alone — no upload, nothing to go stale, no gap to open between a snapshot and a date
+range.
+
+Whether it *actually* can is a measurement, not a guess, and dropping the file on a
+guess would silently lose whatever it alone still carries. `GET /api/bills/coverage`
+(page: `/diag/bills.html`) answers it and changes nothing:
+
+- **how far back the vouchers carry allocations**, per branch, month by month — the
+  month the bar starts is the month the allocations begin;
+- **every bill the files still show open, against the vouchers**, matched by
+  reference: how many are found, how many are not, and what the unfound ones are
+  worth — with the first 25 named, so the year to re-pull is obvious.
+
+`verdict.csvStillNeeded` is the answer. Zero unfound bills and the upload can go;
+anything else names the cost of dropping it. Re-pulling the years those bills fall in
+turns the answer over, since a re-pull brings their allocations with it.
+
 ### One customer, two names
 
 A party renamed in Tally — or simply entered twice under two spellings — is one

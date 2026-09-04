@@ -9,9 +9,26 @@
 // The explanation must come from the fold's own attribution(), never a second
 // reading of the rules -- an explanation that can disagree with the figures is worse
 // than none. That is what the last checks here pin.
+// Mongo resolves a dotted path through arrays: {'bills.ref': ...} matches when ANY
+// element's ref matches. The bills queries rely on that.
+function valueAt(doc, path) {
+  if (!path.includes('.')) return doc[path];
+  let cur = [doc];
+  for (const part of path.split('.')) {
+    const next = [];
+    for (const c of cur) {
+      if (c == null) continue;
+      const v = Array.isArray(c) ? undefined : c[part];
+      if (Array.isArray(v)) next.push(...v); else if (v !== undefined) next.push(v);
+      if (Array.isArray(c)) for (const el of c) { const w = el && el[part]; if (w !== undefined) next.push(w); }
+    }
+    cur = next;
+  }
+  return cur.length > 1 ? cur : cur[0];
+}
 function matches(doc, filter) {
   for (const [k, cond] of Object.entries(filter)) {
-    const val = doc[k];
+    const val = valueAt(doc, k);
     if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
@@ -43,9 +60,60 @@ class Col {
       async toArray() { return arr; },
       async *[Symbol.asyncIterator]() { for (const d of arr) yield d; } };
   }
+  // Enough of Mongo's expression language for the pipelines this file exercises:
+  // a path, a substring of one, a size, a comparison, a null default, a condition.
+  static expr(doc, e) {
+    if (e === null || typeof e === 'number' || typeof e === 'boolean') return e;
+    if (typeof e === 'string') {
+      if (e[0] !== '$') return e;
+      return e.slice(1).split('.').reduce((o, k) => (o == null ? undefined : o[k]), doc);
+    }
+    if (Array.isArray(e)) return e.map((x) => Col.expr(doc, x));
+    const op = Object.keys(e)[0], a = e[op];
+    if (op === '$substrBytes') { const [v, st, len] = Col.expr(doc, a); return String(v).substr(st, len); }
+    if (op === '$ifNull') { const [v, d] = a; const r = Col.expr(doc, v); return (r == null) ? Col.expr(doc, d) : r; }
+    if (op === '$size') { const r = Col.expr(doc, a); return Array.isArray(r) ? r.length : 0; }
+    if (op === '$gt') { const [x, y] = Col.expr(doc, a); return x > y; }
+    if (op === '$cond') { const [c, t, f] = a; return Col.expr(doc, c) ? Col.expr(doc, t) : Col.expr(doc, f); }
+    if (op === '$sum') return Col.expr(doc, a);
+    if (op === '$min') return Col.expr(doc, a);
+    if (op === '$map') {
+      const input = Col.expr(doc, a.input) || [];
+      return input.map((it) => Col.expr({ ...doc, $$this: it, this: it },
+        typeof a.in === 'string' ? a.in.replace('$$this', '$this') : a.in));
+    }
+    if (op === '$concatArrays') return Col.expr(doc, a).reduce((x, y) => x.concat(y), []);
+    throw new Error('fake aggregate: unsupported operator ' + op);
+  }
   aggregate(stages) {
     let rows = this.docs.slice();
     for (const st of stages) {
+      if (st.$unwind) {
+        const path = st.$unwind.replace(/^\$/, '');
+        const next = [];
+        for (const d of rows) for (const item of (d[path] || [])) next.push({ ...d, [path]: item });
+        rows = next;
+        continue;
+      }
+      if (st.$group) {
+        const spec = st.$group, byKey = new Map();
+        for (const d of rows) {
+          const id = (spec._id && typeof spec._id === 'object' && !Array.isArray(spec._id))
+            ? Object.fromEntries(Object.keys(spec._id).map((k) => [k, Col.expr(d, spec._id[k])]))
+            : Col.expr(d, spec._id);
+          const key = JSON.stringify(id);
+          let acc = byKey.get(key);
+          if (!acc) { acc = { _id: id }; byKey.set(key, acc); }
+          for (const f of Object.keys(spec)) {
+            if (f === '_id') continue;
+            const op = Object.keys(spec[f])[0], v = Col.expr(d, spec[f][op]);
+            if (op === '$sum') acc[f] = (acc[f] || 0) + (typeof v === 'number' ? v : 0);
+            else if (op === '$min') acc[f] = (acc[f] === undefined || v < acc[f]) ? v : acc[f];
+          }
+        }
+        rows = [...byKey.values()];
+        continue;
+      }
       if (st.$match) rows = rows.filter((d) => matches(d, st.$match));
       else if (st.$addFields) rows = rows.map((d) => {
         const add = {};
@@ -55,7 +123,9 @@ class Col {
         if ('_bl' in st.$addFields) add._bl = (d.bills || []).map((b) => b.ledger);
         return { ...d, ...add };
       });
-      else if (st.$sort) { const k = Object.keys(st.$sort)[0]; rows.sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * st.$sort[k]); }
+      else if (st.$sort) { const k = Object.keys(st.$sort)[0];
+        const key = (r) => (k === '_id' && r._id && typeof r._id === 'object' ? JSON.stringify(r._id) : r[k]);
+        rows.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * st.$sort[k]); }
       else if (st.$limit) rows = rows.slice(0, st.$limit);
       else if (st.$project) rows = rows.map((d) => { const o = {}; for (const k of Object.keys(st.$project)) if (st.$project[k] === 1 && d[k] !== undefined) o[k] = d[k]; return o; });
     }
@@ -232,6 +302,38 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'a bill the vouchers carry and the uploaded file does not is named -- the file is older than the bill');
   assert(b2.onlyInCsv.length === 0,
     'and nothing is wrongly reported as file-only when the vouchers have it too');
+
+  // ---- can the uploaded bills file be retired? -------------------------------
+  // The pipeline has carried bill-wise allocations since August 2026, so the
+  // outstanding figure could come from the vouchers alone -- but only if the
+  // vouchers actually cover every bill the file still shows open. Dropping the file
+  // on the strength of "they probably do" would lose exactly the bills it alone
+  // knows. So the question is measured, and the answer is a count, not a hunch.
+  const cov = await get('/api/bills/coverage');
+  assert(cov.ok === true, 'the coverage check answers');
+  assert(cov.branches.kol && cov.branches.kol.firstMonthWithBills === '202510',
+    'it says how far back the vouchers carry allocations, per branch: '
+    + JSON.stringify(cov.branches.kol && cov.branches.kol.firstMonthWithBills));
+  assert(cov.branches.kol.withBills === 3 && cov.branches.kol.vouchers === 3,
+    'and how many vouchers carry them against how many there are');
+
+  const recv = cov.csv.kolBillsRecv;
+  assert(recv.rows === 1 && recv.matched === 1 && recv.missing === 0,
+    'the bill the file shows open is found on a voucher, so it is not unique to the file');
+  assert(cov.verdict.csvStillNeeded === false && /can be retired/.test(cov.verdict.says),
+    'and the verdict says so in words, rather than leaving it to be inferred');
+
+  // A bill the file alone knows about must flip the verdict and be NAMED -- that is
+  // the whole safety of the measurement.
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv +=
+    '1-Apr-24,CDC/OLD/24-25,Carbonlite Print & Publishing,"90,000.00 Dr",1-May-24,500\n';
+  const cov2 = await get('/api/bills/coverage');
+  assert(cov2.csv.kolBillsRecv.missing === 1 && cov2.csv.kolBillsRecv.missingTotal === 90000,
+    'a bill on no voucher is counted, with its money');
+  assert(cov2.csv.kolBillsRecv.missingSample[0].ref === 'CDC/OLD/24-25',
+    'and named, so the year to re-pull is obvious');
+  assert(cov2.verdict.csvStillNeeded === true && /would lose exactly those/.test(cov2.verdict.says),
+    'and the verdict turns to "not yet", saying what dropping the file would cost');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');
