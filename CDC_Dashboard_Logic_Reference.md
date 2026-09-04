@@ -452,6 +452,18 @@ ledgers gives a grand total of exactly **zero**, because a full set of books net
 zero by double entry; a balance total of 0 across thousands of "parties" is the
 signature of that mistake, not of a company that owes nobody anything.
 
+**Neither reading can reach a party that already owed money before the oldest voucher
+held** — April 2015 for Kolkata, April 2025 for Ahmedabad. Adding vouchers up gives
+*movement since then*, not a balance, and no amount of allocation completeness fixes
+that. So the ledger master now carries Tally's own **OPENINGBALANCE and
+CLOSINGBALANCE**, fetched with `SVFROMDATE`/`SVTODATE` set to the pull's own range so
+each number has a known date, and stored as `closing`/`closingAsOn` on the branch's
+master (live pulls only — a back-fill carries an old year's balances). Against the
+right date that is not an approximation of outstanding, it **is** outstanding, and the
+vouchers are needed only for the ageing. The audit reports it per branch, and says so
+plainly when no pull has brought it yet rather than reading its absence as a company
+that owes nothing.
+
 NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr show
 `settled: 0` and the bill netting calls ₹2.48 Cr open, while the ledger balance comes
 to **exactly zero** — the ₹2.39 Cr receipt of February 2017 was posted without naming a

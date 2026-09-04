@@ -118,6 +118,15 @@
       +'<b class="'+(f.balanceAgree>f.agree?'':'')+'">'+f.balanceAgree.toLocaleString('en-IN')+'</b> parties agree, '
       +'<b'+(f.balanceDiffer?' class="off"':'')+'>'+f.balanceDiffer.toLocaleString('en-IN')+'</b> differ.'
       +(f.balanceAgree>f.agree?' <b style="color:var(--green)">The balance agrees where the bills do not.</b>':'')
+      +'</div>'
+      // Neither reading can reach a customer who already owed money before the oldest
+      // voucher we hold. Tally's own ledger balances can, and they come with the pull.
+      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'
+      +(f.tally&&f.tally.parties
+        ? 'And what <b>Tally itself</b> says they owe, as at <b>'+esc(fmtDate(f.tally.asOn))+'</b>: '
+          +'<b>'+rupees(f.tally.total)+'</b> across '+f.tally.parties.toLocaleString('en-IN')+' parties.'
+          +(f.tally.sameDate?'':' <span class="muted">Struck on a different day from this comparison, so read it as a total, not a match.</span>')
+        : '<span class="muted">'+esc((f.tally&&f.tally.note)||'')+'</span>')
       +'</div></div>';
 
     // The merge list first: it is the larger pile and the one with something to do
