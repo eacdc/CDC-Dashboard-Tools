@@ -1,5 +1,30 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.16 (server) — September 2026 — Ask the outstanding comparison the right question
+
+Run against the real data, the first comparison said 1,165 of 1,519 parties disagreed.
+Almost none of them did. Three things about the question were wrong, and one thing
+about the data was worth separating out:
+
+- **A branch's two files are one expectation.** Tally splits a party between the
+  receivable and the payable report by the *sign* of its balance, not by the group it
+  sits in — a customer in credit is printed under payables. Comparing file against file
+  put the same party on both sides of the answer. Now netted per party per branch.
+- **Every ledger carrying an allocation counts**, not only the Sundry Debtors and
+  Creditors. Tally lists a bill against whatever ledger it was raised on, so
+  fixed-asset purchases and commission accounts appear in the files; filtering by group
+  reported the file's own rows as missing money.
+- **Ahmedabad cannot be compared at a March 2025 snapshot** — its vouchers start in
+  April 2025. All 48 of its bills read as lost. A branch that does not reach the date
+  is now set aside with the reason, and named in the verdict.
+
+And the commonest difference of all is not money: a bill raised against one spelling of
+a customer and settled against another leaves one ledger over-settled by exactly what
+the other reads unpaid. Those are now paired off — by that exact cancellation *and* a
+shared word, so unrelated parties that happen to differ by the same amount are not
+declared one customer — and handed back as a **merge list** for `🔗 Merge names`. What
+is left, `differAfterPairs`, is what is actually about money.
+
 ## v2.15 (server) — September 2026 — Does outstanding come out right from the vouchers?
 
 Knowing every bill is *somewhere* in the vouchers is not the same as the figure being

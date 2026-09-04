@@ -48,7 +48,8 @@
   <h1>Does outstanding come out right from the vouchers alone?</h1>
   <div class="sub">Both sides are read at the same instant: Tally's own snapshot, against the vouchers netted up to that
     same date. A total agreeing proves little &mdash; two errors cancel in a total and cannot in a list of parties, so every
-    party is compared. It changes nothing &middot;
+    party is compared. A branch's receivable and payable files are read together, because Tally splits a party between them
+    by the sign of its balance, not by the group it sits in. It changes nothing &middot;
     <a href="./bills.html">is every bill there?</a> &middot; <a href="./">the party explainer</a></div>
 </header>
 <main>
@@ -59,9 +60,7 @@
 (function(){
   var out=document.getElementById('out');
   var BASE=(location.protocol==='file:')?'https://cdc-finance-automated.onrender.com':'';
-  var NAME={kolBillsRecv:'Kolkata · receivable from customers',
-            kolBillsPay:'Kolkata · payable to suppliers',
-            ahmBillsPay:'Ahmedabad · payable to suppliers'};
+  var NAME={kol:'Kolkata',ahm:'Ahmedabad'};
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -80,26 +79,43 @@
     return '';
   }
 
-  function fileBlock(k,f){
-    if(!f.csvRows&&!f.parties) return '<div class="body"><b>'+esc(NAME[k]||k)+'</b> '
-      +'<span class="muted">&mdash; nothing uploaded and no open bill, nothing to compare</span></div>';
+  function branchBlock(k,f){
+    if(!f.coversDate) return '<div class="body"><b>'+esc(NAME[k]||k)+'</b>'
+      +'<div class="note" style="padding:6px 0 0">'+esc(f.note||'')+'</div></div>';
     var head='<div class="body"><b>'+esc(NAME[k]||k)+'</b>'
       +'<div style="margin-top:6px">Tally’s snapshot: <b>'+rupees(f.csvTotal)+'</b>'
       +' &middot; from the vouchers: <b>'+rupees(f.vouchersTotal)+'</b>'
       +' &middot; difference: <b'+(Math.abs(f.diff)>=1?' class="off"':'')+'>'+rupees(f.diff)+'</b></div>'
       +'<div style="margin-top:4px">'+f.parties.toLocaleString('en-IN')+' parties compared &mdash; '
       +'<b>'+f.agree.toLocaleString('en-IN')+'</b> agree to the rupee, '
-      +'<b'+(f.differ?' class="off"':'')+'>'+f.differ.toLocaleString('en-IN')+'</b> differ.</div></div>';
-    if(!f.differ) return head+'<div class="note" style="color:var(--green)"><b>Every party agrees.</b></div>';
-    return head
-      +'<div class="scroll"><table><thead><tr><th>Party</th>'
-      +'<th style="text-align:right">Tally says</th><th style="text-align:right">The vouchers say</th>'
-      +'<th style="text-align:right">Difference</th><th></th></tr></thead><tbody>'
-      +f.worst.map(function(r){return '<tr><td>'+esc(r.party)+'</td>'
-        +'<td class="num">'+rupees(r.csv)+'</td><td class="num">'+rupees(r.vouchers)+'</td>'
-        +'<td class="num off">'+rupees(r.diff)+'</td><td>'+whose(r)+'</td></tr>';}).join('')
-      +'</tbody></table></div>'
-      +(f.differ>f.worst.length?'<div class="note">… and '+(f.differ-f.worst.length)+' more, smaller.</div>':'');
+      +'<b>'+f.namePairs.toLocaleString('en-IN')+'</b> are one party under two names, '
+      +'<b'+(f.differAfterPairs?' class="off"':'')+'>'+f.differAfterPairs.toLocaleString('en-IN')+'</b> genuinely differ.</div></div>';
+
+    // The merge list first: it is the larger pile and the one with something to do
+    // about it, and clearing it is what makes the real differences readable.
+    var pairs=f.namePairs
+      ? '<div class="note">These pairs cancel each other <b>to the rupee</b> and share a word, so each is almost certainly '
+        +'<b>one customer entered twice</b> — the bill raised against one spelling and settled against the other. '
+        +'No money is missing. Merge them with <b>🔗 Merge names</b> on the portal and they disappear from here.</div>'
+        +'<div class="scroll"><table><thead><tr><th>One spelling</th><th>The other</th>'
+        +'<th style="text-align:right">Amount caught between them</th></tr></thead><tbody>'
+        +f.pairs.map(function(p){return '<tr><td class="mono">'+esc(p.a.party)+'</td>'
+          +'<td class="mono">'+esc(p.b.party)+'</td><td class="num">'+rupees(p.amount)+'</td></tr>';}).join('')
+        +'</tbody></table></div>'
+        +(f.namePairs>f.pairs.length?'<div class="note">… and '+(f.namePairs-f.pairs.length)+' more pairs, smaller.</div>':'')
+      : '';
+    var real=f.differAfterPairs
+      ? '<div class="note" style="padding-top:10px"><b>These are the ones actually about money</b> — after the two-name pairs are set aside.</div>'
+        +'<div class="scroll"><table><thead><tr><th>Party</th>'
+        +'<th style="text-align:right">Tally says</th><th style="text-align:right">The vouchers say</th>'
+        +'<th style="text-align:right">Difference</th><th></th></tr></thead><tbody>'
+        +f.worst.map(function(r){return '<tr><td>'+esc(r.party)+'</td>'
+          +'<td class="num">'+rupees(r.csv)+'</td><td class="num">'+rupees(r.vouchers)+'</td>'
+          +'<td class="num off">'+rupees(r.diff)+'</td><td>'+whose(r)+'</td></tr>';}).join('')
+        +'</tbody></table></div>'
+        +(f.differAfterPairs>f.worst.length?'<div class="note">… and '+(f.differAfterPairs-f.worst.length)+' more, smaller.</div>':'')
+      : '<div class="note" style="color:var(--green)"><b>Every remaining party agrees to the rupee.</b></div>';
+    return head+pairs+real;
   }
 
   function render(d){
@@ -111,8 +127,8 @@
       +esc(v.says)+'</div>'
       +'<div class="note" style="padding:10px 0 0">Compared as at <b>'+esc(fmtDate(d.asOn))+'</b>, the date of the newest bill '
       +'in the uploaded files — which is the date Tally printed them.</div></div></section>'
-      +Object.keys(d.files).map(function(k){
-        return '<section><h2>'+esc((NAME[k]||k).toUpperCase())+'</h2>'+fileBlock(k,d.files[k])+'</section>';
+      +Object.keys(d.branches).map(function(k){
+        return '<section><h2>'+esc((NAME[k]||k).toUpperCase())+'</h2>'+branchBlock(k,d.branches[k])+'</section>';
       }).join('')
       +'<section><h2>THE RAW ANSWER</h2><div class="body">'
       +'<div class="copybar"><button type="button" id="copyjson">📋 Copy JSON</button>'

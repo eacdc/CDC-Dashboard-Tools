@@ -381,7 +381,7 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const aud = await get('/api/bills/audit');
   assert(aud.ok === true && aud.asOn === '20251120' && aud.snapshotFrom === 'overdue days',
     'the file says when Tally printed it -- due date plus overdue days, not the newest invoice: ' + aud.asOn);
-  const rf = aud.files.kolBillsRecv;
+  const rf = aud.branches.kol;
   assert(rf.csvTotal === 46641 && rf.vouchersTotal === 46641 && rf.diff === 0,
     'the vouchers, netted to that date, give Tally\'s own figure: ' + JSON.stringify([rf.csvTotal, rf.vouchersTotal]));
   assert(rf.parties === 1 && rf.agree === 1 && rf.differ === 0,
@@ -395,20 +395,56 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   // was printed and the file cannot. That gap is the reason to stop uploading it --
   // and it must show up as a difference, not be smoothed over.
   const aud2 = await get('/api/bills/audit?asOn=20260228');
-  assert(aud2.files.kolBillsRecv.vouchersTotal === 46641 + 23423 + 5782,
-    'invoices raised after the snapshot are open in the vouchers: ' + aud2.files.kolBillsRecv.vouchersTotal);
-  assert(aud2.files.kolBillsRecv.differ === 1 && aud2.verdict.safeToSwitch === false,
+  assert(aud2.branches.kol.vouchersTotal === 46641 + 23423 + 5782,
+    'invoices raised after the snapshot are open in the vouchers: ' + aud2.branches.kol.vouchersTotal);
+  assert(aud2.branches.kol.differ === 1 && aud2.verdict.safeToSwitch === false,
     'and comparing across different dates is reported as a difference rather than hidden');
+
+  // Ahmedabad's vouchers start after this snapshot, so every bill of its would read
+  // as lost. That is the question being wrong, not the answer, and it must say so
+  // rather than counting against the verdict.
+  assert(aud.branches.ahm.coversDate === false && /nothing to compare/.test(aud.branches.ahm.note || ''),
+    'a branch whose vouchers do not reach the snapshot date is set aside, with the reason');
+  assert(aud.verdict.branchesNotCompared.indexOf('ahm') >= 0,
+    'and named in the verdict, so its absence is not mistaken for agreement');
 
   // A party in one source and not the other has to be NAMED and sided, since that is
   // the shape the real gaps take: a bill raised after the snapshot, or one the
   // vouchers never received.
   fakeDb.collection('inputfiles').docs[0].kolBillsRecv +=
     '1-Apr-24,CDC/GHOST/24-25,Some Other Customer,"7,000.00 Dr",1-May-24,500\n';
-  const aud3 = await get('/api/bills/audit?asOn=20251007');
-  const ghost = aud3.files.kolBillsRecv.worst.find((r) => r.party === 'Some Other Customer');
+  const aud3 = await get('/api/bills/audit?asOn=20251120');
+  const ghost = aud3.branches.kol.worst.find((r) => r.party === 'Some Other Customer');
   assert(ghost && ghost.csv === 7000 && ghost.vouchers === 0 && ghost.onlyIn === 'csv',
     'a party only Tally knows is listed with both figures and which side it came from: ' + JSON.stringify(ghost));
+
+  // The commonest difference by far is not money at all: one customer under two
+  // spellings, the bill raised against one and settled against the other, so the two
+  // cancel to the rupee. Reporting those as missing money buries the handful of
+  // differences that are real, so they are paired off and handed over as a merge list.
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:p1', guid: 'gp1', branch: 'kol', date: '20251110', no: 'CDC/PAIR/25-26', type: 'Sales',
+    ledgers: { 'Export Sales': 250000 }, party_ledgers: { 'Vijay Shree Textiles Pvt Ltd': -250000 },
+    bills: [{ ledger: 'Vijay Shree Textiles Pvt Ltd', ref: 'CDC/PAIR/25-26', type: 'New Ref', amount: -250000 }],
+  });
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:p2', guid: 'gp2', branch: 'kol', date: '20251112', no: 'BR/77', type: 'Bank Receipt',
+    ledgers: {}, party_ledgers: { 'Vijay Shree Textiles': 250000, 'Citi Bank': -250000 },
+    bills: [{ ledger: 'Vijay Shree Textiles', ref: 'CDC/PAIR/25-26', type: 'Agst Ref', amount: 250000 }],
+  });
+  const audP = await get('/api/bills/audit?asOn=20251120');
+  const pair = audP.branches.kol.pairs.find((p) => p.amount === 250000);
+  assert(pair && /Vijay Shree/.test(pair.a.party) && /Vijay Shree/.test(pair.b.party),
+    'two spellings of one customer that cancel exactly are paired off, not counted as money: ' + JSON.stringify(pair));
+  assert(audP.branches.kol.namePairs === 1
+    && !audP.branches.kol.worst.some((r) => /Vijay Shree/.test(r.party)),
+    'and are kept out of the list of real differences, which is what the merge list is for');
+
+  // But two unrelated parties that merely differ by the same amount must NOT be
+  // declared one customer -- the cancellation alone is not enough, the names have to
+  // share a word.
+  assert(audP.branches.kol.pairs.every((p) => p.a.party !== 'Some Other Customer'),
+    'a coincidence of amount does not pair two names with nothing in common');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');

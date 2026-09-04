@@ -396,15 +396,37 @@ prints, so **each row carries the print date: due date + overdue days**. Rows no
 overdue say 0 and are skipped; the day the most rows agree on wins, so one mistyped due
 date cannot move the comparison. `snapshotFrom` says which rule was used.
 
-Then, per bill reference, every allocation is added up. A debtor's bill is raised Dr
-(−ve) and settled Cr (+ve), so what is still open is **−(sum of its allocations)**; for
-a creditor the signs reverse. References netting to zero are closed and drop out.
+Then, per bill reference, every allocation is added up, on one Dr-positive scale:
+**open = −(sum of its allocations)**, so money owed *to* us is positive and money owed
+*by* us is negative. References netting to zero are closed and drop out. **Every ledger
+carrying an allocation counts**, not only the Sundry Debtors and Creditors — Tally
+lists a bill against whatever ledger it was raised on (fixed-asset purchases and
+commission accounts turn up in the files), and filtering by group reports the file's
+own rows as missing money.
+
+**A branch's two files are one expectation.** Tally splits a party between the
+receivable and the payable report by the **sign of its balance**, not by the group it
+sits in: a customer in credit is printed under payables. Comparing file against file
+therefore puts the same party on both sides of the answer, so the receivable file is
+taken as +ve, the payable as −ve, and the two are netted per party per branch.
+
+**A branch whose vouchers do not reach the snapshot date is set aside**, with the
+reason, and named in `verdict.branchesNotCompared`. Ahmedabad's vouchers start April
+2025, so against a March 2025 snapshot every one of its bills would read as lost —
+that is the question being wrong, not an answer to it.
 
 **The comparison is party by party, never a total.** Two errors cancel in a total and
 cannot in a list of parties, so `verdict.safeToSwitch` is true only when every party
 with an open bill agrees to the rupee. Parties present in one source and not the other
-are named and sided (`onlyIn`), which is the shape the real gaps take: a bill raised
-after the snapshot was printed, or one the vouchers never received.
+are named and sided (`onlyIn`).
+
+**Two spellings of one customer are separated out first.** By far the commonest
+difference is not money: a bill raised against one spelling and settled against
+another leaves one ledger over-settled by exactly what the other reads unpaid. Those
+are matched by that **exact cancellation and a shared word** — the cancellation alone
+would pair unrelated parties that happen to differ by the same amount — and returned
+as `pairs`, a merge list for the portal's `🔗 Merge names` editor. They do not count
+against the verdict; `differAfterPairs` is what is actually about money.
 
 Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
 the vouchers carry invoices raised since the file was printed, and the file cannot.
