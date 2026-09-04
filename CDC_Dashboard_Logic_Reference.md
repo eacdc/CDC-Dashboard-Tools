@@ -381,6 +381,34 @@ on 31 March 2025 — not as a *fallback*: nothing computes outstanding from it o
 vouchers do, and no code path may silently return to it when a figure looks wrong. A
 number that disagrees is a bug to find, not a reason to reach for the older source.
 
+### Does outstanding come out right from the vouchers?
+
+Coverage only says every bill is *somewhere* in the vouchers. It does not say the
+figure agrees — an allocation netted the wrong way round leaves every bill present and
+every number wrong. `GET /api/bills/audit` (page: `/diag/outstanding.html`) asks the
+harder question, and changes nothing:
+
+**Both sides are read at the same instant.** The uploaded file is a snapshot Tally
+printed on one day, so the vouchers are netted only up to that same day. That day is
+not the newest bill's date — that is when an invoice was *raised*, and a report printed
+months later still lists it. Tally computes "overdue by N days" against the day it
+prints, so **each row carries the print date: due date + overdue days**. Rows not yet
+overdue say 0 and are skipped; the day the most rows agree on wins, so one mistyped due
+date cannot move the comparison. `snapshotFrom` says which rule was used.
+
+Then, per bill reference, every allocation is added up. A debtor's bill is raised Dr
+(−ve) and settled Cr (+ve), so what is still open is **−(sum of its allocations)**; for
+a creditor the signs reverse. References netting to zero are closed and drop out.
+
+**The comparison is party by party, never a total.** Two errors cancel in a total and
+cannot in a list of parties, so `verdict.safeToSwitch` is true only when every party
+with an open bill agrees to the rupee. Parties present in one source and not the other
+are named and sided (`onlyIn`), which is the shape the real gaps take: a bill raised
+after the snapshot was printed, or one the vouchers never received.
+
+Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
+the vouchers carry invoices raised since the file was printed, and the file cannot.
+
 ### One customer, two names
 
 A party renamed in Tally — or simply entered twice under two spellings — is one
