@@ -731,6 +731,105 @@ app.get('/api/yoy/party', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// GET /api/bills/coverage
+// Can the outstanding figure be computed from the VOUCHERS alone, and the uploaded
+// Bills CSV retired? The pipeline has captured bill-wise allocations since August
+// 2026, and a back-fill re-pull would have brought them for older years too -- but
+// "would have" is not a measurement, and dropping the CSV on a guess would silently
+// lose whatever it alone still carries. So this counts, and does not change anything:
+//
+//   * how far back the vouchers carry allocations, per branch, month by month;
+//   * every bill the CSV still shows OPEN, and whether that same reference appears
+//     in the vouchers' own allocations -- by reference, and by money.
+//
+// The answer that matters is `csv[file].missing`: bills the CSV alone knows about.
+// Zero of them, and the file is redundant.
+app.get('/api/bills/coverage', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const out = { ok: true, branches: {}, csv: {}, checkedAt: new Date().toISOString() };
+
+    // 1. how far back do the vouchers carry bill allocations?
+    const cov = await db.collection('vouchers').aggregate([
+      { $group: {
+        _id: { branch: '$branch', ym: { $substrBytes: ['$date', 0, 6] } },
+        vouchers: { $sum: 1 },
+        withBills: { $sum: { $cond: [{ $gt: [{ $size: { $ifNull: ['$bills', []] } }, 0] }, 1, 0] } },
+      } },
+      { $sort: { _id: 1 } },
+    ], { allowDiskUse: true }).toArray();
+    for (const r of cov) {
+      const b = out.branches[r._id.branch] || (out.branches[r._id.branch] = { vouchers: 0, withBills: 0, firstMonthWithBills: null, byMonth: {} });
+      b.vouchers += r.vouchers;
+      b.withBills += r.withBills;
+      b.byMonth[r._id.ym] = { vouchers: r.vouchers, withBills: r.withBills };
+      if (r.withBills > 0 && (!b.firstMonthWithBills || r._id.ym < b.firstMonthWithBills)) b.firstMonthWithBills = r._id.ym;
+    }
+
+    // 2. the CSV's still-open bills, and whether the vouchers know each reference.
+    const aliases = await readAliasMap(db);
+    const xd = await mergedHierarchy(db);
+    const S = yoy.newSummary(xd, aliases);
+    const files = (await db.collection('inputfiles').findOne({ _id: 'inputs' })) || {};
+    for (const key of ['kolBillsRecv', 'kolBillsPay', 'ahmBillsPay']) {
+      const info = { uploaded: files[key + 'UpdatedAt'] ? new Date(files[key + 'UpdatedAt']).toISOString() : null,
+        rows: 0, oldestBill: null, newestBill: null, openTotal: 0,
+        matched: 0, matchedTotal: 0, missing: 0, missingTotal: 0, missingSample: [] };
+      if (files[key] != null) {
+        let rows = [];
+        try { rows = E.parseBillsCSV(String(files[key])); } catch (e) { rows = []; }
+        info.rows = rows.length;
+        for (const b of rows) {
+          if (!info.oldestBill || b.date < info.oldestBill) info.oldestBill = b.date;
+          if (!info.newestBill || b.date > info.newestBill) info.newestBill = b.date;
+          info.openTotal += b.amount || 0;
+        }
+        // Which of those references the vouchers carry an allocation for. Asked in
+        // one query per file rather than one per bill.
+        const refs = [...new Set(rows.map((b) => b.refNo).filter(Boolean))];
+        const found = new Set();
+        for (let i = 0; i < refs.length; i += 1000) {
+          const slice = refs.slice(i, i + 1000);
+          const hit = await db.collection('vouchers').aggregate([
+            { $match: { 'bills.ref': { $in: slice } } },
+            { $unwind: '$bills' },
+            { $match: { 'bills.ref': { $in: slice } } },
+            { $group: { _id: '$bills.ref' } },
+          ], { allowDiskUse: true }).toArray();
+          for (const h of hit) found.add(h._id);
+        }
+        for (const b of rows) {
+          if (b.refNo && found.has(b.refNo)) { info.matched++; info.matchedTotal += b.amount || 0; }
+          else {
+            info.missing++; info.missingTotal += b.amount || 0;
+            if (info.missingSample.length < 25) {
+              info.missingSample.push({ ref: b.refNo || '(no reference)', date: b.date,
+                party: b.party, canonical: S.canon(b.party || ''), amount: b.amount });
+            }
+          }
+        }
+        info.openTotal = Math.round(info.openTotal * 100) / 100;
+        info.matchedTotal = Math.round(info.matchedTotal * 100) / 100;
+        info.missingTotal = Math.round(info.missingTotal * 100) / 100;
+      }
+      out.csv[key] = info;
+    }
+
+    // 3. the verdict, stated plainly rather than left to be inferred.
+    const totalMissing = Object.values(out.csv).reduce((a, c) => a + c.missing, 0);
+    const missingMoney = Object.values(out.csv).reduce((a, c) => a + c.missingTotal, 0);
+    out.verdict = {
+      csvStillNeeded: totalMissing > 0,
+      billsOnlyInCsv: totalMissing,
+      moneyOnlyInCsv: Math.round(missingMoney * 100) / 100,
+      says: totalMissing === 0
+        ? 'Every bill the uploaded files still show open is also carried by the vouchers. Outstanding can be computed from the vouchers alone, and the CSV upload can be retired.'
+        : `${totalMissing} bill(s) worth \u20b9${Math.round(missingMoney).toLocaleString('en-IN')} are in the uploaded files and in no voucher we hold. Retiring the CSV would lose exactly those; re-pull the years they fall in first.`,
+    };
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // GET /api/yoy/diag?q=<name fragment>[&fy=2026-27][&branch=all|kol|ahm]
 // Why a party's figure is what it is -- the question that otherwise takes a
 // conversation and a screenshot. Read-only, and it changes nothing.
