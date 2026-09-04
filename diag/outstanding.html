@@ -109,7 +109,16 @@
       +'<div style="margin-top:4px">'+f.parties.toLocaleString('en-IN')+' parties compared &mdash; '
       +'<b>'+f.agree.toLocaleString('en-IN')+'</b> agree to the rupee, '
       +'<b>'+f.namePairs.toLocaleString('en-IN')+'</b> are one party under two names, '
-      +'<b'+(f.differAfterPairs?' class="off"':'')+'>'+f.differAfterPairs.toLocaleString('en-IN')+'</b> genuinely differ.</div></div>';
+      +'<b'+(f.differAfterPairs?' class="off"':'')+'>'+f.differAfterPairs.toLocaleString('en-IN')+'</b> genuinely differ.</div>'
+      // The same question asked of the ledger balance, which needs no bill references.
+      // Where this agrees and the bills do not, the references are the problem.
+      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'
+      +'Read instead as each party&rsquo;s <b>ledger balance</b> — every posting to its name, no bill references needed: '
+      +'total <b>'+rupees(f.balanceTotal)+'</b>, '
+      +'<b class="'+(f.balanceAgree>f.agree?'':'')+'">'+f.balanceAgree.toLocaleString('en-IN')+'</b> parties agree, '
+      +'<b'+(f.balanceDiffer?' class="off"':'')+'>'+f.balanceDiffer.toLocaleString('en-IN')+'</b> differ.'
+      +(f.balanceAgree>f.agree?' <b style="color:var(--green)">The balance agrees where the bills do not.</b>':'')
+      +'</div></div>';
 
     // The merge list first: it is the larger pile and the one with something to do
     // about it, and clearing it is what makes the real differences readable.
@@ -132,10 +141,13 @@
         +' how far the vouchers reach, not about the accounting.</div>'
         +'<div class="scroll"><table><thead><tr><th>Party</th>'
         +'<th style="text-align:right">Tally says</th><th style="text-align:right">The vouchers say</th>'
-        +'<th style="text-align:right">Difference</th><th style="text-align:right">One-sided</th><th></th></tr></thead><tbody>'
+        +'<th style="text-align:right">Difference</th><th style="text-align:right">Its ledger balance</th>'
+        +'<th style="text-align:right">One-sided</th><th></th></tr></thead><tbody>'
         +f.worst.map(function(r){return '<tr><td><a href="./?q='+encodeURIComponent(r.party)+'&branch='+esc(k)+'">'+esc(r.party)+'</a></td>'
           +'<td class="num">'+rupees(r.csv)+'</td><td class="num">'+rupees(r.vouchers)+'</td>'
           +'<td class="num off">'+rupees(r.diff)+'</td>'
+          +'<td class="num'+(Math.abs(r.balanceDiff)<1?'" style="color:var(--green);font-weight:600':'')+'">'
+          +rupees(r.balance)+(Math.abs(r.balanceDiff)<1?' ✓':'')+'</td>'
           +'<td class="num'+(r.oneSidedRefs?'':' muted')+'">'+(r.oneSidedRefs||0)+' of '+(r.openRefs||0)+'</td>'
           +'<td>'+whose(r)+'</td></tr>';}).join('')
         +'</tbody></table></div>'

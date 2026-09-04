@@ -437,6 +437,19 @@ against an invoice raised before the vouchers we hold begin. Where those dominat
 answer is about how far back the vouchers reach, not about the accounting. Every party
 links through to `/diag/?q=` for the bill-by-bill story.
 
+**And a third reading, which needs no bill references at all: the party's own ledger
+balance**, every posting to its name added up. Bill-reference netting is only ever as
+good as the references Tally was given — a receipt posted *on account*, or a year-end
+"Due As on" balancing bill, leaves every invoice reading open forever though the
+account is square. The balance cannot drift that way. Where the balance agrees and the
+bill netting does not, it is the references that are incomplete, not the money, and
+outstanding should be built on the balance with the references kept for the ageing.
+
+NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr show
+`settled: 0` and the bill netting calls ₹2.48 Cr open, while the ledger balance comes
+to **exactly zero** — the ₹2.39 Cr receipt of February 2017 was posted without naming a
+bill. Tally is right to omit the party; the references are simply not there to net.
+
 Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
 the vouchers carry invoices raised since the file was printed, and the file cannot.
 

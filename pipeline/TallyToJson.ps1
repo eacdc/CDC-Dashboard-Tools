@@ -207,7 +207,13 @@ function Collect-BillAllocs($node, $list) {
             $ln = xval $c.LEDGERNAME
             if ($ln) {
                 foreach ($ba in $c.SelectNodes("BILLALLOCATIONS.LIST")) {
-                    $bn = xval $ba.NAME
+                    # $ba.NAME must NOT be used here. When Tally emits an allocation
+                    # element with no <NAME> child -- a receipt posted on account, say
+                    # -- PowerShell falls back to XmlNode's own Name property and hands
+                    # back the tag name, so the guard below never fires and the bill
+                    # reference is recorded as the literal "BILLALLOCATIONS.LIST" with
+                    # a zero amount. Ask for the child element by path instead.
+                    $bn = xval $ba.SelectSingleNode("NAME")
                     if (-not $bn) { continue }
                     [void]$list.Add([PSCustomObject]@{
                         ledger = $ln

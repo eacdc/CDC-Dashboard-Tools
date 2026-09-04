@@ -1,5 +1,24 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.18 (server + pipeline) — September 2026 — Read the ledger balance, not only the bills
+
+NCTB settled the question. Four export invoices totalling ₹3.08 Cr show `settled: 0`,
+so the bill netting called ₹2.48 Cr open — while the party's **ledger balance comes to
+exactly zero**. The ₹2.39 Cr receipt of February 2017 was posted without naming a bill,
+so there is nothing for the invoices to net against. Tally is right to omit the party.
+
+So the comparison now reads a third figure: each party's ledger balance, every posting
+to its name added up, needing no bill references at all. Where the balance agrees and
+the bill netting does not, the references are incomplete and the money is fine — and
+outstanding should be built on the balance, with the references kept for the ageing.
+
+**Pipeline fix.** `$ba.NAME` must not be used to read a bill allocation's reference:
+when Tally emits an allocation with no `<NAME>` child — a receipt posted on account —
+PowerShell falls back to `XmlNode.Name` and hands back the tag name, so the guard never
+fires and the reference is stored as the literal `"BILLALLOCATIONS.LIST"` with a zero
+amount. Read by path instead. The stored rows are harmless (they carry no money) and a
+re-pull clears them.
+
 ## v2.17 (server) — September 2026 — Sort the outstanding differences by shape
 
 988 differing parties is not a list anyone reads. They are now counted by **kind** —
