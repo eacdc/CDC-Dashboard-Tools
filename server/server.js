@@ -873,6 +873,134 @@ app.get('/api/bills/coverage', async (_req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// GET /api/bills/audit[?asOn=YYYYMMDD]
+// The bills coverage check answers "is every bill somewhere in the vouchers". This
+// answers the harder question that has to come next: computed from the vouchers
+// alone, does OUTSTANDING come out at the figure Tally itself reported?
+//
+// Both sides are put at the same instant to make that a fair question. The uploaded
+// CSV is a snapshot Tally printed on one date, so the vouchers are netted only up to
+// that same date -- every allocation on a bill reference, added up:
+//
+//   a debtor's bill is raised Dr (-ve) and settled Cr (+ve), so what is still open is
+//   -(sum of its allocations); for a creditor the signs are the other way round.
+//
+// What comes back is a party-by-party comparison, worst difference first. Nothing is
+// switched over on the strength of a total agreeing -- two errors can cancel in a
+// total, and cannot in a list of parties. Read-only; it changes no figure.
+const AUDIT_SIDE = { kolBillsRecv: { branch: 'kol', side: 'debtor' },
+  kolBillsPay: { branch: 'kol', side: 'creditor' },
+  ahmBillsPay: { branch: 'ahm', side: 'creditor' } };
+
+// WHEN did Tally print this report? Not the newest bill's date -- that is when an
+// invoice was raised, and a report printed months later still shows it. Tally works
+// out "overdue by N days" against the day it prints, so every row carries the answer:
+// due date + overdue days. Rows not yet overdue say 0 and cannot tell us anything, so
+// they are skipped, and the day the most rows agree on wins -- one mistyped due date
+// then cannot move the date both sides are compared at.
+function snapshotDateOf(rows, tally) {
+  for (const b of rows) {
+    if (!b.dueDate || !b.overdueDays) continue;
+    const d = new Date(b.dueDate);
+    if (isNaN(d.getTime())) continue;
+    d.setUTCDate(d.getUTCDate() + b.overdueDays);
+    const k = d.toISOString().slice(0, 10).replace(/-/g, '');
+    tally.set(k, (tally.get(k) || 0) + 1);
+  }
+}
+
+app.get('/api/bills/audit', async (req, res) => {
+  try {
+    const db = await getDb();
+    const aliases = await readAliasMap(db);
+    const xd = await mergedHierarchy(db);
+    const S = yoy.newSummary(xd, aliases);
+    const files = (await db.collection('inputfiles').findOne({ _id: 'inputs' })) || {};
+
+    // The CSV side first: it also fixes the date both sides are measured at.
+    const csvOf = {};
+    const printedOn = new Map();
+    let newestBill = null;
+    for (const key of Object.keys(AUDIT_SIDE)) {
+      const parties = new Map();
+      let rows = [];
+      if (files[key] != null) { try { rows = E.parseBillsCSV(String(files[key])); } catch (e) { rows = []; } }
+      snapshotDateOf(rows, printedOn);
+      for (const b of rows) {
+        if (b.date && (!newestBill || b.date > newestBill)) newestBill = b.date;
+        const p = S.canon(b.party || '');
+        parties.set(p, (parties.get(p) || 0) + (b.amount || 0));
+      }
+      csvOf[key] = { rows: rows.length, parties };
+    }
+    let snapshot = null, agreeing = 0;
+    for (const [k, c] of printedOn) if (c > agreeing) { snapshot = k; agreeing = c; }
+    const snapshotFrom = snapshot ? 'overdue days' : (newestBill ? 'newest bill' : null);
+    if (!snapshot) snapshot = newestBill;
+    const asOn = /^\d{8}$/.test(String(req.query.asOn || '')) ? String(req.query.asOn) : snapshot;
+    if (!asOn) return res.json({ ok: false, error: 'no bills file has been uploaded, so there is nothing to compare against' });
+
+    // The voucher side: every allocation up to that date, netted per bill reference.
+    const netted = await db.collection('vouchers').aggregate([
+      { $match: { date: { $lte: asOn } } },
+      { $unwind: '$bills' },
+      { $group: { _id: { branch: '$branch', ledger: '$bills.ledger', ref: '$bills.ref' }, sum: { $sum: '$bills.amount' } } },
+    ], { allowDiskUse: true }).toArray();
+
+    const vchOf = {};
+    for (const key of Object.keys(AUDIT_SIDE)) vchOf[key] = new Map();
+    for (const r of netted) {
+      const ledger = r._id.ledger;
+      if (!ledger) continue;
+      const side = yoy.sundryOf(S, ledger);
+      if (side !== 'debtor' && side !== 'creditor') continue;   // not a bills party at all
+      const open = side === 'debtor' ? -r.sum : r.sum;
+      if (Math.abs(open) < 0.5) continue;                        // settled to the rupee
+      const key = Object.keys(AUDIT_SIDE).find((k) =>
+        AUDIT_SIDE[k].branch === r._id.branch && AUDIT_SIDE[k].side === side);
+      if (!key) continue;                                        // no file covers that pair
+      const m = vchOf[key], p = S.canon(ledger);
+      m.set(p, (m.get(p) || 0) + open);
+    }
+
+    const round = (n) => Math.round(n * 100) / 100;
+    const out = { ok: true, asOn, snapshot, snapshotFrom, snapshotAgreeingRows: agreeing,
+      checkedAt: new Date().toISOString(), files: {} };
+    for (const key of Object.keys(AUDIT_SIDE)) {
+      const csv = csvOf[key].parties, vch = vchOf[key];
+      const rows = [];
+      for (const p of new Set([...csv.keys(), ...vch.keys()])) {
+        const c = round(csv.get(p) || 0), v = round(vch.get(p) || 0);
+        if (Math.abs(c) < 0.5 && Math.abs(v) < 0.5) continue;
+        rows.push({ party: p, csv: c, vouchers: v, diff: round(v - c),
+          onlyIn: !csv.has(p) ? 'vouchers' : (!vch.has(p) ? 'csv' : null) });
+      }
+      rows.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+      const agree = rows.filter((r) => Math.abs(r.diff) < 1).length;
+      out.files[key] = {
+        ...AUDIT_SIDE[key], uploaded: files[key + 'UpdatedAt'] ? new Date(files[key + 'UpdatedAt']).toISOString() : null,
+        csvRows: csvOf[key].rows,
+        csvTotal: round(rows.reduce((a, r) => a + r.csv, 0)),
+        vouchersTotal: round(rows.reduce((a, r) => a + r.vouchers, 0)),
+        parties: rows.length, agree, differ: rows.length - agree,
+        worst: rows.filter((r) => Math.abs(r.diff) >= 1).slice(0, 100),
+      };
+      out.files[key].diff = round(out.files[key].vouchersTotal - out.files[key].csvTotal);
+    }
+
+    const differ = Object.values(out.files).reduce((a, f) => a + f.differ, 0);
+    const parties = Object.values(out.files).reduce((a, f) => a + f.parties, 0);
+    out.verdict = {
+      partiesCompared: parties, partiesDiffering: differ,
+      safeToSwitch: differ === 0,
+      says: differ === 0
+        ? `Every one of the ${parties} parties with an open bill comes out at the same figure from the vouchers as from Tally's own snapshot of ${asOn}. Outstanding can be computed from the vouchers.`
+        : `${differ} of ${parties} parties come out differently from the vouchers than from Tally's snapshot of ${asOn}. Each is listed with both figures; understand them before switching anything over.`,
+    };
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // GET /api/yoy/diag?q=<name fragment>[&fy=2026-27][&branch=all|kol|ahm]
 // Why a party's figure is what it is -- the question that otherwise takes a
 // conversation and a screenshot. Read-only, and it changes nothing.

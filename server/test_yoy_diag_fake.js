@@ -366,6 +366,50 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(cov2.verdict.csvStillNeeded === true && /would lose exactly those/.test(cov2.verdict.says),
     'and the verdict turns to "not yet", saying what dropping the file would cost');
 
+  // ---- does outstanding come out RIGHT from the vouchers? --------------------
+  // Coverage says every bill is somewhere in the vouchers. That is not the same as
+  // the figure agreeing: an allocation could be netted the wrong way round and every
+  // bill would still be "present". So both sides are read at the same instant -- the
+  // date Tally printed its snapshot -- and compared party by party, because two
+  // errors cancel in a total and cannot in a list of parties.
+  // Due 6-Nov, overdue by 14 days: the file itself says it was printed on 20 Nov 2025,
+  // which is the only honest date to compare the vouchers at. The newest BILL date
+  // (7 Oct) is when the invoice was raised and would silently drop the receipt.
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv =
+    'Ledger Outstandings\nDate,Ref. No.,Party,Amount,Due on,Overdue\n'
+    + '7-Oct-25,CDC/4919/25-26,Carbonlite Print & Publishing,"46,641.00 Dr",6-Nov-25,14\n';
+  const aud = await get('/api/bills/audit');
+  assert(aud.ok === true && aud.asOn === '20251120' && aud.snapshotFrom === 'overdue days',
+    'the file says when Tally printed it -- due date plus overdue days, not the newest invoice: ' + aud.asOn);
+  const rf = aud.files.kolBillsRecv;
+  assert(rf.csvTotal === 46641 && rf.vouchersTotal === 46641 && rf.diff === 0,
+    'the vouchers, netted to that date, give Tally\'s own figure: ' + JSON.stringify([rf.csvTotal, rf.vouchersTotal]));
+  assert(rf.parties === 1 && rf.agree === 1 && rf.differ === 0,
+    'and they agree party by party, not merely in the total');
+  assert(aud.verdict.safeToSwitch === true, 'so the verdict says the switch is safe');
+
+  assert(rf.vouchersTotal === 61705 - 15064,
+    'the receipt IS netted off the bill it was allocated against, rather than the invoice standing at its full value');
+
+  // Asked at today's date instead, the vouchers carry invoices raised after the file
+  // was printed and the file cannot. That gap is the reason to stop uploading it --
+  // and it must show up as a difference, not be smoothed over.
+  const aud2 = await get('/api/bills/audit?asOn=20260228');
+  assert(aud2.files.kolBillsRecv.vouchersTotal === 46641 + 23423 + 5782,
+    'invoices raised after the snapshot are open in the vouchers: ' + aud2.files.kolBillsRecv.vouchersTotal);
+  assert(aud2.files.kolBillsRecv.differ === 1 && aud2.verdict.safeToSwitch === false,
+    'and comparing across different dates is reported as a difference rather than hidden');
+
+  // A party in one source and not the other has to be NAMED and sided, since that is
+  // the shape the real gaps take: a bill raised after the snapshot, or one the
+  // vouchers never received.
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv +=
+    '1-Apr-24,CDC/GHOST/24-25,Some Other Customer,"7,000.00 Dr",1-May-24,500\n';
+  const aud3 = await get('/api/bills/audit?asOn=20251007');
+  const ghost = aud3.files.kolBillsRecv.worst.find((r) => r.party === 'Some Other Customer');
+  assert(ghost && ghost.csv === 7000 && ghost.vouchers === 0 && ghost.onlyIn === 'csv',
+    'a party only Tally knows is listed with both figures and which side it came from: ' + JSON.stringify(ghost));
+
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');
   process.exit(fails ? 1 : 0);

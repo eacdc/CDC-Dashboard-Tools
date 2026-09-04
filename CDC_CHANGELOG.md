@@ -1,5 +1,25 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.15 (server) — September 2026 — Does outstanding come out right from the vouchers?
+
+Knowing every bill is *somewhere* in the vouchers is not the same as the figure being
+right — an allocation netted the wrong way round leaves every bill present and every
+number wrong. `/diag/outstanding.html` puts the two side by side before anything is
+switched over.
+
+Both are read at the same instant. The uploaded file is a snapshot Tally printed on one
+day, so the vouchers are netted only up to that day — and that day is not the newest
+bill's date, which is merely when an invoice was raised. The file says it itself: Tally
+computes "overdue by N days" against the day it prints, so **due date + overdue days**
+is the print date, taken from whichever day the most rows agree on.
+
+The comparison is **party by party**, not by total: two errors cancel in a total and
+cannot in a list of parties. A party in one source and not the other is named and
+sided. Asking for a later date shows the reason to stop uploading — the vouchers carry
+invoices raised since the file was printed, and the file cannot.
+
+Read-only. Nothing on the Projected page has changed yet.
+
 ## v2.14 (server) — September 2026 — A re-typed bill reference is not a missing bill
 
 The measurement came back with two of 4,832 open bills apparently on no voucher, worth
