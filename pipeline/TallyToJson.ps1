@@ -692,11 +692,21 @@ $ledgerPayload = @"
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+      <!-- Dates matter here. Tally reports OPENINGBALANCE as at SVFROMDATE and
+           CLOSINGBALANCE as at SVTODATE, so stating them makes the two numbers mean
+           something we can hold on to; left out, they follow whatever period the
+           company happens to be open at and cannot be compared with anything. -->
+      <SVFROMDATE>$FromDate</SVFROMDATE>
+      <SVTODATE>$ToDate</SVTODATE>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerList" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL,PARTYGSTIN,GSTREGISTRATIONTYPE</FETCH>
+        <!-- OPENINGBALANCE / CLOSINGBALANCE are what a party actually OWES, straight
+             from Tally. The vouchers can only ever show movement since the oldest one
+             we hold (April 2015 for Kolkata), so a customer who already owed money
+             before that cannot be got right by adding vouchers up. -->
+        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL,PARTYGSTIN,GSTREGISTRATIONTYPE,OPENINGBALANCE,CLOSINGBALANCE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -726,6 +736,8 @@ $ledgerToGroup = @{}   # ledger name -> immediate group
 $groupToParent = @{}   # group name  -> parent group (or "" at root)
 $ledgerContacts = @{}  # ledger name -> @{ name; email; mobile }  (party contact block)
 $ledgerIds = @{}       # ledger name -> stable Tally GUID (survives renames)
+$ledgerOpening = @{}   # ledger name -> balance as at -FromDate  (raw Tally sign)
+$ledgerClosing = @{}   # ledger name -> balance as at -ToDate    (raw Tally sign)
 
 [xml]$lx = Post-Tally $ledgerPayload
 foreach ($l in $lx.SelectNodes("//LEDGER")) {
@@ -748,6 +760,14 @@ foreach ($l in $lx.SelectNodes("//LEDGER")) {
     if ($cName -or $cEmail -or $cMobile -or $cGstin) {
         $ledgerContacts[$name] = [ordered]@{ name = $cName; email = $cEmail; mobile = $cMobile; gstin = $cGstin }
     }
+    # What the party owes, in Tally's own words, at the two dates asked for above.
+    # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the non-zero
+    # ones are kept -- most ledgers are square and would treble the master document
+    # for nothing.
+    $ob = ToAmount (xval $l.OPENINGBALANCE)
+    $cb = ToAmount (xval $l.CLOSINGBALANCE)
+    if ($ob -ne 0) { $ledgerOpening[$name] = $ob }
+    if ($cb -ne 0) { $ledgerClosing[$name] = $cb }
 }
 Write-Host ("  Ledgers : {0}  (contacts: {1})" -f $ledgerToGroup.Count, $ledgerContacts.Count)
 
@@ -834,7 +854,15 @@ $mContacts = [ordered]@{}
 foreach ($ln in ($ledgerContacts.Keys | Sort-Object)) { $mContacts[$ln] = $ledgerContacts[$ln] }
 $mIds = [ordered]@{}
 foreach ($ln in ($ledgerIds.Keys | Sort-Object)) { $mIds[$ln] = $ledgerIds[$ln] }
-$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds }
+$mOpening = [ordered]@{}
+foreach ($ln in ($ledgerOpening.Keys | Sort-Object)) { $mOpening[$ln] = $ledgerOpening[$ln] }
+$mClosing = [ordered]@{}
+foreach ($ln in ($ledgerClosing.Keys | Sort-Object)) { $mClosing[$ln] = $ledgerClosing[$ln] }
+# The dates are stored WITH the balances: a balance without the day it was struck on
+# is not a fact anyone can use, and each company here covers one financial year.
+$masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds;
+                         opening = $mOpening; closing = $mClosing;
+                         openingAsOn = $FromDate; closingAsOn = $ToDate }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

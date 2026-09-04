@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.20 (server + pipeline) — September 2026 — Ask Tally what a party owes
+
+The balance reading came out three times closer than the bill netting on the total
+(₹47.82 Cr against Tally's ₹45.78 Cr, where the bills said ₹51.95 Cr) but barely
+better party by party — 423 agreeing instead of 415. The reason is structural, and no
+amount of allocation completeness fixes it: **adding vouchers up gives movement since
+the oldest voucher held**, April 2015 for Kolkata, not a balance. A customer who
+already owed money before that is out of reach.
+
+So the pipeline now fetches Tally's own **OPENINGBALANCE and CLOSINGBALANCE** with the
+ledger masters, with `SVFROMDATE`/`SVTODATE` set to the pull's own range so each number
+has a known date, and stores them with those dates. Against the right date that is not
+an approximation of outstanding — it is outstanding, and the vouchers are needed only
+for the ageing.
+
+They arrive with the next pull. Until then the comparison says so plainly rather than
+reading their absence as a company that owes nothing.
+
 ## v2.19 (server) — September 2026 — Read the balance of parties, not of the whole books
 
 The first run of the balance reading gave a total of **exactly ₹0** across 2,659

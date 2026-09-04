@@ -169,6 +169,19 @@ async function masterSet(db, branch, master, mode) {
   if (contacts) set.contacts = contacts;
   // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
   if (master.ids && typeof master.ids === 'object') set.ids = master.ids;
+  // What each party owes, in Tally's own words, and the day it was struck on. The
+  // vouchers can only ever show movement since the oldest one we hold, so a customer
+  // who already owed money before that cannot be got right by adding vouchers up.
+  // Stored only on a 'replace' (live) pull: a back-fill of an old year carries that
+  // year's balances, which would quietly replace the current ones.
+  if (master.closing && typeof master.closing === 'object') {
+    set.closing = master.closing;
+    set.closingAsOn = master.closingAsOn || null;
+  }
+  if (master.opening && typeof master.opening === 'object') {
+    set.opening = master.opening;
+    set.openingAsOn = master.openingAsOn || null;
+  }
   return set;
 }
 
@@ -182,6 +195,10 @@ function readMaster(doc) {
     groups: unionMaps(doc.groups, doc.histGroups),
     contacts: unionMaps(doc.contacts, doc.histContacts),
     ids: doc.ids || {},
+    closing: doc.closing || null,
+    closingAsOn: doc.closingAsOn || null,
+    opening: doc.opening || null,
+    openingAsOn: doc.openingAsOn || null,
     updatedAt: doc.updatedAt || null,
   };
 }

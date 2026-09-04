@@ -1059,6 +1059,26 @@ app.get('/api/bills/audit', async (req, res) => {
       m.set(p, (m.get(p) || 0) + open);
     }
 
+    // What Tally itself says each party owes. The vouchers can only ever show movement
+    // since the oldest one we hold -- April 2015 for Kolkata -- so a customer who
+    // already owed money before that cannot be got right by adding vouchers up, however
+    // complete the allocations are. These come from the ledger master and arrive only
+    // once a pull has run since they were asked for, so their absence is reported
+    // rather than left to look like a company that owes nothing.
+    const tallyOf = { kol: null, ahm: null };
+    for (const br of ['kol', 'ahm']) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: br }));
+      if (!m || !m.closing || !Object.keys(m.closing).length) continue;
+      const map = new Map();
+      for (const [ln, amt] of Object.entries(m.closing)) {
+        const side = yoy.sundryOf(S, ln);
+        if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(S.canon(ln))) continue;
+        const p = S.canon(ln);
+        map.set(p, (map.get(p) || 0) + -amt);          // Dr-positive, like the rest
+      }
+      tallyOf[br] = { asOn: m.closingAsOn || null, parties: map };
+    }
+
     // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
     // April 2025, so at a March 2025 snapshot every one of its bills would read as
     // lost -- an artefact of the question, not an answer to it.
@@ -1115,6 +1135,15 @@ app.get('/api/bills/audit', async (req, res) => {
         // The same comparison run on the ledger balance instead of the bill netting.
         // If this agrees where the other does not, outstanding should be built on the
         // balance and the references kept for the ageing only.
+        // Tally's own closing balances, when a pull has brought them. Against the
+        // right date this is not an approximation of outstanding -- it IS outstanding,
+        // and the vouchers are only needed for the ageing.
+        tally: tallyOf[br] ? {
+          asOn: tallyOf[br].asOn, parties: tallyOf[br].parties.size,
+          total: round([...tallyOf[br].parties.values()].reduce((a, v) => a + v, 0)),
+          sameDate: tallyOf[br].asOn === asOn,
+        } : { asOn: null, parties: 0, total: 0, sameDate: false,
+          note: 'No pull has brought Tally\'s own ledger balances yet. Run the pipeline once and ask again -- until then the vouchers can only show movement since the oldest one held.' },
         balanceTotal: round(rows.reduce((a, r) => a + r.balance, 0)),
         balanceAgree: rows.filter((r) => Math.abs(r.balanceDiff) < 1).length,
         balanceDiffer: rows.filter((r) => Math.abs(r.balanceDiff) >= 1).length,
