@@ -428,6 +428,15 @@ would pair unrelated parties that happen to differ by the same amount — and re
 as `pairs`, a merge list for the portal's `🔗 Merge names` editor. They do not count
 against the verdict; `differAfterPairs` is what is actually about money.
 
+**What is left is counted by shape**, not left as a list of a thousand rows: parties
+the vouchers show open and Tally does not, parties the vouchers show *over*-settled,
+parties only Tally knows, and parties both know but disagree on — each with its money.
+Within each, `oneSidedParties` counts those whose difference is mostly made of
+**references we hold only one side of**: an invoice with no settlement, or settlements
+against an invoice raised before the vouchers we hold begin. Where those dominate, the
+answer is about how far back the vouchers reach, not about the accounting. Every party
+links through to `/diag/?q=` for the bill-by-bill story.
+
 Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
 the vouchers carry invoices raised since the file was printed, and the file cannot.
 

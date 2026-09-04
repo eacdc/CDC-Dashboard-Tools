@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.17 (server) — September 2026 — Sort the outstanding differences by shape
+
+988 differing parties is not a list anyone reads. They are now counted by **kind** —
+the vouchers show it open and Tally does not; the vouchers show more paid than billed;
+Tally shows it open and the vouchers have nothing; both know it and the figures differ
+— each with its money, so a large class of small differences is not mistaken for the
+problem.
+
+Within each kind, the tell is a bill reference we hold **only one side of**: an invoice
+with no settlement, or settlements against an invoice raised before the vouchers we
+hold begin. Every row says how many of its open references are like that, and where
+they account for most of a party's difference the answer is about how far back the
+vouchers reach rather than about the accounting.
+
+Every party name on the comparison now links straight through to `/diag/?q=`, which
+fills the box in and asks — so any row can be taken apart bill by bill without retyping
+a name.
+
 ## v2.16 (server) — September 2026 — Ask the outstanding comparison the right question
 
 Run against the real data, the first comparison said 1,165 of 1,519 parties disagreed.
