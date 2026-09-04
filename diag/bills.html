@@ -112,12 +112,27 @@
           +'</tbody></table></div>'
           +(c.missing>c.missingSample.length?'<div class="note">… and '+(c.missing-c.missingSample.length)+' more.</div>':'')
         : '<div class="note" style="color:var(--green)"><b>Every bill in this file is also on a voucher.</b> Nothing here is unique to the file.</div>';
+      // Tally lets a bill reference be re-typed after the invoice is raised. The old
+      // snapshot still names the old reference; the voucher carries the new one. Same
+      // invoice, so it is shown apart from both the plain matches and the losses.
+      var ren=c.renamed
+        ? '<div class="note">'+c.renamed+' bill(s) worth '+rupees(c.renamedTotal)+' were raised under a reference '
+          +'<b>Tally has since re-typed</b>. The invoice is on a voucher &mdash; only the name of the reference moved.</div>'
+          +'<div class="scroll"><table><thead><tr><th>The file calls it</th><th>The voucher calls it</th>'
+          +'<th>Raised</th><th>Party</th><th style="text-align:right">Open in the file</th></tr></thead><tbody>'
+          +c.renamedSample.map(function(x){return '<tr><td class="mono">'+esc(x.ref)+'</td>'
+            +'<td class="mono">'+esc(x.renamedTo)+'</td><td class="mono">'+esc(fmtDate(x.date))+'</td>'
+            +'<td>'+esc(x.canonical||x.party)+'</td><td class="num">'+rupees(x.amount)+'</td></tr>';}).join('')
+          +'</tbody></table></div>'
+          +(c.renamed>c.renamedSample.length?'<div class="note">&hellip; and '+(c.renamed-c.renamedSample.length)+' more.</div>':'')
+        : '';
       return '<div class="body"><b>'+esc(CSVNAME[k]||k)+'</b> '
         +'<span class="muted">'+c.rows.toLocaleString('en-IN')+' bills, '
         +esc(fmtDate(c.oldestBill))+' to '+esc(fmtDate(c.newestBill))+', '+rupees(c.openTotal)+' open</span>'
         +'<div style="margin-top:6px">Found on a voucher: <b>'+c.matched.toLocaleString('en-IN')+'</b> ('+rupees(c.matchedTotal)+')'
+        +(c.renamed?' &middot; found under a re-typed reference: <b>'+c.renamed.toLocaleString('en-IN')+'</b> ('+rupees(c.renamedTotal)+')':'')
         +' &middot; not found: <b'+(c.missing?' style="color:var(--red)"':'')+'>'+c.missing.toLocaleString('en-IN')+'</b> ('+rupees(c.missingTotal)+')</div></div>'
-        +miss;
+        +ren+miss;
     }).join('<hr style="border:none;border-top:1px solid var(--line);margin:0">');
   }
 

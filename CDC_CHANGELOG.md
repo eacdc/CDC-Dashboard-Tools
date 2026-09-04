@@ -1,5 +1,24 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.14 (server) — September 2026 — A re-typed bill reference is not a missing bill
+
+The measurement came back with two of 4,832 open bills apparently on no voucher, worth
+₹51,802. They were on vouchers all along: Tally had **re-typed their references** after
+the invoices were raised (`CDC/6715/24-25` → `24-25/7747`), and the uploaded file — a
+31 March 2025 snapshot — still named the old ones. Both were in fact settled in
+November 2025.
+
+So an unfound reference is now looked for a second way: by the **voucher number** the
+reference was copied from, accepted only when an allocation on that voucher is the same
+size, so an unrelated voucher sharing a number is never taken for a match. Those come
+back as `renamed` — both names shown side by side — and do not count against the
+verdict.
+
+With that, the answer is green: every bill the files show open is carried by the
+vouchers, and Kolkata's allocations reach back to **April 2015**. The CSV stays on as a
+backup of what Tally said in March 2025 — a record, not a fallback: nothing computes a
+figure from it, and no code path returns to it when a number looks wrong.
+
 ## v2.13 (server) — September 2026 — Measure whether the bills upload is still needed
 
 Fair question after the last fix: if the pipeline pulls everything automatically, why

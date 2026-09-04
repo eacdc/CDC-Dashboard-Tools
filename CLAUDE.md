@@ -185,7 +185,15 @@ python3 -c "import re;s=open('portal/index.html',encoding='utf-8').read();open('
 `/diag/bills.html` answers the standing question of whether the manual Bills CSV
 upload can be retired now that the pipeline pulls bill-wise allocations
 (`/api/bills/coverage`): it counts the bills the file shows open that no voucher
-carries. Retire the file only when that count is zero.
+carries. As of September 2026 that count is **zero** — Kolkata's allocations reach
+back to April 2015 — so the upload is no longer the source of anything. A reference
+the vouchers lack is checked a second way first, by the voucher number it was copied
+from at the same amount: Tally re-types bill references, and a re-typed one is not a
+missing bill.
+
+**The CSV stays as a backup, never a fallback.** It is a record of what Tally said on
+31 March 2025; nothing computes a figure from it once the vouchers do, and no code
+path may return to it when a number looks wrong. A disagreeing number is a bug.
 
 When a figure is questioned, reach for `/diag/?` before theorising: it names the
 ledgers behind one party, what the fold stored, and what it did with every voucher.
