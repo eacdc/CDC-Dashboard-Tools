@@ -1,5 +1,22 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.19 (server) — September 2026 — Read the balance of parties, not of the whole books
+
+The first run of the balance reading gave a total of **exactly ₹0** across 2,659
+"parties" — which is not a company that owes nobody anything, it is every posting in
+the books added up. A full set of books nets to zero by double entry, so sweeping in
+the sales, bank and expense ledgers buries the parties among them and reports nothing.
+
+Only ledgers that can *be* outstanding are read now: Sundry Debtors and Creditors, plus
+whatever the uploaded file itself names, since Tally raises bills against fixed-asset
+and commission ledgers too.
+
+Found while fixing it: the fake Mongo's `$project` copied only the `field: 1` entries
+and silently dropped computed expressions, so the balance stage produced nothing and
+its test passed for the wrong reason. It computes them now, and the fixture gives the
+on-account party a real Sundry Debtors group so its zero balance is earned rather than
+assumed.
+
 ## v2.18 (server + pipeline) — September 2026 — Read the ledger balance, not only the bills
 
 NCTB settled the question. Four export invoices totalling ₹3.08 Cr show `settled: 0`,

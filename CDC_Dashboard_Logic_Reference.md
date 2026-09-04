@@ -445,6 +445,13 @@ account is square. The balance cannot drift that way. Where the balance agrees a
 bill netting does not, it is the references that are incomplete, not the money, and
 outstanding should be built on the balance with the references kept for the ageing.
 
+**Only ledgers that can *be* outstanding are read** — Sundry Debtors and Creditors,
+plus whatever the uploaded file itself names, since Tally raises bills against
+fixed-asset and commission ledgers too. Sweeping in the sales, bank and expense
+ledgers gives a grand total of exactly **zero**, because a full set of books nets to
+zero by double entry; a balance total of 0 across thousands of "parties" is the
+signature of that mistake, not of a company that owes nobody anything.
+
 NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr show
 `settled: 0` and the bill netting calls ₹2.48 Cr open, while the ledger balance comes
 to **exactly zero** — the ₹2.39 Cr receipt of February 2017 was posted without naming a
