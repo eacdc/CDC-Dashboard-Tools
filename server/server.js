@@ -978,6 +978,17 @@ app.get('/api/bills/audit', async (req, res) => {
       }
       csvOf[key] = { rows: rows.length, parties };
     }
+    // A branch's two files are ONE expectation per party. Tally splits a party between
+    // the receivable and the payable report by the SIGN of its balance, not by the
+    // group it sits in -- a customer in credit is printed under payables -- so
+    // comparing file against file puts the same party on both sides of the answer.
+    const csvByBranch = { kol: new Map(), ahm: new Map() }, csvRowsOf = { kol: 0, ahm: 0 };
+    for (const key of Object.keys(AUDIT_SIDE)) {
+      const br = AUDIT_SIDE[key].branch, sign = AUDIT_SIDE[key].side === 'debtor' ? 1 : -1;
+      csvRowsOf[br] += csvOf[key].rows;
+      for (const [p, amt] of csvOf[key].parties) csvByBranch[br].set(p, (csvByBranch[br].get(p) || 0) + sign * amt);
+    }
+
     let snapshot = null, agreeing = 0;
     for (const [k, c] of printedOn) if (c > agreeing) { snapshot = k; agreeing = c; }
     const snapshotFrom = snapshot ? 'overdue days' : (newestBill ? 'newest bill' : null);
@@ -1036,8 +1047,15 @@ app.get('/api/bills/audit', async (req, res) => {
     for (const r of balanced) {
       const m = balOf[r._id.branch];
       if (!m || !r._id.ledger) continue;
-      const open = -r.sum;             // same Dr-positive scale as the bill netting
+      // Only ledgers that can BE outstanding. Every posting in the books nets to zero
+      // by double entry, so sweeping in the sales, bank and expense ledgers would
+      // report a grand total of exactly nothing and bury the parties among them.
+      // Sundry Debtors and Creditors, plus whatever the file itself names -- Tally
+      // raises bills against fixed-asset and commission ledgers too.
       const p = S.canon(r._id.ledger);
+      const side = yoy.sundryOf(S, r._id.ledger);
+      if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[r._id.branch].has(p)) continue;
+      const open = -r.sum;             // same Dr-positive scale as the bill netting
       m.set(p, (m.get(p) || 0) + open);
     }
 
@@ -1054,18 +1072,7 @@ app.get('/api/bills/audit', async (req, res) => {
     const out = { ok: true, asOn, snapshot, snapshotFrom, snapshotAgreeingRows: agreeing,
       checkedAt: new Date().toISOString(), branches: {} };
     for (const br of ['kol', 'ahm']) {
-      // Both of a branch's files are ONE expectation per party. Tally splits a party
-      // into the receivable or the payable report by the SIGN of its balance, not by
-      // the group it sits in -- a customer in credit is printed under payables -- so
-      // comparing file against file puts the same party on both sides of the answer.
-      const csv = new Map();
-      let csvRows = 0;
-      for (const key of Object.keys(AUDIT_SIDE)) {
-        if (AUDIT_SIDE[key].branch !== br) continue;
-        const sign = AUDIT_SIDE[key].side === 'debtor' ? 1 : -1;
-        csvRows += csvOf[key].rows;
-        for (const [p, amt] of csvOf[key].parties) csv.set(p, (csv.get(p) || 0) + sign * amt);
-      }
+      const csv = csvByBranch[br], csvRows = csvRowsOf[br];
       const vch = vchOf[br];
       const covers = !!firstOf[br] && firstOf[br] <= asOn;
       const rows = [];

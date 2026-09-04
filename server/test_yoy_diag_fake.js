@@ -131,7 +131,18 @@ class Col {
         const key = (r) => (k === '_id' && r._id && typeof r._id === 'object' ? JSON.stringify(r._id) : r[k]);
         rows.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * st.$sort[k]); }
       else if (st.$limit) rows = rows.slice(0, st.$limit);
-      else if (st.$project) rows = rows.map((d) => { const o = {}; for (const k of Object.keys(st.$project)) if (st.$project[k] === 1 && d[k] !== undefined) o[k] = d[k]; return o; });
+      // $project both selects and COMPUTES. Copying only the `field: 1` entries and
+      // dropping the expressions would leave a stage that quietly produces nothing,
+      // and a test that then passes for the wrong reason.
+      else if (st.$project) rows = rows.map((d) => {
+        const o = {};
+        for (const k of Object.keys(st.$project)) {
+          const spec = st.$project[k];
+          if (spec === 1) { if (d[k] !== undefined) o[k] = d[k]; }
+          else if (spec !== 0) o[k] = Col.expr(d, spec);
+        }
+        return o;
+      });
     }
     return { async toArray() { return rows; } };
   }
@@ -163,6 +174,10 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
       'Carbonlite Print & Publishing- DR': 'Export - S/Dr',
       'Carbonlite Print & Publishing (AHD)': 'Export - S/Dr',
       'Bigger Customer': 'Export - S/Dr',
+      // A real Sundry Debtor that no uploaded file names: it must reach the balance
+      // reading on its own group, or a party paid entirely on account would be
+      // dropped from the comparison and its balance read as zero for the wrong reason.
+      'Onaccount Traders': 'Export - S/Dr',
       'Bad Debts': 'Indirect Expenses',
       'CDC Kolkata': 'Branch / Divisions',
     },
@@ -487,6 +502,15 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'and it is the BALANCE that agrees with Tally, which is the whole reason for reading it');
   assert(audB.branches.kol.balanceAgree >= 1 && typeof audB.branches.kol.balanceTotal === 'number',
     'the branch reports how many parties agree on balance, alongside how many agree on bills');
+
+  // Only ledgers that can BE outstanding. Every posting in the books nets to zero by
+  // double entry, so sweeping the sales and bank ledgers in gives a grand total of
+  // exactly nothing -- a balance total of 0 across thousands of "parties" is the
+  // signature of that mistake, not of a company that owes nobody anything.
+  assert(!audB.branches.kol.worst.some((r) => /Citi Bank|Export Sales/.test(r.party)),
+    'a bank or a sales account is not a party and never appears among them');
+  assert(audB.branches.kol.balanceTotal !== 0,
+    'so the balance total is the money outstanding, not the zero every full set of books adds up to');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');
