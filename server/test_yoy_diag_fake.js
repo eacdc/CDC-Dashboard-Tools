@@ -85,6 +85,8 @@ class Col {
         typeof a.in === 'string' ? a.in.replace('$$this', '$this') : a.in));
     }
     if (op === '$concatArrays') return Col.expr(doc, a).reduce((x, y) => x.concat(y), []);
+    if (op === '$objectToArray') { const o = Col.expr(doc, a) || {};
+      return Object.keys(o).map((k) => ({ k, v: o[k] })); }
     throw new Error('fake aggregate: unsupported operator ' + op);
   }
   aggregate(stages) {
@@ -462,6 +464,29 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(cl && cl.openRefs === 3 && cl.oneSidedRefs === 2,
     'each row says how many of its open references we hold only one side of, which is where the answer usually is: '
     + JSON.stringify(cl && [cl.openRefs, cl.oneSidedRefs]));
+
+  // ---- the ledger balance, which needs no references at all -------------------
+  // Bill-reference netting is only as good as the references Tally was given. A
+  // receipt posted ON ACCOUNT settles the customer without naming a bill, so every
+  // invoice reads open forever though the account is square. The balance cannot drift
+  // that way -- it is every posting to the name, added up -- so it is read alongside.
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:oa1', guid: 'goa1', branch: 'kol', date: '20260220', no: 'CDC/OA/25-26', type: 'Sales',
+    ledgers: { 'Export Sales': 400000 }, party_ledgers: { 'Onaccount Traders': -400000 },
+    bills: [{ ledger: 'Onaccount Traders', ref: 'CDC/OA/25-26', type: 'New Ref', amount: -400000 }],
+  });
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:oa2', guid: 'goa2', branch: 'kol', date: '20260225', no: 'BR/99', type: 'Bank Receipt',
+    ledgers: {}, party_ledgers: { 'Onaccount Traders': 400000, 'Citi Bank': -400000 },
+  });
+  const audB = await get('/api/bills/audit?asOn=20260228');
+  const oa = audB.branches.kol.worst.find((r) => r.party === 'Onaccount Traders');
+  assert(oa && oa.vouchers === 400000 && oa.balance === 0,
+    'the bills read the invoice as open, the balance reads the account as square: ' + JSON.stringify(oa && [oa.vouchers, oa.balance]));
+  assert(oa && oa.balanceDiff === 0,
+    'and it is the BALANCE that agrees with Tally, which is the whole reason for reading it');
+  assert(audB.branches.kol.balanceAgree >= 1 && typeof audB.branches.kol.balanceTotal === 'number',
+    'the branch reports how many parties agree on balance, alongside how many agree on bills');
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');

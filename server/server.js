@@ -1017,6 +1017,30 @@ app.get('/api/bills/audit', async (req, res) => {
       if (r.dr < 0.5 || r.cr < 0.5) { sh.oneSided++; sh.oneSidedAmount += open; }
     }
 
+    // And the third reading, which needs no bill references at all: the party's own
+    // LEDGER BALANCE, every posting to its name added up. Bill-reference netting is
+    // only ever as good as the references Tally was given -- an old receipt posted on
+    // account, or a year-end "Due As on" balancing bill, leaves invoices reading open
+    // forever though the customer paid. The balance cannot drift that way, so where
+    // the two disagree it is the references that are incomplete, not the money.
+    const balanced = await db.collection('vouchers').aggregate([
+      { $match: { date: { $lte: asOn } } },
+      { $project: { branch: 1, kv: { $concatArrays: [
+        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+      { $unwind: '$kv' },
+      { $group: { _id: { branch: '$branch', ledger: '$kv.k' }, sum: { $sum: '$kv.v' } } },
+    ], { allowDiskUse: true }).toArray();
+
+    const balOf = { kol: new Map(), ahm: new Map() };
+    for (const r of balanced) {
+      const m = balOf[r._id.branch];
+      if (!m || !r._id.ledger) continue;
+      const open = -r.sum;             // same Dr-positive scale as the bill netting
+      const p = S.canon(r._id.ledger);
+      m.set(p, (m.get(p) || 0) + open);
+    }
+
     // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
     // April 2025, so at a March 2025 snapshot every one of its bills would read as
     // lost -- an artefact of the question, not an answer to it.
@@ -1045,11 +1069,13 @@ app.get('/api/bills/audit', async (req, res) => {
       const vch = vchOf[br];
       const covers = !!firstOf[br] && firstOf[br] <= asOn;
       const rows = [];
-      for (const p of new Set([...csv.keys(), ...vch.keys()])) {
+      for (const p of new Set([...csv.keys(), ...vch.keys(), ...balOf[br].keys()])) {
         const c = round(csv.get(p) || 0), v = round(vch.get(p) || 0);
-        if (Math.abs(c) < 0.5 && Math.abs(v) < 0.5) continue;
+        if (Math.abs(c) < 0.5 && Math.abs(v) < 0.5 && Math.abs(balOf[br].get(p) || 0) < 0.5) continue;
         const sh = shapeOf[br].get(p);
+        const bal = round(balOf[br].get(p) || 0);
         rows.push({ party: p, csv: c, vouchers: v, diff: round(v - c),
+          balance: bal, balanceDiff: round(bal - c),
           onlyIn: !csv.has(p) ? 'vouchers' : (!vch.has(p) ? 'csv' : null),
           openRefs: sh ? sh.openRefs : 0, oneSidedRefs: sh ? sh.oneSided : 0,
           oneSidedAmount: sh ? round(sh.oneSidedAmount) : 0 });
@@ -1079,6 +1105,14 @@ app.get('/api/bills/audit', async (req, res) => {
         coversDate: covers, firstVoucher: firstOf[br],
         csvRows, csvTotal: round(rows.reduce((a, r) => a + r.csv, 0)),
         vouchersTotal: round(rows.reduce((a, r) => a + r.vouchers, 0)),
+        // The same comparison run on the ledger balance instead of the bill netting.
+        // If this agrees where the other does not, outstanding should be built on the
+        // balance and the references kept for the ageing only.
+        balanceTotal: round(rows.reduce((a, r) => a + r.balance, 0)),
+        balanceAgree: rows.filter((r) => Math.abs(r.balanceDiff) < 1).length,
+        balanceDiffer: rows.filter((r) => Math.abs(r.balanceDiff) >= 1).length,
+        balanceWorst: rows.slice().filter((r) => Math.abs(r.balanceDiff) >= 1)
+          .sort((a, b) => Math.abs(b.balanceDiff) - Math.abs(a.balanceDiff)).slice(0, 100),
         parties: rows.length, agree: rows.length - off.length,
         differ: off.length, namePairs: pairs.length, differAfterPairs: real.length,
         pairs: pairs.slice(0, 100),
