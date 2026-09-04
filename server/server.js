@@ -909,6 +909,51 @@ function snapshotDateOf(rows, tally) {
   }
 }
 
+// One party entered under two ledger names shows up here as TWO differences that
+// cancel each other to the rupee: the bill was raised against one spelling and
+// settled -- or journalled across -- against the other, so one reads over-settled by
+// exactly what the other reads unpaid. No money is missing; the name-merge simply has
+// not been told they are the same customer.
+//
+// They are matched by that exact cancellation AND a shared word, so two unrelated
+// parties that happen to differ by the same amount are not declared the same
+// customer. What comes back is a merge list for the portal's name editor, kept apart
+// from the differences that are actually about money.
+// Words that say nothing about WHICH company this is. Without them "Krishna Vanijya
+// Pvt Ltd" and an unrelated "Private Limited" would look related.
+const PAIR_STOP = new Set(['private', 'limited', 'india', 'company', 'sons', 'international',
+  'services', 'solutions', 'enterprise', 'enterprises', 'trading', 'industries', 'group']);
+
+function pairOffNames(rows) {
+  // Tokenised from the raw name, not through norm(), which strips the separators and
+  // would leave one unsplittable word that can never match anything.
+  const words = (s) => new Set(String(s).toLowerCase().split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !PAIR_STOP.has(w)));
+  const byAmount = new Map();
+  for (const r of rows) {
+    const k = Math.round(Math.abs(r.diff));
+    if (!byAmount.has(k)) byAmount.set(k, []);
+    byAmount.get(k).push(r);
+  }
+  const pairs = [];
+  for (const list of byAmount.values()) {
+    const plus = list.filter((r) => r.diff > 0), minus = list.filter((r) => r.diff < 0);
+    for (const a of plus) {
+      if (a.pairedWith) continue;
+      const aw = words(a.party);
+      const b = minus.find((x) => !x.pairedWith && [...words(x.party)].some((w) => aw.has(w)));
+      if (!b) continue;
+      a.pairedWith = b.party; b.pairedWith = a.party;
+      pairs.push({ amount: Math.abs(a.diff),
+        onlyInVouchers: a.onlyIn === 'vouchers' && b.onlyIn === 'vouchers',
+        a: { party: a.party, csv: a.csv, vouchers: a.vouchers },
+        b: { party: b.party, csv: b.csv, vouchers: b.vouchers } });
+    }
+  }
+  pairs.sort((x, y) => y.amount - x.amount);
+  return pairs;
+}
+
 app.get('/api/bills/audit', async (req, res) => {
   try {
     const db = await getDb();
@@ -941,33 +986,52 @@ app.get('/api/bills/audit', async (req, res) => {
     if (!asOn) return res.json({ ok: false, error: 'no bills file has been uploaded, so there is nothing to compare against' });
 
     // The voucher side: every allocation up to that date, netted per bill reference.
+    // Every ledger that carries one, not only the Sundry Debtors and Creditors --
+    // Tally's outstandings report lists a bill against whatever ledger it was raised
+    // on, and dropping the rest would report the file's own rows as missing money.
     const netted = await db.collection('vouchers').aggregate([
       { $match: { date: { $lte: asOn } } },
       { $unwind: '$bills' },
       { $group: { _id: { branch: '$branch', ledger: '$bills.ledger', ref: '$bills.ref' }, sum: { $sum: '$bills.amount' } } },
     ], { allowDiskUse: true }).toArray();
 
-    const vchOf = {};
-    for (const key of Object.keys(AUDIT_SIDE)) vchOf[key] = new Map();
+    const vchOf = { kol: new Map(), ahm: new Map() };
     for (const r of netted) {
-      const ledger = r._id.ledger;
-      if (!ledger) continue;
-      const side = yoy.sundryOf(S, ledger);
-      if (side !== 'debtor' && side !== 'creditor') continue;   // not a bills party at all
-      const open = side === 'debtor' ? -r.sum : r.sum;
+      const ledger = r._id.ledger, m = vchOf[r._id.branch];
+      if (!ledger || !m) continue;
+      const open = -r.sum;               // Dr-positive: owed TO us is +ve, owed BY us -ve
       if (Math.abs(open) < 0.5) continue;                        // settled to the rupee
-      const key = Object.keys(AUDIT_SIDE).find((k) =>
-        AUDIT_SIDE[k].branch === r._id.branch && AUDIT_SIDE[k].side === side);
-      if (!key) continue;                                        // no file covers that pair
-      const m = vchOf[key], p = S.canon(ledger);
+      const p = S.canon(ledger);
       m.set(p, (m.get(p) || 0) + open);
+    }
+
+    // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
+    // April 2025, so at a March 2025 snapshot every one of its bills would read as
+    // lost -- an artefact of the question, not an answer to it.
+    const firstOf = {};
+    for (const br of ['kol', 'ahm']) {
+      const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+      firstOf[br] = f.length ? f[0].date : null;
     }
 
     const round = (n) => Math.round(n * 100) / 100;
     const out = { ok: true, asOn, snapshot, snapshotFrom, snapshotAgreeingRows: agreeing,
-      checkedAt: new Date().toISOString(), files: {} };
-    for (const key of Object.keys(AUDIT_SIDE)) {
-      const csv = csvOf[key].parties, vch = vchOf[key];
+      checkedAt: new Date().toISOString(), branches: {} };
+    for (const br of ['kol', 'ahm']) {
+      // Both of a branch's files are ONE expectation per party. Tally splits a party
+      // into the receivable or the payable report by the SIGN of its balance, not by
+      // the group it sits in -- a customer in credit is printed under payables -- so
+      // comparing file against file puts the same party on both sides of the answer.
+      const csv = new Map();
+      let csvRows = 0;
+      for (const key of Object.keys(AUDIT_SIDE)) {
+        if (AUDIT_SIDE[key].branch !== br) continue;
+        const sign = AUDIT_SIDE[key].side === 'debtor' ? 1 : -1;
+        csvRows += csvOf[key].rows;
+        for (const [p, amt] of csvOf[key].parties) csv.set(p, (csv.get(p) || 0) + sign * amt);
+      }
+      const vch = vchOf[br];
+      const covers = !!firstOf[br] && firstOf[br] <= asOn;
       const rows = [];
       for (const p of new Set([...csv.keys(), ...vch.keys()])) {
         const c = round(csv.get(p) || 0), v = round(vch.get(p) || 0);
@@ -976,26 +1040,35 @@ app.get('/api/bills/audit', async (req, res) => {
           onlyIn: !csv.has(p) ? 'vouchers' : (!vch.has(p) ? 'csv' : null) });
       }
       rows.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-      const agree = rows.filter((r) => Math.abs(r.diff) < 1).length;
-      out.files[key] = {
-        ...AUDIT_SIDE[key], uploaded: files[key + 'UpdatedAt'] ? new Date(files[key + 'UpdatedAt']).toISOString() : null,
-        csvRows: csvOf[key].rows,
-        csvTotal: round(rows.reduce((a, r) => a + r.csv, 0)),
+      const off = rows.filter((r) => Math.abs(r.diff) >= 1);
+      const pairs = pairOffNames(off);
+      const real = off.filter((r) => !r.pairedWith);
+      out.branches[br] = {
+        coversDate: covers, firstVoucher: firstOf[br],
+        csvRows, csvTotal: round(rows.reduce((a, r) => a + r.csv, 0)),
         vouchersTotal: round(rows.reduce((a, r) => a + r.vouchers, 0)),
-        parties: rows.length, agree, differ: rows.length - agree,
-        worst: rows.filter((r) => Math.abs(r.diff) >= 1).slice(0, 100),
+        parties: rows.length, agree: rows.length - off.length,
+        differ: off.length, namePairs: pairs.length, differAfterPairs: real.length,
+        pairs: pairs.slice(0, 100),
+        worst: real.slice(0, 100),
+        note: covers ? null
+          : `This branch's vouchers start ${firstOf[br] || 'nowhere'}, after ${asOn}, so there is nothing to compare them against yet. Ask again with ?asOn= a later date.`,
       };
-      out.files[key].diff = round(out.files[key].vouchersTotal - out.files[key].csvTotal);
+      out.branches[br].diff = round(out.branches[br].vouchersTotal - out.branches[br].csvTotal);
     }
 
-    const differ = Object.values(out.files).reduce((a, f) => a + f.differ, 0);
-    const parties = Object.values(out.files).reduce((a, f) => a + f.parties, 0);
+    const live = Object.values(out.branches).filter((b) => b.coversDate);
+    const differ = live.reduce((a, b) => a + b.differAfterPairs, 0);
+    const paired = live.reduce((a, b) => a + b.namePairs, 0);
+    const parties = live.reduce((a, b) => a + b.parties, 0);
+    const pairNote = paired ? ` A further ${paired} are one party under two ledger names, each cancelling the other exactly -- merge those on the portal and they go.` : '';
     out.verdict = {
-      partiesCompared: parties, partiesDiffering: differ,
+      partiesCompared: parties, partiesDiffering: differ, namePairs: paired,
+      branchesNotCompared: Object.keys(out.branches).filter((b) => !out.branches[b].coversDate),
       safeToSwitch: differ === 0,
       says: differ === 0
-        ? `Every one of the ${parties} parties with an open bill comes out at the same figure from the vouchers as from Tally's own snapshot of ${asOn}. Outstanding can be computed from the vouchers.`
-        : `${differ} of ${parties} parties come out differently from the vouchers than from Tally's snapshot of ${asOn}. Each is listed with both figures; understand them before switching anything over.`,
+        ? `Every one of the ${parties} parties with an open bill comes out at the same figure from the vouchers as from Tally's own snapshot of ${asOn}.${pairNote} Outstanding can be computed from the vouchers.`
+        : `${differ} of ${parties} parties come out differently from the vouchers than from Tally's snapshot of ${asOn}.${pairNote} Each is listed with both figures; understand them before switching anything over.`,
     };
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
