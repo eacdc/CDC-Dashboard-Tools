@@ -358,9 +358,28 @@ guess would silently lose whatever it alone still carries. `GET /api/bills/cover
   reference: how many are found, how many are not, and what the unfound ones are
   worth — with the first 25 named, so the year to re-pull is obvious.
 
+A reference the vouchers do not carry is **not yet a missing bill**. Tally lets a bill
+reference be re-typed after the invoice is raised, and the CSV is an old snapshot: it
+can still name the reference as it was while the voucher carries the corrected one.
+So an unfound reference is looked for a second way — by the **voucher number** the
+reference was copied from — and accepted only when an allocation on that voucher is
+the same size, so an unrelated voucher sharing a number is never quietly counted as a
+match. Those come back as `renamed`, listed with both names side by side, and they do
+not count against the verdict.
+
 `verdict.csvStillNeeded` is the answer. Zero unfound bills and the upload can go;
 anything else names the cost of dropping it. Re-pulling the years those bills fall in
 turns the answer over, since a re-pull brings their allocations with it.
+
+**The measurement, run September 2026:** every one of the 4,832 bills the three files
+show open is carried by the vouchers — 4,830 under the same reference, 2 under one
+Tally had since re-typed. Kolkata's allocations reach back to **April 2015**, so the
+whole back-fill has them. The upload is no longer the source of anything.
+
+**The CSV is kept regardless.** It stays as a *backup* — a record of what Tally said
+on 31 March 2025 — not as a *fallback*: nothing computes outstanding from it once the
+vouchers do, and no code path may silently return to it when a figure looks wrong. A
+number that disagrees is a bug to find, not a reason to reach for the older source.
 
 ### One customer, two names
 

@@ -774,7 +774,8 @@ app.get('/api/bills/coverage', async (_req, res) => {
     for (const key of ['kolBillsRecv', 'kolBillsPay', 'ahmBillsPay']) {
       const info = { uploaded: files[key + 'UpdatedAt'] ? new Date(files[key + 'UpdatedAt']).toISOString() : null,
         rows: 0, oldestBill: null, newestBill: null, openTotal: 0,
-        matched: 0, matchedTotal: 0, missing: 0, missingTotal: 0, missingSample: [] };
+        matched: 0, matchedTotal: 0, renamed: 0, renamedTotal: 0, renamedSample: [],
+        missing: 0, missingTotal: 0, missingSample: [] };
       if (files[key] != null) {
         let rows = [];
         try { rows = E.parseBillsCSV(String(files[key])); } catch (e) { rows = []; }
@@ -798,9 +799,44 @@ app.get('/api/bills/coverage', async (_req, res) => {
           ], { allowDiskUse: true }).toArray();
           for (const h of hit) found.add(h._id);
         }
+        // A reference the vouchers do not carry is not yet a missing bill. Tally lets a
+        // bill reference be RE-TYPED after the invoice is raised, and the CSV is an old
+        // snapshot: it can still name the reference as it was, while the voucher now
+        // carries the corrected one. The invoice itself is the same invoice, so it is
+        // looked for a second way -- by the voucher NUMBER the CSV reference names,
+        // which is what the reference was copied from in the first place.
+        const unmatched = rows.filter((b) => !(b.refNo && found.has(b.refNo)));
+        const byNo = new Map();
+        const nos = [...new Set(unmatched.map((b) => b.refNo).filter(Boolean))];
+        for (let i = 0; i < nos.length; i += 1000) {
+          const slice = nos.slice(i, i + 1000);
+          const vs = await db.collection('vouchers').find({ no: { $in: slice } }).toArray();
+          for (const v of vs) {
+            if (!v.bills || !v.bills.length) continue;
+            const list = byNo.get(v.no) || [];
+            list.push(v);
+            byNo.set(v.no, list);
+          }
+        }
         for (const b of rows) {
-          if (b.refNo && found.has(b.refNo)) { info.matched++; info.matchedTotal += b.amount || 0; }
-          else {
+          if (b.refNo && found.has(b.refNo)) { info.matched++; info.matchedTotal += b.amount || 0; continue; }
+          // The same invoice under a new reference: the voucher of that number, carrying
+          // an allocation of the same size. Size decides, so an unrelated voucher that
+          // happens to share a number is not quietly counted as a match.
+          let renamedTo = null;
+          for (const v of (byNo.get(b.refNo) || [])) {
+            for (const al of (v.bills || [])) {
+              if (Math.abs(Math.abs(al.amount || 0) - Math.abs(b.amount || 0)) <= 1) { renamedTo = al.ref; break; }
+            }
+            if (renamedTo) break;
+          }
+          if (renamedTo) {
+            info.renamed++; info.renamedTotal += b.amount || 0;
+            if (info.renamedSample.length < 25) {
+              info.renamedSample.push({ ref: b.refNo, renamedTo, date: b.date,
+                party: b.party, canonical: S.canon(b.party || ''), amount: b.amount });
+            }
+          } else {
             info.missing++; info.missingTotal += b.amount || 0;
             if (info.missingSample.length < 25) {
               info.missingSample.push({ ref: b.refNo || '(no reference)', date: b.date,
@@ -810,6 +846,7 @@ app.get('/api/bills/coverage', async (_req, res) => {
         }
         info.openTotal = Math.round(info.openTotal * 100) / 100;
         info.matchedTotal = Math.round(info.matchedTotal * 100) / 100;
+        info.renamedTotal = Math.round(info.renamedTotal * 100) / 100;
         info.missingTotal = Math.round(info.missingTotal * 100) / 100;
       }
       out.csv[key] = info;
@@ -818,13 +855,19 @@ app.get('/api/bills/coverage', async (_req, res) => {
     // 3. the verdict, stated plainly rather than left to be inferred.
     const totalMissing = Object.values(out.csv).reduce((a, c) => a + c.missing, 0);
     const missingMoney = Object.values(out.csv).reduce((a, c) => a + c.missingTotal, 0);
+    const totalRenamed = Object.values(out.csv).reduce((a, c) => a + c.renamed, 0);
+    const renamedNote = totalRenamed
+      ? ` ${totalRenamed} more were found under a reference Tally has since re-typed -- the same invoice, a different name.`
+      : '';
     out.verdict = {
       csvStillNeeded: totalMissing > 0,
       billsOnlyInCsv: totalMissing,
       moneyOnlyInCsv: Math.round(missingMoney * 100) / 100,
+      billsFoundRenamed: totalRenamed,
       says: totalMissing === 0
-        ? 'Every bill the uploaded files still show open is also carried by the vouchers. Outstanding can be computed from the vouchers alone, and the CSV upload can be retired.'
-        : `${totalMissing} bill(s) worth \u20b9${Math.round(missingMoney).toLocaleString('en-IN')} are in the uploaded files and in no voucher we hold. Retiring the CSV would lose exactly those; re-pull the years they fall in first.`,
+        ? 'Every bill the uploaded files still show open is also carried by the vouchers.' + renamedNote
+          + ' Outstanding can be computed from the vouchers alone, and the upload is no longer the source of anything.'
+        : `${totalMissing} bill(s) worth \u20b9${Math.round(missingMoney).toLocaleString('en-IN')} are in the uploaded files and in no voucher we hold.${renamedNote} Retiring the CSV would lose exactly those; re-pull the years they fall in first.`,
     };
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }

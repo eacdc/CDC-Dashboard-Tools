@@ -320,8 +320,39 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const recv = cov.csv.kolBillsRecv;
   assert(recv.rows === 1 && recv.matched === 1 && recv.missing === 0,
     'the bill the file shows open is found on a voucher, so it is not unique to the file');
-  assert(cov.verdict.csvStillNeeded === false && /can be retired/.test(cov.verdict.says),
+  assert(cov.verdict.csvStillNeeded === false && /no longer the source/.test(cov.verdict.says),
     'and the verdict says so in words, rather than leaving it to be inferred');
+
+  // Tally lets a bill reference be re-typed after the invoice is raised, and the file
+  // is an old snapshot -- so it can name a reference no voucher carries while the
+  // invoice itself sits right there under a new name. Counting that as a loss would
+  // keep the upload alive for a bill that was never missing. It is found by the
+  // voucher NUMBER the reference was copied from, and only when the money agrees.
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:b4', guid: 'gb4', branch: 'kol', date: '20260210', no: 'CDC/7418/24-25', type: 'Sales',
+    ledgers: { 'Export Sales': 4900 }, party_ledgers: { 'Carbonlite Print & Publishing': -5782 },
+    bills: [{ ledger: 'Carbonlite Print & Publishing', ref: '24-25/8842', type: 'New Ref', amount: -5782 }],
+  });
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv +=
+    '13-Feb-25,CDC/7418/24-25,Carbonlite Print & Publishing,"5,782.00 Dr",15-Mar-25,16\n';
+  const covR = await get('/api/bills/coverage');
+  assert(covR.csv.kolBillsRecv.renamed === 1 && covR.csv.kolBillsRecv.missing === 0,
+    'a bill Tally re-referenced is found on its voucher, NOT counted as lost with the file');
+  assert(covR.csv.kolBillsRecv.renamedSample[0].renamedTo === '24-25/8842',
+    'and the reference the voucher now carries is named, so the pair can be eyeballed');
+  assert(covR.verdict.csvStillNeeded === false && covR.verdict.billsFoundRenamed === 1,
+    'so the verdict stays green, and says how many were only re-named');
+
+  // But a voucher of that number carrying a DIFFERENT amount is a different invoice,
+  // and must not be quietly accepted as the missing one.
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv +=
+    '13-Feb-25,CDC/7418/24-25,Carbonlite Print & Publishing,"99,999.00 Dr",15-Mar-25,16\n';
+  const covW = await get('/api/bills/coverage');
+  assert(covW.csv.kolBillsRecv.missing === 1 && covW.csv.kolBillsRecv.missingTotal === 99999,
+    'a bill whose money does not match that voucher is still reported missing, not rescued by its number');
+  fakeDb.collection('inputfiles').docs[0].kolBillsRecv =
+    fakeDb.collection('inputfiles').docs[0].kolBillsRecv.replace(
+      '13-Feb-25,CDC/7418/24-25,Carbonlite Print & Publishing,"99,999.00 Dr",15-Mar-25,16\n', '');
 
   // A bill the file alone knows about must flip the verdict and be NAMED -- that is
   // the whole safety of the measurement.
