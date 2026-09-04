@@ -992,10 +992,18 @@ app.get('/api/bills/audit', async (req, res) => {
     const netted = await db.collection('vouchers').aggregate([
       { $match: { date: { $lte: asOn } } },
       { $unwind: '$bills' },
-      { $group: { _id: { branch: '$branch', ledger: '$bills.ledger', ref: '$bills.ref' }, sum: { $sum: '$bills.amount' } } },
+      { $group: { _id: { branch: '$branch', ledger: '$bills.ledger', ref: '$bills.ref' },
+        sum: { $sum: '$bills.amount' },
+        // The two directions kept apart. A reference we only ever saw ONE side of --
+        // an invoice with no settlement, or settlements against an invoice we never
+        // saw -- is the signature of half the story being outside what we hold, and
+        // it explains most of a party's difference when it explains any of it.
+        dr: { $sum: { $cond: [{ $lt: ['$bills.amount', 0] }, { $multiply: ['$bills.amount', -1] }, 0] } },
+        cr: { $sum: { $cond: [{ $gt: ['$bills.amount', 0] }, '$bills.amount', 0] } } } },
     ], { allowDiskUse: true }).toArray();
 
     const vchOf = { kol: new Map(), ahm: new Map() };
+    const shapeOf = { kol: new Map(), ahm: new Map() };
     for (const r of netted) {
       const ledger = r._id.ledger, m = vchOf[r._id.branch];
       if (!ledger || !m) continue;
@@ -1003,6 +1011,10 @@ app.get('/api/bills/audit', async (req, res) => {
       if (Math.abs(open) < 0.5) continue;                        // settled to the rupee
       const p = S.canon(ledger);
       m.set(p, (m.get(p) || 0) + open);
+      const sh = shapeOf[r._id.branch].get(p)
+        || shapeOf[r._id.branch].set(p, { openRefs: 0, oneSided: 0, oneSidedAmount: 0 }).get(p);
+      sh.openRefs++;
+      if (r.dr < 0.5 || r.cr < 0.5) { sh.oneSided++; sh.oneSidedAmount += open; }
     }
 
     // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
@@ -1036,14 +1048,34 @@ app.get('/api/bills/audit', async (req, res) => {
       for (const p of new Set([...csv.keys(), ...vch.keys()])) {
         const c = round(csv.get(p) || 0), v = round(vch.get(p) || 0);
         if (Math.abs(c) < 0.5 && Math.abs(v) < 0.5) continue;
+        const sh = shapeOf[br].get(p);
         rows.push({ party: p, csv: c, vouchers: v, diff: round(v - c),
-          onlyIn: !csv.has(p) ? 'vouchers' : (!vch.has(p) ? 'csv' : null) });
+          onlyIn: !csv.has(p) ? 'vouchers' : (!vch.has(p) ? 'csv' : null),
+          openRefs: sh ? sh.openRefs : 0, oneSidedRefs: sh ? sh.oneSided : 0,
+          oneSidedAmount: sh ? round(sh.oneSidedAmount) : 0 });
       }
       rows.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
       const off = rows.filter((r) => Math.abs(r.diff) >= 1);
       const pairs = pairOffNames(off);
       const real = off.filter((r) => !r.pairedWith);
+      // What SHAPE are the differences that are left? Nearly a thousand rows is not a
+      // list anyone reads; the shape says where to look first, and each count carries
+      // its money so a large class of small differences is not mistaken for the problem.
+      const cls = (r) => (r.onlyIn === 'csv' ? 'onlyInTally'
+        : r.onlyIn === 'vouchers' ? (r.diff > 0 ? 'onlyInVouchersOpen' : 'onlyInVouchersOverSettled')
+          : 'bothButDiffer');
+      const shape = {};
+      for (const r of real) {
+        const k = cls(r);
+        const s = shape[k] || (shape[k] = { parties: 0, money: 0, oneSidedParties: 0 });
+        s.parties++; s.money = round(s.money + r.diff);
+        // One-sided references are the tell: we hold only the invoice, or only the
+        // settlements. Where they dominate a class, the answer is about what the
+        // vouchers reach back to, not about the accounting.
+        if (r.oneSidedRefs && Math.abs(r.oneSidedAmount) >= Math.abs(r.diff) * 0.5) s.oneSidedParties++;
+      }
       out.branches[br] = {
+        shape,
         coversDate: covers, firstVoucher: firstOf[br],
         csvRows, csvTotal: round(rows.reduce((a, r) => a + r.csv, 0)),
         vouchersTotal: round(rows.reduce((a, r) => a + r.vouchers, 0)),

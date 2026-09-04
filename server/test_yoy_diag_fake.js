@@ -74,6 +74,8 @@ class Col {
     if (op === '$ifNull') { const [v, d] = a; const r = Col.expr(doc, v); return (r == null) ? Col.expr(doc, d) : r; }
     if (op === '$size') { const r = Col.expr(doc, a); return Array.isArray(r) ? r.length : 0; }
     if (op === '$gt') { const [x, y] = Col.expr(doc, a); return x > y; }
+    if (op === '$lt') { const [x, y] = Col.expr(doc, a); return x < y; }
+    if (op === '$multiply') return Col.expr(doc, a).reduce((x, y) => x * y, 1);
     if (op === '$cond') { const [c, t, f] = a; return Col.expr(doc, c) ? Col.expr(doc, t) : Col.expr(doc, f); }
     if (op === '$sum') return Col.expr(doc, a);
     if (op === '$min') return Col.expr(doc, a);
@@ -445,6 +447,21 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   // share a word.
   assert(audP.branches.kol.pairs.every((p) => p.a.party !== 'Some Other Customer'),
     'a coincidence of amount does not pair two names with nothing in common');
+
+  // Nearly a thousand differing rows is not a list anyone reads, so they are counted
+  // by SHAPE, each class with its money. And the tell within a class is a bill
+  // reference we only ever saw one side of -- an invoice with no settlement, or
+  // settlements against an invoice raised before the vouchers we hold begin.
+  const audL = await get('/api/bills/audit?asOn=20260228');
+  const sh = audL.branches.kol.shape;
+  assert(sh.onlyInTally && sh.onlyInTally.parties === 1 && sh.onlyInTally.money === -7000,
+    'a party only Tally knows is counted in its own class, with its money: ' + JSON.stringify(sh.onlyInTally));
+  assert(sh.bothButDiffer && sh.bothButDiffer.parties === 1,
+    'and a party both sources know but disagree on is counted apart from it: ' + JSON.stringify(sh.bothButDiffer));
+  const cl = audL.branches.kol.worst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(cl && cl.openRefs === 3 && cl.oneSidedRefs === 2,
+    'each row says how many of its open references we hold only one side of, which is where the answer usually is: '
+    + JSON.stringify(cl && [cl.openRefs, cl.oneSidedRefs]));
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');

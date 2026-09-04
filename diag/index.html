@@ -267,6 +267,18 @@
       out.innerHTML='<section><div class="body err">Could not read it: '+esc(e.message||e)+'</div></section>';
     }).then(function(){btn.disabled=false;btn.textContent='Explain';});
   });
+
+  // Arriving from the outstanding comparison, which links a party straight here: fill
+  // the box in and ask, rather than landing the reader on an empty form holding a name
+  // they would have to retype.
+  (function fromLink(){
+    var m=/[?&]q=([^&]*)/.exec(location.search);
+    if(!m)return;
+    document.getElementById('q').value=decodeURIComponent(m[1].replace(/\+/g,' '));
+    var b=/[?&]branch=(kol|ahm|all)/.exec(location.search);
+    if(b)document.getElementById('branch').value=b[1];
+    document.getElementById('go').click();
+  })();
 })();
 </script>
 </body>

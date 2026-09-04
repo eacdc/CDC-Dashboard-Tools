@@ -79,6 +79,26 @@
     return '';
   }
 
+  // A thousand rows is not a list anyone reads. The shape of the pile says where to
+  // look first -- and whether the money is in one class or spread across all of them.
+  var SHAPE={onlyInVouchersOpen:'The vouchers show it open, Tally does not',
+             onlyInVouchersOverSettled:'The vouchers show more paid than billed',
+             onlyInTally:'Tally shows it open, the vouchers have nothing',
+             bothButDiffer:'Both know the party, the figures differ'};
+  function shapeTable(shape){
+    if(!shape)return '';
+    var ks=Object.keys(SHAPE).filter(function(k){return shape[k];});
+    if(!ks.length)return '';
+    return '<div class="note" style="padding-top:10px"><b>What kind of difference are they?</b></div>'
+      +'<div class="scroll"><table><thead><tr><th>Kind</th><th style="text-align:right">Parties</th>'
+      +'<th style="text-align:right">Money</th><th style="text-align:right">Mostly one-sided bills</th></tr></thead><tbody>'
+      +ks.map(function(k){var s=shape[k];
+        return '<tr><td>'+esc(SHAPE[k])+'</td><td class="num">'+s.parties.toLocaleString('en-IN')+'</td>'
+          +'<td class="num">'+rupees(s.money)+'</td>'
+          +'<td class="num'+(s.oneSidedParties?'':' muted')+'">'+s.oneSidedParties.toLocaleString('en-IN')+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+
   function branchBlock(k,f){
     if(!f.coversDate) return '<div class="body"><b>'+esc(NAME[k]||k)+'</b>'
       +'<div class="note" style="padding:6px 0 0">'+esc(f.note||'')+'</div></div>';
@@ -105,13 +125,19 @@
         +(f.namePairs>f.pairs.length?'<div class="note">… and '+(f.namePairs-f.pairs.length)+' more pairs, smaller.</div>':'')
       : '';
     var real=f.differAfterPairs
-      ? '<div class="note" style="padding-top:10px"><b>These are the ones actually about money</b> — after the two-name pairs are set aside.</div>'
+      ? shapeTable(f.shape)
+        +'<div class="note" style="padding-top:10px"><b>These are the ones actually about money</b> — after the two-name pairs are set aside.'
+        +' Click a name to see every bill behind it. <b>One-sided</b> counts the references where we hold only the invoice,'
+        +' or only the payments against an invoice we never saw — where that is most of the difference, the answer is about'
+        +' how far the vouchers reach, not about the accounting.</div>'
         +'<div class="scroll"><table><thead><tr><th>Party</th>'
         +'<th style="text-align:right">Tally says</th><th style="text-align:right">The vouchers say</th>'
-        +'<th style="text-align:right">Difference</th><th></th></tr></thead><tbody>'
-        +f.worst.map(function(r){return '<tr><td>'+esc(r.party)+'</td>'
+        +'<th style="text-align:right">Difference</th><th style="text-align:right">One-sided</th><th></th></tr></thead><tbody>'
+        +f.worst.map(function(r){return '<tr><td><a href="./?q='+encodeURIComponent(r.party)+'&branch='+esc(k)+'">'+esc(r.party)+'</a></td>'
           +'<td class="num">'+rupees(r.csv)+'</td><td class="num">'+rupees(r.vouchers)+'</td>'
-          +'<td class="num off">'+rupees(r.diff)+'</td><td>'+whose(r)+'</td></tr>';}).join('')
+          +'<td class="num off">'+rupees(r.diff)+'</td>'
+          +'<td class="num'+(r.oneSidedRefs?'':' muted')+'">'+(r.oneSidedRefs||0)+' of '+(r.openRefs||0)+'</td>'
+          +'<td>'+whose(r)+'</td></tr>';}).join('')
         +'</tbody></table></div>'
         +(f.differAfterPairs>f.worst.length?'<div class="note">… and '+(f.differAfterPairs-f.worst.length)+' more, smaller.</div>':'')
       : '<div class="note" style="color:var(--green)"><b>Every remaining party agrees to the rupee.</b></div>';
