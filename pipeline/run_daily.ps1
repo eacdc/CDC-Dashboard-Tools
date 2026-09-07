@@ -85,20 +85,25 @@ if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / 
 
 Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, (($syncBranches | ForEach-Object { $_.Branch }) -join ','))
 
+# `powershell -File` hands arguments over as plain TEXT, so a switch cannot be passed
+# as -WithBalances:$WithBalances -- "-WithBalances:False" binds to nothing and the run
+# dies with "Cannot process argument". Pass the switch only when it is actually on.
+$balArgs = @(); if ($WithBalances) { $balArgs = @('-WithBalances') }
+
 foreach ($b in $syncBranches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
     try {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -Incremental -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
-                -WithBalances:$WithBalances `
+                @balArgs `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
         elseif ($mode -eq 'api') {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -FromDate $FromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
-                -WithBalances:$WithBalances `
+                @balArgs `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
