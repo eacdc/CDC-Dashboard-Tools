@@ -1,5 +1,18 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.30 (diag) — September 2026 — Say which date is about to be used
+
+The "as at" box was set to today and the page still answered for 31 March 2025. An
+`<input type="date">` hands back an **empty string** unless the browser accepted a
+complete date — and an empty string is exactly what makes the page fall back to the
+file's own date. A half-entered date therefore changed the question silently, with
+nothing on screen to say so.
+
+Two buttons now set it outright — **today** and **the file's date** — and a line under
+the box always states the date about to be used, before anything is fetched. The status
+line names it too. The date is also read before it is spoken about: `var` hoists, so
+asking first and assigning after announced the fallback whatever was typed.
+
 ## v2.29 (portal + server) — September 2026 — An inter-branch sale is not a sale
 
 The consolidated P&L was counting sales between the two branches. One unit sells, the
