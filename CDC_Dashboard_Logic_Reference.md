@@ -37,6 +37,24 @@
 - 13 Ahmedabad-only groups added
 
 ### Inter-Branch Elimination
+
+**An inter-branch invoice is neither a sale nor a purchase.** One unit sells, the
+sibling unit buys, and consolidated that is the company trading with itself. Dropping
+only the **branch ledger** — right for every other figure — removes the counterparty and
+leaves the revenue leg standing, which is how inter-branch sales reached the
+consolidated P&L. So on a consolidated run, a voucher whose **only** party is a branch
+has its revenue and purchase legs dropped as well.
+
+The test is narrow on purpose: a voucher carrying a branch ledger **and** a real Sundry
+Debtor or Creditor is a *settlement* — a client who paid through the other branch — and
+that revenue was genuinely earned. It stays.
+
+**A branch's own view keeps it all.** There the sibling is an outside party and the sale
+is a real sale, so `ibLedgers` is emptied for single-branch runs and none of this
+applies. `processData` reports what it dropped as `stats.ibInvoices` /
+`stats.ibInvoiceAmount`; the year-on-year fold applies the identical rule
+(`interBranchInvoice` in `yoySummary.js`), because the two must agree to the paisa.
+
 - Auto-detects via `Branch / Divisions` group in hierarchy
 - Inter-branch ledgers: CDC Printers (Ahmedabad), CDC Printers (Kolkata), Citi Bank branches, etc.
 - Eliminated from both P&L and Cashflow

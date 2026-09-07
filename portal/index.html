@@ -225,6 +225,24 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
   var invoiceList=[];
   var __invTypeCounts={};// diagnostic — see which voucher types contributed
   var plData={revenue:{},purchase:{},direct_expense:{},indirect_expense:{},excluded:{}};
+  // An inter-branch invoice is neither a sale nor a purchase for the group: one unit
+  // sells, the sibling unit buys, and consolidated that is the company trading with
+  // itself. Dropping only the BRANCH LEDGER -- which is all the loop below did, and
+  // all it should do for every other figure -- removes the counterparty and leaves the
+  // revenue leg standing. That is how inter-branch sales reached the consolidated P&L.
+  //
+  // The test is deliberately narrow: the branch must be the ONLY party on the voucher.
+  // One carrying a branch ledger AND a real customer is a settlement -- a client who
+  // paid through the other branch -- and that revenue belongs to the client.
+  // Single-branch views never reach here: ibLedgers is emptied above, because the
+  // other branch is then an outside party and the sale is a real sale.
+  function __sundryParty(pn){var ch=getChain(pn,xd,lu).join('>').toLowerCase();
+    return ch.indexOf('sundry debtors')>=0||ch.indexOf('sundry creditors')>=0;}
+  function __ibInvoice(v){var pls=v.party_ledgers||{},sawBranch=false;
+    for(var pn in pls){if(ibLedgers[pn]){sawBranch=true;continue;}
+      if(__sundryParty(pn))return false;}
+    return sawBranch;}
+  var __ibInvoices=0,__ibInvoiceAmt=0;
   for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi];var mi=monthKey(v.date,startFY);if(mi<0||mi>=monthCount)continue;
     // Content-based side detection: walk this voucher's revenue / purchase ledger legs.
     var __revAmt=0,__purchAmt=0,__primaryAcct=null,__primaryAbs=0,__invoiceAmt=0;
@@ -236,11 +254,14 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
     var __isSale=__revAmt!==0&&__hasParty,__isPurch=__purchAmt!==0&&__hasParty,__isSP=__isSale||__isPurch;
     var __key=__isSP?vchKey(v):null;
     var __ovrAcct=__key&&invOvr[__key]?invOvr[__key]:null;
+    var __ibOnly=__ibInvoice(v);
+    if(__ibOnly&&(__revAmt!==0||__purchAmt!==0)){__ibInvoices++;__ibInvoiceAmt+=__revAmt+__purchAmt;}
     for(var ln in v.ledgers){if(ibLedgers[ln])continue;var amt=v.ledgers[ln];var cat=classify(ln,xd,lu,ovr);
+      if(__ibOnly&&(cat==='revenue'||cat==='purchase'))continue;
       var __effLn=ln,__effCat=cat;
       if(__ovrAcct&&(cat==='revenue'||cat==='purchase')){__effLn=__ovrAcct;__effCat=classify(__ovrAcct,xd,lu,ovr);}
       if(!plData[__effCat])plData[__effCat]={};if(!plData[__effCat][__effLn])plData[__effCat][__effLn]=Array(monthCount).fill(0);plData[__effCat][__effLn][mi]+=amt;}
-    if(__isSP&&__primaryAcct){var __dp=__domParty(v.party_ledgers||{});
+    if(__isSP&&__primaryAcct&&!__ibOnly){var __dp=__domParty(v.party_ledgers||{});
       var __sideTag=Math.abs(__revAmt)>=Math.abs(__purchAmt)?'sale':'purchase';
       __invTypeCounts[v.type]=(__invTypeCounts[v.type]||0)+1;
       invoiceList.push({key:__key,invNo:vchNo(v),date:v.date,type:v.type,side:__sideTag,party:__dp||'(none)',primaryAccount:__primaryAcct,overrideAccount:__ovrAcct,amount:__invoiceAmt,overridden:!!__ovrAcct});}
@@ -467,7 +488,7 @@ function processData(vouchers,xd,stock,ibLedgers,monthCount,fyOffset,branch){
     cfaObj.week=__cfBuild(function(d){return Math.floor(__dayDiff(d,__wkStart)/7);},12,__wkLbls);cfaObj.week.starts=__wkStarts;cfaObj.week.span=7;cfaObj.week.gran='week';
   }
   var endFY=startFY+Math.ceil(monthCount/12)-1;var fyLabel=(startFY===endFY)?(startFY+'-'+(startFY+1).toString().slice(-2)):(startFY+'-'+(startFY+1).toString().slice(-2)+' & '+endFY+'-'+(endFY+1).toString().slice(-2));
-  return{months:months,fy:fyLabel,sa:saObj,cfa:cfaObj,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length}};
+  return{months:months,fy:fyLabel,sa:saObj,cfa:cfaObj,monthCount:monthCount,fyOffset:fyOffset,startFY:startFY,currentFY:currentFY,branch:branch,pl:{revTree:revTree,purchTree:purchTree,dirExpTree:dirExpTree,indExpTree:indExpTree,exclTree:exclTree,revM:revM,purchM:purchM,dirExpM:dirExpM,indExpM:indExpM,stockM:stockM,gpM:gpM,npM:npM},cf:{inTree:cfInTree,outTree:cfOutTree,inM:cfInM,outM:cfOutM,netM:cfNetM},invoices:invoiceList,invLedgerIndex:invLedgerIndex,invoiceOverrides:invOvr,overrides:ovr,availableAccounts:availableAccounts,xd:xd,lu:lu,stats:{vouchers:vouchers.length,cfInParties:Object.keys(cfInflows).length,cfOutParties:Object.keys(cfOutflows).length,ibInvoices:__ibInvoices,ibInvoiceAmount:Math.round(__ibInvoiceAmt*100)/100}};
 }
 
 function fmt(n){if(n===0)return'\u2014';var a=Math.abs(n),s=n<0?'-':'';if(a>=1e7)return s+(a/1e7).toFixed(2)+' Cr';if(a>=1e5)return s+(a/1e5).toFixed(2)+' L';if(a>=1e3)return s+(a/1e3).toFixed(1)+' K';return s+Math.round(a);}
