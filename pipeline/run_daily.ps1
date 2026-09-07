@@ -57,7 +57,9 @@ $branchDefs = @(
 # has ITS OWN company loaded; pulling the other branch here returns ~empty and
 # just wastes a request (and, if it returned data, could clash with the box that
 # owns it). Set -Branches / CDC_BRANCHES to "kol" on the Kol box, "ahm" on Ahm.
-if ($env:CDC_BRANCHES) { $Branches = $env:CDC_BRANCHES }
+# The env var is a DEFAULT, not an override: what you typed on the command line has
+# to win, or -Branches ahm silently runs kol too and the log contradicts the command.
+if ($env:CDC_BRANCHES -and -not $PSBoundParameters.ContainsKey('Branches')) { $Branches = $env:CDC_BRANCHES }
 $want = @($Branches.ToLower() -split '[,;\s]+' | Where-Object { $_ })
 $syncBranches = @($branchDefs | Where-Object { $want -contains $_.Branch })
 if ($syncBranches.Count -eq 0) { throw "No valid branch in -Branches '$Branches' (expected kol and/or ahm)." }

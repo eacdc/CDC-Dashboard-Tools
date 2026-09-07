@@ -455,10 +455,19 @@ signature of that mistake, not of a company that owes nobody anything.
 **Neither reading can reach a party that already owed money before the oldest voucher
 held** — April 2015 for Kolkata, April 2025 for Ahmedabad. Adding vouchers up gives
 *movement since then*, not a balance, and no amount of allocation completeness fixes
-that. So the ledger master now carries Tally's own **OPENINGBALANCE and
-CLOSINGBALANCE**, fetched with `SVFROMDATE`/`SVTODATE` set to the pull's own range so
-each number has a known date, and stored as `closing`/`closingAsOn` on the branch's
-master (live pulls only — a back-fill carries an old year's balances). Against the
+that. So the ledger master now carries Tally's own **CLOSINGBALANCE**, fetched with
+`SVFROMDATE`/`SVTODATE` set to the pull's own range so the number has a known date, and
+stored as `closing`/`closingAsOn` on the branch's master (live pulls only — a back-fill
+carries an old year's balances).
+
+**They are a separate Tally request, tried once.** Asked alongside the ledger list they
+make Tally compute every ledger's balance before it answers at all, which on a real
+company runs past the 180-second timeout, reads as a hang, and takes the whole sync down
+with it. On their own, a failure costs only the balances and the sync carries on — and
+they are skipped when the ledger count already says the company is not loaded.
+`OPENINGBALANCE` is not asked for: nothing reads it, and it would double the work.
+
+Against the
 right date that is not an approximation of outstanding, it **is** outstanding, and the
 vouchers are needed only for the ageing. The audit reports it per branch, and says so
 plainly when no pull has brought it yet rather than reading its absence as a company
