@@ -1,5 +1,15 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.27 (pipeline) — September 2026 — A bad address fails at once, not five times
+
+`-TallyUrl "http://127.0.0.1:PORT"` — a placeholder pasted in as written — was retried
+five times over fourteen seconds, each attempt asking whether Tally was idle at the
+Gateway of Tally. It was a question with nothing to do with the problem, buried under
+the real message.
+
+A malformed URL is not a passing blip. `-TallyUrl` is checked once at startup now, and
+says what is wrong: the port NUMBER Tally serves on, not the word PORT.
+
 ## v2.26 (diag) — September 2026 — Ask the comparison for any date
 
 The opening balances arrive as at the company's beginning of books — 1 April 2025 for
