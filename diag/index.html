@@ -106,13 +106,18 @@
       if(l.mergedAway) tags+='<span class="tag warn">merged into '+esc(l.canonical)+'</span>';
       if(l.interBranch) tags+='<span class="tag warn">inter-branch</span>';
       tags+='<span class="tag '+(l.role==='debtor'?'good':(l.role==='creditor'?'good':'bad'))+'">'+esc(l.role)+'</span>';
+      // Each ledger's own balance, because Tally is asked one ledger at a time and
+      // our sum of three put beside its one is how two right answers look wrong.
+      var bl=(d.balance&&d.balance.byLedger)?d.balance.byLedger[l.name]:null;
       return '<tr><td class="mono">'+esc(l.name)+tags+'</td>'
-        +'<td class="mono muted">'+esc(l.chain.join(' › '))+'</td></tr>';
+        +'<td class="mono muted">'+esc(l.chain.join(' › '))+'</td>'
+        +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl))+'</td></tr>';
     }).join('');
     var note=d.ledgers.length>1
       ? '<div class="note"><b>'+d.ledgers.length+' separate ledgers</b> carry this name. Each page shows whichever of them has activity, so the same customer can look like different rows in different places. To make them one, use <b>🔗 Merge names</b> on the portal.'
       : '';
-    return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th></tr></thead>'
+    return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th>'
+      +'<th style="text-align:right">What it owes</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'+note;
   }
 
@@ -230,7 +235,8 @@
       +'<div style="font-size:22px;font-weight:700">'+rupees(b.total)+'</div>'
       +'<div class="muted" style="margin-top:2px">'
       +(b.total>0?'owed to us':(b.total<0?'owed by us':'square'))
-      +' &mdash; every ledger this name matches, added together</div>'
+      +' &mdash; every ledger this name matches, added together. '
+      +'<b>Tally is asked one ledger at a time</b>, so compare the per-ledger figures below, not this total.</div>'
       +'<div style="margin-top:10px">Opening balance from Tally'
       +(b.asOn?(' as at <b>'+esc(fmtDate(b.asOn))+'</b>'):'')+': <b>'+rupees(b.opening)+'</b>'
       +' &nbsp;+&nbsp; every posting since: <b>'+rupees(b.postings)+'</b></div>'

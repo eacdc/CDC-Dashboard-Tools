@@ -1,5 +1,20 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.34 (server + diag) — September 2026 — Compare one ledger with one ledger
+
+The party check looked like a wild disagreement — ours ₹71,06,616 against the phone's
+₹70,064 — and it was neither side being wrong. Two things made them different questions:
+
+- The phone was filtered to **bills over 120 days overdue** (`> 120` under the figure),
+  not the party's outstanding at all.
+- It showed **one ledger**; this customer carries **three** (`Pvt Ltd`, `-Howrah`,
+  `-Tirupur`), and the explainer was adding them up.
+
+So `/diag/` now shows **each ledger's own balance** beside it, and the headline says
+plainly that Tally is asked one ledger at a time and the per-ledger figures are what to
+compare. A sum of three put beside Tally's one is how two right answers look like a
+discrepancy.
+
 ## v2.33 (server + diag) — September 2026 — The party explainer says what the party owes
 
 The six ledgers the balance leaves out came to ₹3,57,44,276 against a gap of

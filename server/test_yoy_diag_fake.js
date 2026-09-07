@@ -311,6 +311,14 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const bal = (await get('/api/yoy/diag?q=Carbonlite&branch=kol')).balance;
   assert(bal && bal.total === 61705 - 15064,
     'the party explainer states what the party owes, not just its bills: ' + JSON.stringify(bal && bal.total));
+  // Per ledger too. A customer under three spellings is one customer here, but Tally
+  // is asked one ledger at a time, and comparing our sum of three against Tally's one
+  // is how two right answers look like a discrepancy.
+  assert(bal.byLedger && bal.byLedger['Carbonlite Print & Publishing'] === 61705 - 15064,
+    'each ledger carries its own balance, so it can be put beside that one ledger in Tally: '
+    + JSON.stringify(bal.byLedger));
+  assert(Object.values(bal.byLedger).reduce((a, v) => a + v, 0) === bal.total,
+    'and the per-ledger figures add up to the total shown, with nothing between them');
   assert(bal.byBranch.kol && bal.byBranch.kol.opening + bal.byBranch.kol.postings === bal.total,
     'and shows the two halves it is made of, so a wrong one can be told from the other: '
     + JSON.stringify(bal.byBranch.kol));
