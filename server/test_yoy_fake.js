@@ -67,6 +67,13 @@ const vouchers = [
   mk('kol', '20251115', 'Journal', { 'Salary': -33000 }, {}),
   mk('kol', '20250815', 'Bank Receipt', { 'HDFC Current': -120000 }, { 'Modern Herbo': 120000 }),
   mk('ahm', '20250910', 'Sales', { 'Export Sales': 90000 }, { 'Gleebuds': -90000 }),
+  // An inter-branch SALE: the only party on it is the sibling branch, so consolidated
+  // this is the company selling to itself -- neither a sale nor a purchase. Kolkata's
+  // own books keep it, where Ahmedabad is an outside party.
+  mk('kol', '20250620', 'Sales', { 'Sales - Job Work': 40000 }, { 'CDC Ahmedabad': -40000 }),
+  // A settlement: the branch is on the voucher, but so is a real customer. THAT
+  // revenue is genuinely earned and has to survive consolidation.
+  mk('kol', '20250627', 'Sales', { 'Sales - Job Work': 25000 }, { 'Modern Herbo': -20000, 'CDC Ahmedabad': -5000 }),
 ];
 
 const server = summarise(vouchers, xd);
@@ -138,6 +145,22 @@ const server = summarise(vouchers, xd);
   assert(server.branches.kol['2024-25'].totals.cashIn > server.branches.all['2024-25'].totals.cashIn,
     'the inter-branch receipt counts for KOL but is eliminated from consolidated');
   assert(server.branches.ahm['2024-25'].totals.revenue === 70000, 'the Ahmedabad branch keeps its own total');
+
+  // Inter-branch invoices: neither a sale nor a purchase once the branches are one
+  // company. Dropping only the branch LEDGER used to leave the revenue leg standing,
+  // which is how inter-branch sales reached the consolidated P&L.
+  const kolRev = server.branches.kol['2025-26'].totals.revenue;
+  const ahmRev = server.branches.ahm['2025-26'].totals.revenue;
+  const allRev = server.branches.all['2025-26'].totals.revenue;
+  assert(kolRev === 180000 + 40000 + 25000,
+    "the branch's OWN books keep an inter-branch sale whole -- there the sibling is an "
+    + 'outside party and the sale is a real one: ' + kolRev);
+  assert(kolRev + ahmRev - allRev === 40000,
+    'and consolidated drops it, to the rupee -- exactly the inter-branch sale, nothing else: '
+    + JSON.stringify([kolRev, ahmRev, allRev]));
+  assert(allRev === 180000 + 25000 + 90000,
+    'the settlement voucher keeps its 25,000: a real customer is on it, so that revenue was '
+    + 'genuinely earned however the branch settled it: ' + allRev);
 
   await browser.close();
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== year-on-year fold matches the dashboard ==');

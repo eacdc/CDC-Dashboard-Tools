@@ -198,6 +198,19 @@ function canonKeys(S, obj) {
   return out;
 }
 
+// Is the only party on this voucher the other branch? Then whatever it sells or buys
+// is internal to the group. A real Sundry Debtor or Creditor anywhere on it means the
+// transaction has an outside counterparty and the revenue is genuinely earned.
+function interBranchInvoice(S, parties) {
+  let sawBranch = false;
+  for (const pn in parties) {
+    if (S.ib[pn]) { sawBranch = true; continue; }
+    const side = sundryOf(S, pn);
+    if (side === 'debtor' || side === 'creditor') return false;
+  }
+  return sawBranch;
+}
+
 function addVoucher(S, v) {
   if (!v || !v.date) return S;
   const branch = v.branch || v._branch;
@@ -214,12 +227,21 @@ function addVoucher(S, v) {
   const ledgers = canonKeys(S, v.ledgers);
   const parties = canonKeys(S, v.party_ledgers);
   addPartyVoucher(S, { ledgers, party_ledgers: parties }, branch, fy, mi);
+  // An inter-branch invoice is neither a sale nor a purchase for the group: one unit
+  // sells, the sibling unit buys, and consolidated that is the company trading with
+  // itself. Dropping only the branch LEDGER leaves the revenue leg standing, which put
+  // inter-branch sales on the consolidated P&L. The test is narrow on purpose -- the
+  // branch must be the ONLY party, since a voucher carrying a branch ledger AND a real
+  // customer is a settlement, and that revenue belongs to the customer. The branch's
+  // OWN books keep it: there the sibling is an outside party and the sale is real.
+  const ibOnly = interBranchInvoice(S, parties);
   for (const ln in ledgers) {
-    const line = CAT2LINE[catOf(S, ln)];
+    const cat = catOf(S, ln);
+    const line = CAT2LINE[cat];
     if (!line) continue;
     const amt = ledgers[ln];
     own[line][mi] += amt;
-    if (!S.ib[ln]) all[line][mi] += amt;
+    if (!S.ib[ln] && !(ibOnly && (cat === 'revenue' || cat === 'purchase'))) all[line][mi] += amt;
     addDetail(S, branch, line, ln, fy, mi, amt);
   }
   // Expenses are sometimes booked on the party side; the P&L tab counts those too.

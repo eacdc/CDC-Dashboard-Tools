@@ -1,5 +1,25 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.29 (portal + server) — September 2026 — An inter-branch sale is not a sale
+
+The consolidated P&L was counting sales between the two branches. One unit sells, the
+sibling unit buys, and consolidated that is the company trading with itself — neither a
+sale nor a purchase.
+
+The elimination dropped only the **branch ledger**, which is right for every other
+figure but removes just the counterparty: on an inter-branch invoice the revenue leg was
+left standing with nothing on the other side of it. Now a voucher whose **only** party is
+a branch has its revenue and purchase legs dropped too.
+
+Narrow on purpose: a voucher carrying a branch ledger *and* a real customer is a
+settlement — a client who paid through the other branch — and that revenue was genuinely
+earned, so it stays. And a branch's **own** view is untouched: there the sibling is an
+outside party and the sale is a real sale.
+
+The year-on-year fold applies the identical rule, and the browser cross-check compares
+the two month by month, so the P&L tab and the year-on-year panel cannot drift apart on
+it.
+
 ## v2.28 (server + pipeline) — September 2026 — One opening date, or none
 
 The first real run printed the opening date twice: `as at 20250401,20250401`. Tally had
