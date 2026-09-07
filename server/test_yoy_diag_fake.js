@@ -571,6 +571,31 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'and it says so, rather than handing back the openings alone dressed up as a balance');
   mko.openingAsOn = '20251001';
 
+  // Tally's Outstandings counts every ledger it keeps bill-by-bill, whatever group it
+  // sits in -- an advance, a deposit, a branch account. This balance counts only Sundry
+  // Debtors and Creditors, so those are money Tally reports and it does not. Dropping
+  // them silently is how a shortfall against Tally's own totals becomes unfindable.
+  fakeDb.collection('masters').docs[0].ledgers['Advance to Supplier'] = 'Loans & Advances';
+  fakeDb.collection('masters').docs[0].groups['Loans & Advances'] = 'Current Assets';
+  fakeDb.collection('vouchers').docs.push({
+    _id: 'kol:adv', guid: 'gadv', branch: 'kol', date: '20260215', no: 'ADV/1', type: 'Payment',
+    ledgers: {}, party_ledgers: { 'Advance to Supplier': -60000, 'Citi Bank': 60000 },
+    bills: [{ ledger: 'Advance to Supplier', ref: 'ADV/1', type: 'New Ref', amount: -60000 }],
+  });
+  const audOut = await get('/api/bills/audit?asOn=20260228');
+  const op = audOut.branches.kol.outsideParties;
+  const adv = op && op.worst.find((r) => r.party === 'Advance to Supplier');
+  assert(adv && adv.amount === 60000 && /Loans & Advances/.test(adv.group),
+    'a bill-wise ledger outside Sundry Debtors and Creditors is NAMED, with its group and its money: '
+    + JSON.stringify(adv));
+  const advRow = audOut.branches.kol.worst.find((r) => r.party === 'Advance to Supplier');
+  assert(advRow && advRow.vouchers === 60000 && advRow.balance === 0,
+    'the BILL netting counts it (Tally raises bills against any ledger) while the BALANCE does '
+    + 'not -- which is exactly the asymmetry a shortfall against Tally hides in: '
+    + JSON.stringify(advRow && [advRow.vouchers, advRow.balance]));
+  assert(op.total === 60000,
+    'and the money left out is totalled, so it can be compared against the gap rather than guessed at');
+
   // The postings are counted from the day the opening stands on, never earlier --
   // otherwise everything before it is counted twice, once inside the opening and
   // once again on its own.

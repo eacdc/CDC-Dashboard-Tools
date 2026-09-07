@@ -510,6 +510,16 @@ NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr sh
 to **exactly zero** — the ₹2.39 Cr receipt of February 2017 was posted without naming a
 bill. Tally is right to omit the party; the references are simply not there to net.
 
+**Tally's Outstandings counts every ledger it keeps bill-by-bill**, whatever group it
+sits in — advances, deposits, branch accounts. This balance counts only Sundry Debtors
+and Creditors (plus whatever the uploaded file names), so anything else bill-wise is
+money Tally reports and the balance does not. That asymmetry is where a shortfall
+against Tally's own totals hides, so `outsideParties` names every one of them with its
+group and its amount, and totals them: if that total matches the gap, it is the whole of
+the gap. **Measured against Tally on 7 September 2026: receivables ₹91,15,27,343 less
+payables ₹54,92,50,483 = ₹36,22,58,458, against our ₹34,67,31,766 — short by
+₹1,55,26,692.**
+
 **At any date but the one the file was printed on, there is no verdict to give.** The
 file is stale by definition then, and disagreeing with it proves nothing either way —
 saying "not yet" would be crying wolf at the calendar. `verdict.comparable` is false,
