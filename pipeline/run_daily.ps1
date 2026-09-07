@@ -26,6 +26,9 @@
 param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
+    [switch]$WithBalances,                          # also ask Tally for each party's closing balance.
+                                                    #   Slow (minutes), so keep it OFF for the nightly job
+                                                    #   and run it by hand when outstanding is wanted.
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
     # Which Tally to pull from. On a shared/RDP machine port 9001 belongs to whichever
     # instance started first -- possibly another user's -- so pin your own instance's
@@ -88,12 +91,14 @@ foreach ($b in $syncBranches) {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -Incremental -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
+                -WithBalances:$WithBalances `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
         elseif ($mode -eq 'api') {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -FromDate $FromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
+                -WithBalances:$WithBalances `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
