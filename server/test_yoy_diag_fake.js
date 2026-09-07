@@ -305,6 +305,16 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(b.csv.kolBillsPay.uploaded === null,
     'a file that was never uploaded says so rather than looking empty');
 
+  // What the party actually owes, computed the way outstanding is meant to be: the
+  // opening Tally carries plus every posting since. This is the figure a customer
+  // rings up about, so it has to be readable here rather than added up by hand.
+  const bal = (await get('/api/yoy/diag?q=Carbonlite&branch=kol')).balance;
+  assert(bal && bal.total === 61705 - 15064,
+    'the party explainer states what the party owes, not just its bills: ' + JSON.stringify(bal && bal.total));
+  assert(bal.byBranch.kol && bal.byBranch.kol.opening + bal.byBranch.kol.postings === bal.total,
+    'and shows the two halves it is made of, so a wrong one can be told from the other: '
+    + JSON.stringify(bal.byBranch.kol));
+
   const r = b.refs['CDC/4919/25-26'];
   assert(r && r.raised === 61705 && r.settled === 15064 && r.net === 46641,
     'the vouchers themselves show the bill raised, what was settled against it and what is still open: '

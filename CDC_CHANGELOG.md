@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.33 (server + diag) — September 2026 — The party explainer says what the party owes
+
+The six ledgers the balance leaves out came to ₹3,57,44,276 against a gap of
+₹1,67,45,345 — more than twice it, so "add them all back" is wrong and no subset of six
+numbers should be made to fit. One of them, `VIVA COSMETICS PVT LTD.`, comes back as
+group **Unclassified**: our ledger table does not know where that account sits, which is
+a defect on our side rather than an accounting question.
+
+Aggregates have too many moving parts to settle this — Tally's report semantics, the
+group filter, unclassified ledgers. So `/diag/?q=` now answers the question people
+actually arrive with: **what does this party owe**, as the opening balance Tally carries
+plus every posting since, totalled across every spelling of the name and split by
+branch. The two halves are shown apart, because if the total is wrong, which half is
+wrong is most of the diagnosis.
+
+One party, checked against Tally, settles whether the arithmetic is sound. The remaining
+difference is then about which ledgers are in scope, which is a different question.
+
 ## v2.32 (server + diag) — September 2026 — Name what the balance leaves out
 
 Checked against Tally itself on 7 September 2026: receivables ₹91,15,27,343 less
