@@ -1363,13 +1363,17 @@ app.get('/api/yoy/diag', async (req, res) => {
     // day. Shown per ledger and totalled over all the spellings, so the one figure a
     // customer asks about -- "what is pending against me" -- can be read here and put
     // beside Tally without adding vouchers up by hand.
-    const balance = { asOn: null, opening: 0, postings: 0, total: 0, byBranch: {} };
+    const balance = { asOn: null, opening: 0, postings: 0, total: 0, byBranch: {}, byLedger: {} };
     for (const br of (branch === 'all' ? ['kol', 'ahm'] : [branch])) {
       const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
       const seenDates = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
       const from = (seenDates.length === 1 && /^\d{8}$/.test(seenDates[0])) ? seenDates[0] : null;
       let op = 0, po = 0;
-      if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) op += -mm.opening[ln];
+      // Per ledger as well as in total. A customer under three spellings is one
+      // customer here, but Tally is asked one ledger at a time -- and comparing our
+      // sum of three against Tally's one is how two right answers look wrong.
+      const each = (ln, amt) => { balance.byLedger[ln] = Math.round(((balance.byLedger[ln] || 0) + amt) * 100) / 100; };
+      if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) { op += -mm.opening[ln]; each(ln, -mm.opening[ln]); }
       const match = { branch: br };
       if (from) match.date = { $gte: from };
       const rows2 = await db.collection('vouchers').aggregate([
@@ -1381,7 +1385,7 @@ app.get('/api/yoy/diag', async (req, res) => {
         { $match: { 'kv.k': { $in: [...all] } } },
         { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
       ], { allowDiskUse: true }).toArray();
-      for (const r of rows2) po += -r.sum;
+      for (const r of rows2) { po += -r.sum; each(r._id, -r.sum); }
       const r2 = (n) => Math.round(n * 100) / 100;
       balance.byBranch[br] = { openingAsOn: from, opening: r2(op), postings: r2(po), total: r2(op + po) };
       balance.opening = r2(balance.opening + op);
