@@ -512,23 +512,34 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(audB.branches.kol.balanceTotal !== 0,
     'so the balance total is the money outstanding, not the zero every full set of books adds up to');
 
-  // What Tally itself says a party owes, from the ledger master. Adding vouchers up
-  // can only ever show movement since the oldest one held, so a customer who already
-  // owed money before that is beyond reach however complete the allocations are.
-  assert(audB.branches.kol.tally && audB.branches.kol.tally.parties === 0
-    && /Run the pipeline once/.test(audB.branches.kol.tally.note || ''),
-    'before any pull has brought them, their absence is SAID rather than read as a company owing nothing');
-  // Raw Tally signs, and a sales account and a bank thrown in: those are not parties
-  // and must not be read as money owed, exactly as with the voucher balances.
+  // A balance is the opening PLUS the postings since. Adding vouchers up gives only
+  // the second half, so a party that already owed money before the oldest voucher we
+  // hold cannot come out right until Tally's opening arrives -- and until it does, the
+  // half-figure must say it is a half-figure rather than pass as a balance.
+  assert(audB.branches.kol.opening && audB.branches.kol.opening.asOn === null
+    && /Run the pipeline once/.test(audB.branches.kol.opening.note || ''),
+    'before any pull has brought them, the missing opening is SAID rather than read as nothing owed');
+
   fakeDb.collection('masters').docs.push({ branch: 'kol',
-    closing: { 'Carbonlite Print & Publishing': -75846, 'Export Sales': -9999999, 'Citi Bank': 500 },
-    closingAsOn: '20260228' });
-  const audT = await get('/api/bills/audit?asOn=20260228');
-  assert(audT.branches.kol.tally.parties === 1 && audT.branches.kol.tally.total === 75846,
-    'once they arrive only the parties are read from them, at Tally\'s own figure: '
-    + JSON.stringify([audT.branches.kol.tally.parties, audT.branches.kol.tally.total]));
-  assert(audT.branches.kol.tally.sameDate === true && audT.branches.kol.tally.asOn === '20260228',
-    'and the day they were struck on is carried with them, because a balance without its date is not a fact');
+    // Raw Tally signs, and a sales account and a bank thrown in: those are not parties
+    // and must not be read as money owed, exactly as with the postings.
+    opening: { 'Carbonlite Print & Publishing': -50000, 'Export Sales': -9999999, 'Citi Bank': 500 },
+    openingAsOn: '20251001' });
+  const audO = await get('/api/bills/audit?asOn=20260228');
+  assert(audO.branches.kol.opening.asOn === '20251001' && audO.branches.kol.opening.ledgers === 3,
+    'once it arrives the day it stands on comes with it, because an opening balance without its date cannot be added to anything');
+  const co = audO.branches.kol.worst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(co && co.balance === 50000 + 75846,
+    'and the balance becomes the opening PLUS the postings since: ' + JSON.stringify(co && co.balance));
+  assert(!audO.branches.kol.worst.some((r) => /Citi Bank|Export Sales/.test(r.party)),
+    'a bank or a sales account is still not a party, opening balance or not');
+
+  // The postings are counted from the day the opening stands on, never earlier --
+  // otherwise everything before it is counted twice, once inside the opening and
+  // once again on its own.
+  const early = audO.branches.kol.worst.find((r) => r.party === 'Onaccount Traders');
+  assert(early && early.balance === 0,
+    'a party square since the opening date stays square, not doubled: ' + JSON.stringify(early && early.balance));
 
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== the diagnostic explains a party ==');
