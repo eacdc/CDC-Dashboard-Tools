@@ -55,8 +55,9 @@
 <main>
   <p><button id="go">Compare them</button>
     <label style="margin-left:12px">as at <input id="ason" type="date" style="font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:6px"></label>
-    <span class="muted">&mdash; blank means the day Tally printed the uploaded file, which is the only date the two sides can be compared at.
-      Any other date answers &ldquo;what do the vouchers and Tally&rsquo;s openings say was outstanding then&rdquo;, with the file left behind.</span></p>
+    <button type="button" id="today" style="background:#fff;color:var(--teal);font-weight:600;padding:6px 10px">today</button>
+    <button type="button" id="snap" style="background:#fff;color:var(--teal);font-weight:600;padding:6px 10px">the file&rsquo;s date</button>
+    <div class="muted" style="margin-top:6px" id="willuse"></div></p>
   <div id="out"></div>
 </main>
 <script>
@@ -200,11 +201,37 @@
     });
   }
 
+  // A date input hands back an EMPTY STRING unless the browser accepted a complete
+  // date -- so a half-typed one silently becomes "no date", the page quietly answers
+  // for the file's own date instead, and nothing on screen says why. Two buttons set
+  // it outright, and the line below always states the date about to be used, so the
+  // question being asked is never a guess.
+  function asOnValue(){return (document.getElementById('ason').value||'').replace(/-/g,'');}
+  function sayWillUse(){
+    var v=asOnValue();
+    document.getElementById('willuse').innerHTML = v
+      ? 'Will compare as at <b>'+esc(fmtDate(v))+'</b> &mdash; what the vouchers and Tally&rsquo;s openings say was outstanding then. The uploaded file is left behind.'
+      : 'Will compare as at <b>the day Tally printed the uploaded file</b> &mdash; the only date the two sides can honestly be measured against each other.';
+  }
+  document.getElementById('ason').addEventListener('change',sayWillUse);
+  document.getElementById('ason').addEventListener('input',sayWillUse);
+  document.getElementById('today').addEventListener('click',function(){
+    var n=new Date();
+    document.getElementById('ason').value=n.getFullYear()+'-'
+      +String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
+    sayWillUse();
+  });
+  document.getElementById('snap').addEventListener('click',function(){
+    document.getElementById('ason').value='';sayWillUse();
+  });
+  sayWillUse();
+
   document.getElementById('go').addEventListener('click',function(){
     var btn=document.getElementById('go');btn.disabled=true;btn.textContent='Comparing…';
-    out.innerHTML='<section><div class="body muted">Netting every bill allocation up to the snapshot date…</div></section>';
-    // yyyy-mm-dd from the date box, yyyymmdd for the API. Blank = the snapshot date.
-    var av=(document.getElementById('ason').value||'').replace(/-/g,'');
+    // Read the date BEFORE it is spoken about: var hoists, so asking first and
+    // assigning after would announce the fallback every time, whatever was typed.
+    var av=asOnValue();
+    out.innerHTML='<section><div class="body muted">Netting every bill allocation up to '+(av?esc(fmtDate(av)):'the date Tally printed the file')+'…</div></section>';
     fetch(BASE+'/api/bills/audit'+(av?('?asOn='+encodeURIComponent(av)):'')).then(function(r){return r.json();}).then(function(d){
       if(!d||d.ok===false)throw new Error((d&&d.error)||'the server said no');
       render(d);
