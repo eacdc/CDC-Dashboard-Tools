@@ -53,7 +53,10 @@
     <a href="./bills.html">is every bill there?</a> &middot; <a href="./">the party explainer</a></div>
 </header>
 <main>
-  <p><button id="go">Compare them</button> <span class="muted">reads every bill allocation &mdash; give it a few seconds</span></p>
+  <p><button id="go">Compare them</button>
+    <label style="margin-left:12px">as at <input id="ason" type="date" style="font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:6px"></label>
+    <span class="muted">&mdash; blank means the day Tally printed the uploaded file, which is the only date the two sides can be compared at.
+      Any other date answers &ldquo;what do the vouchers and Tally&rsquo;s openings say was outstanding then&rdquo;, with the file left behind.</span></p>
   <div id="out"></div>
 </main>
 <script>
@@ -200,7 +203,9 @@
   document.getElementById('go').addEventListener('click',function(){
     var btn=document.getElementById('go');btn.disabled=true;btn.textContent='Comparing…';
     out.innerHTML='<section><div class="body muted">Netting every bill allocation up to the snapshot date…</div></section>';
-    fetch(BASE+'/api/bills/audit').then(function(r){return r.json();}).then(function(d){
+    // yyyy-mm-dd from the date box, yyyymmdd for the API. Blank = the snapshot date.
+    var av=(document.getElementById('ason').value||'').replace(/-/g,'');
+    fetch(BASE+'/api/bills/audit'+(av?('?asOn='+encodeURIComponent(av)):'')).then(function(r){return r.json();}).then(function(d){
       if(!d||d.ok===false)throw new Error((d&&d.error)||'the server said no');
       render(d);
     }).catch(function(e){

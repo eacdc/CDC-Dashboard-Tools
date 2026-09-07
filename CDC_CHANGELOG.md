@@ -1,5 +1,20 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.26 (diag) — September 2026 — Ask the comparison for any date
+
+The opening balances arrive as at the company's beginning of books — 1 April 2025 for
+Ahmedabad — while the comparison defaults to the day Tally printed the uploaded file,
+31 March 2025. A day earlier, so the openings could not be seen at all.
+
+`/diag/outstanding.html` takes an **as at** date now. Blank still means the snapshot
+date, which is the only day the two sides can honestly be compared. Any other date drops
+the file and answers the question that actually matters: what do the vouchers and Tally's
+own openings say is outstanding *now*.
+
+Confirmed on the real company, and it settles the design: **221 openings came back in one
+second**, where closing balances had not arrived in five minutes. A stored field costs
+what a name costs.
+
 ## v2.25 (server + pipeline) — September 2026 — The opening balance, which Tally will actually give
 
 Closing balances are abandoned. Tally has to walk every posting to work one out, and
