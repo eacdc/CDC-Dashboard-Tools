@@ -1,5 +1,21 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.31 (server + diag) — September 2026 — At the wrong date there is no verdict to give
+
+Asked as at today, the comparison reported "Not yet — some parties differ" against a
+file Tally printed on **31 March 2025**. Seventeen months stale: of course the parties
+differ, they have traded since. The page was crying wolf at the calendar.
+
+`verdict.comparable` is false at any date but the one the file was printed on, and the
+banner says so plainly — nothing is being tested, here is what the vouchers and Tally's
+openings make outstanding, check *that* against Tally because the file cannot. The
+snapshot date keeps its yes-or-not-yet answer, since it is the only date the two sides
+can honestly be measured against each other.
+
+With the date finally taking effect, Kolkata's balance came out at **₹34,67,31,766** —
+openings as at 1 April 2025 plus every posting since — where the stale-file reading had
+said ₹47.82 Cr.
+
 ## v2.30 (diag) — September 2026 — Say which date is about to be used
 
 The "as at" box was set to today and the page still answered for 31 March 2025. An

@@ -1179,11 +1179,19 @@ app.get('/api/bills/audit', async (req, res) => {
     const paired = live.reduce((a, b) => a + b.namePairs, 0);
     const parties = live.reduce((a, b) => a + b.parties, 0);
     const pairNote = paired ? ` A further ${paired} are one party under two ledger names, each cancelling the other exactly -- merge those on the portal and they go.` : '';
+    // Asked at any date but the one Tally printed the file on, the file is stale by
+    // definition and disagreeing with it proves nothing -- so there is no verdict to
+    // give. Saying "not yet" there would be crying wolf at the calendar.
+    const atSnapshot = asOn === snapshot;
+    const balTotal = round(live.reduce((a, b) => a + b.balanceTotal, 0));
     out.verdict = {
       partiesCompared: parties, partiesDiffering: differ, namePairs: paired,
       branchesNotCompared: Object.keys(out.branches).filter((b) => !out.branches[b].coversDate),
-      safeToSwitch: differ === 0,
-      says: differ === 0
+      comparable: atSnapshot,
+      safeToSwitch: atSnapshot && differ === 0,
+      says: !atSnapshot
+        ? `Nothing is being tested here. The uploaded file is what Tally printed on ${snapshot}, and this is asked as at ${asOn} -- the parties have traded in between, so differing from it is expected and proves nothing either way. What this date DOES give is outstanding as the vouchers and Tally's own openings have it: ₹${Math.round(balTotal).toLocaleString('en-IN')}. Check that against Tally itself; the file cannot judge it. Press "the file's date" for the comparison that can.`
+        : differ === 0
         ? `Every one of the ${parties} parties with an open bill comes out at the same figure from the vouchers as from Tally's own snapshot of ${asOn}.${pairNote} Outstanding can be computed from the vouchers.`
         : `${differ} of ${parties} parties come out differently from the vouchers than from Tally's snapshot of ${asOn}.${pairNote} Each is listed with both figures; understand them before switching anything over.`,
     };

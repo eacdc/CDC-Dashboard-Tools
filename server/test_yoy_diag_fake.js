@@ -539,6 +539,19 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   // dressed up as a balance and looking plausible. It has to be refused outright.
   const mko = fakeDb.collection('masters').docs.find((d) => d.branch === 'kol' && d.opening);
   mko.openingAsOn = ['20251001', '20251001'];
+  // Asked at a date the file was not printed on, the file is stale by definition and
+  // disagreeing with it proves nothing. Saying "not yet" there would be crying wolf at
+  // the calendar, so there is no verdict to give at all.
+  const audLate = await get('/api/bills/audit?asOn=20260228');
+  assert(audLate.verdict.comparable === false && audLate.verdict.safeToSwitch === false
+    && /Nothing is being tested here/.test(audLate.verdict.says),
+    'a date the file was not printed on yields no verdict, and says why');
+  assert(/Check that against Tally itself/.test(audLate.verdict.says),
+    'and points at the only thing that CAN judge that date');
+  const audSnap = await get('/api/bills/audit');
+  assert(audSnap.verdict.comparable === true,
+    'while the snapshot date is comparable, and keeps its yes-or-not-yet answer');
+
   const audDup = await get('/api/bills/audit?asOn=20260228');
   const cd = audDup.branches.kol.worst.find((r) => r.party === 'Carbonlite Print & Publishing');
   assert(audDup.branches.kol.opening.asOn === '20251001' && cd && cd.balance === 50000 + 75846,
