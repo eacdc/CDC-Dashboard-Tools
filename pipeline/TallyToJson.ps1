@@ -836,7 +836,15 @@ if ($ledgerToGroup.Count -ge $MinLedgers) {
         # balance without the day it stands on cannot be added to anything.
         try {
             $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
-            if ($me) { $openingAsOn = if ($me.Books) { $me.Books } else { $me.From } }
+            # ONE date, as a string. Tally can answer a field twice (attribute and
+            # element both), which makes this an array -- and an array travels all
+            # the way to Mongo, where a date field compared against one matches no
+            # voucher at all and every posting silently vanishes from the balance.
+            if ($me) {
+                $d = if ($me.Books) { $me.Books } else { $me.From }
+                $openingAsOn = "$(@($d)[0])".Trim()
+                if ($openingAsOn -notmatch '^\d{8}$') { $openingAsOn = "" }
+            }
         } catch { }
         if ($openingAsOn) {
             Write-Host ("  Openings: {0} ledgers carry one, as at {1}" -f $ledgerOpening.Count, $openingAsOn)

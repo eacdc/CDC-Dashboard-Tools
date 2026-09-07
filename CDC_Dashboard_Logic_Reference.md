@@ -475,6 +475,14 @@ was opened — so it costs no more to read than the name does. It is asked for *
 the five minutes come back. What comes back is the balance as at the company's own
 beginning of books, which is what `openingAsOn` records (from `BOOKSFROM`).
 
+**One date, and a usable one.** Tally can answer a field twice — attribute and element
+both — and the array that makes travels all the way to Mongo, where a date *string*
+compared against an array matches no voucher at all: every posting vanishes and the
+openings come back alone, dressed up as a balance and looking entirely plausible. The
+pipeline flattens it to one eight-digit string, and the server takes the same date twice
+as harmless while refusing two *different* dates outright — picking one would be a guess
+about which day the money stands on.
+
 It is still a separate request, tried once, and a failure costs only the openings — the
 voucher sync must never wait on Tally's arithmetic again. The audit says plainly when no
 pull has brought them, so a half-figure is never read as a balance.

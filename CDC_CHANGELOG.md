@@ -1,5 +1,21 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.28 (server + pipeline) — September 2026 — One opening date, or none
+
+The first real run printed the opening date twice: `as at 20250401,20250401`. Tally had
+answered the field twice and the array travelled all the way to Mongo, where a date
+**string** compared against an array matches no voucher at all — so every posting
+vanished from the balance and the openings came back alone, dressed up as a balance and
+looking entirely plausible. The tell was in the numbers: 1,113 parties agreeing *to the
+rupee* with a seventeen-month-old snapshot, which a live balance would not do.
+
+The pipeline flattens the date to one eight-digit string. The server takes the same date
+twice as harmless, and refuses two *different* dates outright — picking one would be a
+guess about which day the money stands on — saying so instead of half-applying them.
+
+**So Kolkata's ₹43,09,59,088 was the opening balance at 1 April 2025, not what is
+outstanding today.** Re-read it after the next pull.
+
 ## v2.27 (pipeline) — September 2026 — A bad address fails at once, not five times
 
 `-TallyUrl "http://127.0.0.1:PORT"` — a placeholder pasted in as written — was retried
