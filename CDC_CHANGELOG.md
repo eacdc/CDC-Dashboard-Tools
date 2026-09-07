@@ -1,5 +1,12 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.24 (pipeline) — September 2026 — Pass the switch, not "-Switch:False"
+
+`run_daily.ps1` handed `-WithBalances:$WithBalances` to `TallyToJson.ps1`, and the run
+died on the spot with "Cannot process argument". `powershell -File` passes arguments
+across as plain **text**, so `-WithBalances:False` arrives as something that binds to
+nothing at all. The switch is appended only when it is actually on.
+
 ## v2.23 (pipeline) — September 2026 — Balances are opt-in, and only for parties
 
 Measured on the real company: **886 ledgers come back by name in two seconds, and had
