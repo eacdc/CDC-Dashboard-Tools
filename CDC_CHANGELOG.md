@@ -1,5 +1,19 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.23 (pipeline) — September 2026 — Balances are opt-in, and only for parties
+
+Measured on the real company: **886 ledgers come back by name in two seconds, and had
+not produced their closing balances in five minutes.** Tally is slow at balances out of
+all proportion to everything else it does, so asking for them can never be part of a
+sync anyone waits on.
+
+They are now behind `-WithBalances`, off by default on `TallyToJson.ps1` and
+`run_daily.ps1` alike. When asked for, the request covers only the ledgers that can *be*
+outstanding — `CHILDOF $$GroupSundryDebtors`, then creditors — one group at a time, once,
+with a long timeout; and if it still does not arrive, only the balances are lost. The
+voucher sync completed normally through all of this, which is what the previous change
+was for.
+
 ## v2.22 (pipeline) — September 2026 — Ask for the balances separately, and let -Branches win
 
 Two faults, both visible in one run's log.

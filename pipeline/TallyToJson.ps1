@@ -63,6 +63,12 @@ param(
     [string]$OutDir      = "$env:USERPROFILE\Desktop\tally_export",
     [string]$IngestUrl   = "",           # e.g. https://cdc-api.onrender.com  (empty = write files only)
     [string]$IngestToken = "",           # shared secret; sent as x-ingest-token header
+    [switch]$WithBalances,               # ask Tally for each party's CLOSINGBALANCE. OFF by
+                                         #   default: names and groups come back in seconds,
+                                         #   but Tally computes balances so slowly that the
+                                         #   request outlives any sane timeout. Run it on its
+                                         #   own when the outstanding figures are wanted, not
+                                         #   on the daily sync.
     [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
     [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
@@ -769,17 +775,19 @@ foreach ($g in $gx.SelectNodes("//GROUP")) {
 Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 
 # ---- what each party actually OWES, in Tally's own words --------------------
-# A SEPARATE request on purpose. Asked alongside the ledger list, Tally computes
-# every ledger's balance before answering at all -- past the timeout on a real
-# company, which reads as a hang and takes the whole sync down with it. Here it is
-# its own request, tried ONCE rather than five times, and a failure costs only the
-# balances: the sync carries on without them.
+# Off unless -WithBalances, and a SEPARATE request when it does run. Two reasons,
+# both measured: asked alongside the ledger list, Tally computes every balance before
+# it answers at all and the whole sync dies with the timeout; and even alone it is
+# slow out of all proportion -- 886 ledgers come back by NAME in two seconds and had
+# not produced their balances in five minutes.
 #
-# CLOSINGBALANCE as at SVTODATE is the figure that matters, and stating the dates is
-# what makes it mean something -- left out, Tally answers for whatever period the
-# company happens to be open at. OPENINGBALANCE is not asked for: nothing reads it,
-# and it would double what Tally has to work out.
-$balancePayload = @"
+# So only the ledgers that can BE outstanding are asked for, one party group at a
+# time. CLOSINGBALANCE as at SVTODATE is the figure that matters, and stating the
+# dates is what makes it mean something -- left out, Tally answers for whatever period
+# the company happens to be open at. OPENINGBALANCE is not asked for: nothing reads
+# it, and it would double what Tally has to work out.
+function Get-PartyBalances([string]$groupFormula) {
+    $payload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
   <TYPE>Collection</TYPE><ID>LedgerBalances</ID></HEADER>
@@ -793,19 +801,16 @@ $balancePayload = @"
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerBalances" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
+        <CHILDOF>`$`$$groupFormula</CHILDOF>
+        <BELONGSTO>Yes</BELONGSTO>
         <FETCH>NAME,CLOSINGBALANCE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
 </ENVELOPE>
 "@
-# Not worth asking when the company plainly is not loaded -- the safety check below
-# is about to refuse the run anyway, and this is the one request that can cost minutes.
-if ($ledgerToGroup.Count -lt $MinLedgers) {
-    Write-Host "  Balances: skipped (the company does not look loaded; see the check below)"
-} else {
-try {
-    [xml]$bx = Post-Tally $balancePayload 1 300
+    $n = 0
+    [xml]$bx = Post-Tally $payload 1 900
     foreach ($l in $bx.SelectNodes("//LEDGER")) {
         $bn = xval $l.NAME; if (-not $bn) { continue }
         # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
@@ -813,12 +818,26 @@ try {
         # master document for nothing.
         $cb = ToAmount (xval $l.CLOSINGBALANCE)
         if ($cb -ne 0) { $ledgerClosing[$bn] = $cb }
+        $n++
+    }
+    return $n
+}
+if ($WithBalances -and $ledgerToGroup.Count -ge $MinLedgers) {
+    foreach ($g in @("GroupSundryDebtors", "GroupSundryCreditors")) {
+        try {
+            $seen = Get-PartyBalances $g
+            Write-Host ("  Balances: {0} ledgers under {1}" -f $seen, $g)
+            if ($seen -eq 0) {
+                Write-Warning ("  {0} returned no ledger at all. If this build of Tally spells CHILDOF differently, the balances simply do not arrive -- nothing else is affected." -f $g)
+            }
+        } catch {
+            Write-Warning ("  Balances for {0} not fetched: {1}" -f $g, $_.Exception.Message)
+            Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
+        }
     }
     Write-Host ("  Balances: {0} ledgers carry one, as at {1}" -f $ledgerClosing.Count, $ToDate)
-} catch {
-    Write-Warning ("  Ledger balances not fetched: {0}" -f $_.Exception.Message)
-    Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
-}
+} elseif ($WithBalances) {
+    Write-Host "  Balances: skipped (the company does not look loaded; see the check below)"
 }
 
 # ---- SAFETY: refuse to run if the company isn't really loaded -------------

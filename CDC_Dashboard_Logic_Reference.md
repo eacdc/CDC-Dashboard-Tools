@@ -460,12 +460,18 @@ that. So the ledger master now carries Tally's own **CLOSINGBALANCE**, fetched w
 stored as `closing`/`closingAsOn` on the branch's master (live pulls only — a back-fill
 carries an old year's balances).
 
-**They are a separate Tally request, tried once.** Asked alongside the ledger list they
-make Tally compute every ledger's balance before it answers at all, which on a real
-company runs past the 180-second timeout, reads as a hang, and takes the whole sync down
-with it. On their own, a failure costs only the balances and the sync carries on — and
-they are skipped when the ledger count already says the company is not loaded.
-`OPENINGBALANCE` is not asked for: nothing reads it, and it would double the work.
+**They are off unless `-WithBalances`, and a separate request when they run.** Two
+things, both measured on the real company. Asked alongside the ledger list, Tally
+computes every balance *before it answers at all*, which runs past the 180-second
+timeout and takes the whole sync down with it. And even alone it is slow out of all
+proportion: **886 ledgers come back by name in two seconds and had not produced their
+balances in five minutes.** So the request asks only for the ledgers that can *be*
+outstanding, one party group at a time (`CHILDOF $$GroupSundryDebtors`, then creditors),
+is tried once with a long timeout, and a failure costs only the balances — the sync
+carries on and says so. `OPENINGBALANCE` is not asked for: nothing reads it, and it
+would double the work.
+
+Keep it off the nightly job. Run it by hand when the outstanding figures are wanted.
 
 Against the
 right date that is not an approximation of outstanding, it **is** outstanding, and the
