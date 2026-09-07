@@ -51,7 +51,12 @@
 param(
     [string]$FromDate    = "20250401",
     [string]$ToDate      = (Get-Date).ToString('yyyyMMdd'),
-    [string]$TallyUrl    = "http://localhost:9001",
+    [string]$TallyUrl    = "http://127.0.0.1:9001",   # IPv4 loopback on purpose:
+                                                     #   localhost resolves to IPv6 ::1 first on
+                                                     #   Windows, and Tally answers over IPv4 far
+                                                     #   more reliably -- an IPv6 request can leave
+                                                     #   its socket in CLOSE_WAIT, wedging the
+                                                     #   listener until Tally is restarted.
     [string]$Company     = "CDC PRINTERS 2025-26",
     [ValidateSet('kol','ahm')]
     [string]$Branch      = "ahm",

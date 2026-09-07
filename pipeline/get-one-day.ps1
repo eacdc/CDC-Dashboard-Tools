@@ -2,7 +2,7 @@
 # View access is enough - this is an HTTP data export, not the voucher-edit screen.
 # Tally must be running and sitting idle at "Gateway of Tally".
 
-$TallyUrl = "http://localhost:9001"                 # same port your pipeline uses
+$TallyUrl = "http://127.0.0.1:9001"                # same port your pipeline uses (IPv4, not localhost)
 $Company  = "CDC PRINTERS 2025-26"
 $Ymd      = "20260112"                               # 12-Jan-26 (Debasish Book Stall Vch 32)
 $OutFile  = "$env:USERPROFILE\Desktop\daybook_$Ymd.xml"

@@ -1,5 +1,25 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.21 (pipeline) — September 2026 — Reach Tally on 127.0.0.1, never localhost
+
+A pull that had been working started failing with "Unable to connect to the remote
+server" on every attempt, and Tally itself hung. `netstat` named both halves of it:
+
+```
+TCP  [::1]:9019   [::1]:58963  CLOSE_WAIT   27552   <- Tally
+TCP  [::1]:58963  [::1]:9019   FIN_WAIT_2    6680   <- PowerShell
+```
+
+The connection went over `[::1]`, the **IPv6** loopback — on Windows `localhost`
+resolves to IPv6 first — and Tally never closed its end. A socket stuck in `CLOSE_WAIT`
+wedges the listener, so every later request reads as unreachable however open the
+company is, and the only cure is restarting Tally.
+
+So every script now defaults to the IPv4 loopback, and `pipeline/SETUP.md` gains the
+`netstat` reading: nothing listed means the port is wrong or Tally is not acting as a
+server; a `CLOSE_WAIT` line means it is wedged and re-running the pull only knocks five
+more times.
+
 ## v2.20 (server + pipeline) — September 2026 — Ask Tally what a party owes
 
 The balance reading came out three times closer than the bill netting on the total
