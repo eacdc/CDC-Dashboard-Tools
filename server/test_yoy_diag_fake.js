@@ -534,6 +534,30 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(!audO.branches.kol.worst.some((r) => /Citi Bank|Export Sales/.test(r.party)),
     'a bank or a sales account is still not a party, opening balance or not');
 
+  // A date Tally answered TWICE arrives as an array, and Mongo comparing a date string
+  // against one matches no voucher at all -- which would hand back the openings alone,
+  // dressed up as a balance and looking plausible. It has to be refused outright.
+  const mko = fakeDb.collection('masters').docs.find((d) => d.branch === 'kol' && d.opening);
+  mko.openingAsOn = ['20251001', '20251001'];
+  const audDup = await get('/api/bills/audit?asOn=20260228');
+  const cd = audDup.branches.kol.worst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(audDup.branches.kol.opening.asOn === '20251001' && cd && cd.balance === 50000 + 75846,
+    'the SAME date twice is harmless and taken, opening and postings both: '
+    + JSON.stringify([audDup.branches.kol.opening.asOn, cd && cd.balance]));
+
+  // Two DIFFERENT dates are a disagreement, and picking one would be a guess about
+  // which day the money stands on. Refuse both rather than half-apply.
+  mko.openingAsOn = ['20251001', '20260101'];
+  const audBad = await get('/api/bills/audit?asOn=20260228');
+  const cb = audBad.branches.kol.worst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(cb && cb.balance === 75846,
+    'two different dates drop the OPENING, not every posting -- the balance is still the movement: '
+    + JSON.stringify(cb && cb.balance));
+  assert(audBad.branches.kol.opening.asOn === null
+    && /cannot be added to anything/.test(audBad.branches.kol.opening.note || ''),
+    'and it says so, rather than handing back the openings alone dressed up as a balance');
+  mko.openingAsOn = '20251001';
+
   // The postings are counted from the day the opening stands on, never earlier --
   // otherwise everything before it is counted twice, once inside the opening and
   // once again on its own.

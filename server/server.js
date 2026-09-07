@@ -1050,11 +1050,24 @@ app.get('/api/bills/audit', async (req, res) => {
     for (const br of ['kol', 'ahm']) {
       const m = readMaster(await db.collection('masters').findOne({ branch: br }));
       const openMap = (m && m.opening && Object.keys(m.opening).length) ? m.opening : null;
-      const from = (openMap && m.openingAsOn) || null;
+      // ONE date, and a usable one. Tally can answer a field twice, and the array that
+      // makes travels all the way here -- where Mongo compares a date STRING against
+      // it, matches no voucher at all, and quietly hands back the openings alone
+      // dressed up as a balance. A date that is not eight digits is no date, so the
+      // openings are refused with it rather than half-applied.
+      // Tally can answer a field twice, and the array that makes travels all the way
+      // here -- where Mongo compares a date STRING against it, matches no voucher at
+      // all, and quietly hands back the openings alone dressed up as a balance. The
+      // same date twice is harmless and taken; two DIFFERENT dates are a disagreement
+      // nobody should resolve by guessing, so the openings are refused with them.
+      const seen = [...new Set([].concat(m ? m.openingAsOn : []).map((x) => String(x || '')))];
+      const from = (openMap && seen.length === 1 && /^\d{8}$/.test(seen[0])) ? seen[0] : null;
       openOf[br] = {
         asOn: from, ledgers: openMap ? Object.keys(openMap).length : 0,
         note: from ? null
-          : "No pull has brought Tally's opening balances yet, so this is movement since the oldest voucher held, not a balance. Run the pipeline once and ask again.",
+          : (openMap
+            ? `Tally's opening balances arrived but the day they stand on did not (${JSON.stringify(m.openingAsOn)}), so they cannot be added to anything and are left out. This is movement since the oldest voucher held, not a balance.`
+            : "No pull has brought Tally's opening balances yet, so this is movement since the oldest voucher held, not a balance. Run the pipeline once and ask again."),
       };
 
       // Only ledgers that can BE outstanding. Every posting in the books nets to zero
