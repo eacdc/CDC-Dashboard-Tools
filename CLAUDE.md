@@ -8,7 +8,7 @@ Tally ERP → MongoDB → browser dashboards for a two-branch printing company (
 `kol`, Ahmedabad `ahm`). Three layers, each in its own language:
 
 ```
-Tally HTTP-XML gateway (:9001, or :9019 on a shared RDP box)
+Tally HTTP-XML gateway (127.0.0.1:9001, or :9019 on a shared RDP box)
    └─ pipeline/TallyToJson.ps1      PowerShell 5.1 extractor
         └─ POST /ingest or /sync    server/  (Express + MongoDB Atlas)
              └─ GET /api/*          portal/, consolidated/, projected/, dashboard/, voucher/
@@ -54,7 +54,7 @@ A pipeline pull (run on the Windows box, not here):
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
   -FromDate 20250401 -ToDate 20260901 -Branch kol -Company "…(Kolkata) - 2025-26" `
-  -TallyUrl "http://localhost:9019" -IngestUrl "https://…" -IngestToken "REAL_TOKEN" -ChunkSize 1000
+  -TallyUrl "http://127.0.0.1:9019" -IngestUrl "https://…" -IngestToken "REAL_TOKEN" -ChunkSize 1000
 ```
 
 ## Invariants that are easy to break
@@ -84,6 +84,13 @@ by group ancestry (Sundry Debtor/Creditor, Bank, Cash, Bank OD, Branch → `part
 **PowerShell 5.1 files must be pure ASCII**, and so must every placeholder in a
 copy-pasteable command (`REAL_TOKEN`, not a token or a non-Latin word) — a non-ASCII
 byte in a command the user pastes raises a ByteString error.
+
+**Tally is reached on `127.0.0.1`, never `localhost`.** On Windows `localhost` resolves
+to the IPv6 loopback `::1` first, and Tally's HTTP server answers over IPv4 far more
+reliably — an IPv6 request can leave its socket in `CLOSE_WAIT`, which wedges the
+listener until Tally is restarted and reads as "Unable to connect to the remote server"
+from then on, however open the company is. `netstat -ano | findstr :<port>` shows both
+the address family and the stuck socket.
 
 **`-Branch` must match the `-Company` being pulled.** The script guards on the city in
 the company name; overriding it with `-AllowBranchMismatch` is how a branch's data ends

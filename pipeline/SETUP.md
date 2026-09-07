@@ -160,7 +160,7 @@ Tally its own port: **F1 → Settings → Connectivity → Client/Server configu
 `netstat -ano | findstr :9019` that nothing answers). Then pass it to every script:
 
 ```powershell
--TallyUrl "http://localhost:9019"
+-TallyUrl "http://127.0.0.1:9019"
 ```
 
 `run_daily.ps1` and `run_backfill.ps1` take `-TallyUrl` too — a scheduled task left on
@@ -257,6 +257,38 @@ Open the dashboard (`/consolidated/` or `/projected/`), keep the default
 (else paste the API URL), and click **Fetch**. Default range = 1 Apr current FY → today.
 
 ---
+
+## "Unable to connect to the remote server" - and Tally hangs
+
+`netstat -ano | findstr :9019` tells you which of two very different things is wrong.
+
+Nothing listed: nothing is listening on that port. Check Tally's own setting -
+TallyPrime **F1 (Help) > Settings > Connectivity > Client/Server configuration** -
+that it acts as **Server** and on which port.
+
+Listed, but with a line like this:
+
+```
+TCP  [::1]:9019   [::1]:58963  CLOSE_WAIT   27552   <- Tally
+TCP  [::1]:58963  [::1]:9019   FIN_WAIT_2    6680   <- PowerShell
+```
+
+Two things are visible there. The connection went over `[::1]`, the **IPv6** loopback:
+on Windows `localhost` resolves to IPv6 first. And Tally is in `CLOSE_WAIT` - it never
+closed its end - which wedges the listener, so every later request reads as "Unable to
+connect to the remote server" however open the company is.
+
+Use **`http://127.0.0.1:PORT`**, never `localhost`. That is why the scripts default to
+the IPv4 loopback. A wedged Tally has to be restarted once to free the stuck socket;
+after that, IPv4 requests do not leave one behind.
+
+Re-running the pull against a wedged Tally makes it worse - each run knocks five more
+times. Stop, restart Tally, sit it at **Gateway of Tally**, then check with the
+lightest request there is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -ListCompanies -TallyUrl "http://127.0.0.1:9019"
+```
 
 ## Incremental sync (ALTERID) — catches backdated entries, edits & deletions
 
