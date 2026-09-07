@@ -452,32 +452,32 @@ ledgers gives a grand total of exactly **zero**, because a full set of books net
 zero by double entry; a balance total of 0 across thousands of "parties" is the
 signature of that mistake, not of a company that owes nobody anything.
 
-**Neither reading can reach a party that already owed money before the oldest voucher
-held** — April 2015 for Kolkata, April 2025 for Ahmedabad. Adding vouchers up gives
-*movement since then*, not a balance, and no amount of allocation completeness fixes
-that. So the ledger master now carries Tally's own **CLOSINGBALANCE**, fetched with
-`SVFROMDATE`/`SVTODATE` set to the pull's own range so the number has a known date, and
-stored as `closing`/`closingAsOn` on the branch's master (live pulls only — a back-fill
-carries an old year's balances).
+**A balance is two things, and adding vouchers up gives only one of them:**
 
-**They are off unless `-WithBalances`, and a separate request when they run.** Two
-things, both measured on the real company. Asked alongside the ledger list, Tally
-computes every balance *before it answers at all*, which runs past the 180-second
-timeout and takes the whole sync down with it. And even alone it is slow out of all
-proportion: **886 ledgers come back by name in two seconds and had not produced their
-balances in five minutes.** So the request asks only for the ledgers that can *be*
-outstanding, one party group at a time (`CHILDOF $$GroupSundryDebtors`, then creditors),
-is tried once with a long timeout, and a failure costs only the balances — the sync
-carries on and says so. `OPENINGBALANCE` is not asked for: nothing reads it, and it
-would double the work.
+```
+what a party owes = its opening balance + every posting since
+```
 
-Keep it off the nightly job. Run it by hand when the outstanding figures are wanted.
+Neither the bill netting nor the voucher sum can reach a party that already owed money
+before the oldest voucher held — April 2015 for Kolkata, April 2025 for Ahmedabad. That
+half comes from the ledger master: **`OPENINGBALANCE`**, stored as `opening` /
+`openingAsOn` on the branch's master, and the postings are then counted **from that same
+day forward** — anything earlier is already inside the opening, and counting it again
+doubles it.
 
-Against the
-right date that is not an approximation of outstanding, it **is** outstanding, and the
-vouchers are needed only for the ageing. The audit reports it per branch, and says so
-plainly when no pull has brought it yet rather than reading its absence as a company
-that owes nothing.
+**`CLOSINGBALANCE` is not reachable and the attempt was abandoned.** Tally has to walk
+every posting to work one out: 886 ledgers that come back *by name* in two seconds had
+not produced their balances in five minutes, and asked alongside the ledger list it took
+the whole sync down with it. `OPENINGBALANCE` is a different animal — a **stored** field
+on the ledger master, typed in when the ledger was created or carried in when the year
+was opened — so it costs no more to read than the name does. It is asked for **without**
+`SVFROMDATE`/`SVTODATE`: bounded by dates, Tally computes it instead of reading it, and
+the five minutes come back. What comes back is the balance as at the company's own
+beginning of books, which is what `openingAsOn` records (from `BOOKSFROM`).
+
+It is still a separate request, tried once, and a failure costs only the openings — the
+voucher sync must never wait on Tally's arithmetic again. The audit says plainly when no
+pull has brought them, so a half-figure is never read as a balance.
 
 NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr show
 `settled: 0` and the bill netting calls ₹2.48 Cr open, while the ledger balance comes

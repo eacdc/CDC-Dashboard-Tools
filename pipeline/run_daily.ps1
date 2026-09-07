@@ -26,9 +26,6 @@
 param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
-    [switch]$WithBalances,                          # also ask Tally for each party's closing balance.
-                                                    #   Slow (minutes), so keep it OFF for the nightly job
-                                                    #   and run it by hand when outstanding is wanted.
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
     # Which Tally to pull from. On a shared/RDP machine port 9001 belongs to whichever
     # instance started first -- possibly another user's -- so pin your own instance's
@@ -85,25 +82,18 @@ if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / 
 
 Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, (($syncBranches | ForEach-Object { $_.Branch }) -join ','))
 
-# `powershell -File` hands arguments over as plain TEXT, so a switch cannot be passed
-# as -WithBalances:$WithBalances -- "-WithBalances:False" binds to nothing and the run
-# dies with "Cannot process argument". Pass the switch only when it is actually on.
-$balArgs = @(); if ($WithBalances) { $balArgs = @('-WithBalances') }
-
 foreach ($b in $syncBranches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
     try {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -Incremental -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
-                @balArgs `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }
         elseif ($mode -eq 'api') {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -FromDate $FromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
-                @balArgs `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
         }

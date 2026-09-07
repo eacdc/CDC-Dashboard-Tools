@@ -1,5 +1,30 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.25 (server + pipeline) — September 2026 — The opening balance, which Tally will actually give
+
+Closing balances are abandoned. Tally has to walk every posting to work one out, and
+886 ledgers that come back *by name* in two seconds had not produced their balances in
+five minutes — even asked on their own, for parties only.
+
+`OPENINGBALANCE` is a different animal: a **stored** field on the ledger master, typed
+in when the ledger was created or carried in when the year was opened, so it costs no
+more to read than the name does. And it is exactly the missing half:
+
+```
+what a party owes = its opening balance + every posting since
+```
+
+The vouchers supply the postings; the opening supplies what was already owed before the
+oldest voucher held, which no amount of allocation completeness recovers. Postings are
+counted from the day the opening stands on and never earlier, or it would be counted
+twice. The date comes from the company's own `BOOKSFROM`, stored alongside as
+`openingAsOn` — an opening balance without its date cannot be added to anything.
+
+It is asked for **without** `SVFROMDATE`/`SVTODATE` on purpose: bounded by dates, Tally
+computes the figure instead of reading it and the five minutes come back. Still its own
+request, tried once, with a failure costing only the openings. `-WithBalances` is gone
+with the path it existed for.
+
 ## v2.24 (pipeline) — September 2026 — Pass the switch, not "-Switch:False"
 
 `run_daily.ps1` handed `-WithBalances:$WithBalances` to `TallyToJson.ps1`, and the run

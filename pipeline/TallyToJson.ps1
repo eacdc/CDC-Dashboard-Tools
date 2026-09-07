@@ -63,12 +63,6 @@ param(
     [string]$OutDir      = "$env:USERPROFILE\Desktop\tally_export",
     [string]$IngestUrl   = "",           # e.g. https://cdc-api.onrender.com  (empty = write files only)
     [string]$IngestToken = "",           # shared secret; sent as x-ingest-token header
-    [switch]$WithBalances,               # ask Tally for each party's CLOSINGBALANCE. OFF by
-                                         #   default: names and groups come back in seconds,
-                                         #   but Tally computes balances so slowly that the
-                                         #   request outlives any sane timeout. Run it on its
-                                         #   own when the outstanding figures are wanted, not
-                                         #   on the daily sync.
     [switch]$EmitCsv,                    # also write the original 7 CSVs (off by default)
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
     [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
@@ -741,7 +735,6 @@ $ledgerToGroup = @{}   # ledger name -> immediate group
 $groupToParent = @{}   # group name  -> parent group (or "" at root)
 $ledgerContacts = @{}  # ledger name -> @{ name; email; mobile }  (party contact block)
 $ledgerIds = @{}       # ledger name -> stable Tally GUID (survives renames)
-$ledgerClosing = @{}   # ledger name -> balance as at -ToDate (raw Tally sign); see below
 
 [xml]$lx = Post-Tally $ledgerPayload
 foreach ($l in $lx.SelectNodes("//LEDGER")) {
@@ -774,70 +767,74 @@ foreach ($g in $gx.SelectNodes("//GROUP")) {
 }
 Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 
-# ---- what each party actually OWES, in Tally's own words --------------------
-# Off unless -WithBalances, and a SEPARATE request when it does run. Two reasons,
-# both measured: asked alongside the ledger list, Tally computes every balance before
-# it answers at all and the whole sync dies with the timeout; and even alone it is
-# slow out of all proportion -- 886 ledgers come back by NAME in two seconds and had
-# not produced their balances in five minutes.
+# ---- what each party owed when the books opened -----------------------------
+# CLOSINGBALANCE is not reachable this way and the attempt is abandoned: Tally has to
+# walk every posting to work one out, and 886 ledgers that come back BY NAME in two
+# seconds had not produced their balances in five minutes.
 #
-# So only the ledgers that can BE outstanding are asked for, one party group at a
-# time. CLOSINGBALANCE as at SVTODATE is the figure that matters, and stating the
-# dates is what makes it mean something -- left out, Tally answers for whatever period
-# the company happens to be open at. OPENINGBALANCE is not asked for: nothing reads
-# it, and it would double what Tally has to work out.
-function Get-PartyBalances([string]$groupFormula) {
-    $payload = @"
+# OPENINGBALANCE is a different animal. It is a STORED field on the ledger master --
+# typed in when the ledger was created, or carried in when the year was opened -- so
+# it costs no more to read than the name does. And it is the missing half of the sum:
+#
+#     what a party owes today = its opening balance + every posting since
+#
+# The vouchers supply the postings. The opening supplies what was already owed before
+# the oldest voucher we hold, which no amount of adding vouchers up can recover.
+#
+# Asked WITHOUT SVFROMDATE/SVTODATE on purpose: bounded by dates Tally would compute
+# the figure instead of reading it, and we would be back to the five minutes. What
+# comes back is the balance as at the company's own beginning of books, which is what
+# openingAsOn below records.
+$ledgerOpening = @{}
+$openingAsOn = ""
+if ($ledgerToGroup.Count -ge $MinLedgers) {
+    $openPayload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
-  <TYPE>Collection</TYPE><ID>LedgerBalances</ID></HEADER>
+  <TYPE>Collection</TYPE><ID>LedgerOpening</ID></HEADER>
   <BODY><DESC>
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
-      <SVFROMDATE>$FromDate</SVFROMDATE>
-      <SVTODATE>$ToDate</SVTODATE>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
-      <COLLECTION NAME="LedgerBalances" ISMODIFY="No">
+      <COLLECTION NAME="LedgerOpening" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <CHILDOF>`$`$$groupFormula</CHILDOF>
-        <BELONGSTO>Yes</BELONGSTO>
-        <FETCH>NAME,CLOSINGBALANCE</FETCH>
+        <FETCH>NAME,OPENINGBALANCE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
 </ENVELOPE>
 "@
-    $n = 0
-    [xml]$bx = Post-Tally $payload 1 900
-    foreach ($l in $bx.SelectNodes("//LEDGER")) {
-        $bn = xval $l.NAME; if (-not $bn) { continue }
-        # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
-        # non-zero ones are kept -- most ledgers are square and would swell the
-        # master document for nothing.
-        $cb = ToAmount (xval $l.CLOSINGBALANCE)
-        if ($cb -ne 0) { $ledgerClosing[$bn] = $cb }
-        $n++
-    }
-    return $n
-}
-if ($WithBalances -and $ledgerToGroup.Count -ge $MinLedgers) {
-    foreach ($g in @("GroupSundryDebtors", "GroupSundryCreditors")) {
-        try {
-            $seen = Get-PartyBalances $g
-            Write-Host ("  Balances: {0} ledgers under {1}" -f $seen, $g)
-            if ($seen -eq 0) {
-                Write-Warning ("  {0} returned no ledger at all. If this build of Tally spells CHILDOF differently, the balances simply do not arrive -- nothing else is affected." -f $g)
-            }
-        } catch {
-            Write-Warning ("  Balances for {0} not fetched: {1}" -f $g, $_.Exception.Message)
-            Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
+    # Its own request, tried once, with a failure costing only the openings -- the
+    # voucher sync must never wait on this again.
+    try {
+        [xml]$ox = Post-Tally $openPayload 1 120
+        foreach ($l in $ox.SelectNodes("//LEDGER")) {
+            $on = xval $l.NAME; if (-not $on) { continue }
+            # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
+            # non-zero ones are kept -- most ledgers open square and would swell the
+            # master document for nothing.
+            $ob = ToAmount (xval $l.OPENINGBALANCE)
+            if ($ob -ne 0) { $ledgerOpening[$on] = $ob }
         }
+        # The date they are AS AT: the company's own beginning of books. An opening
+        # balance without the day it stands on cannot be added to anything.
+        try {
+            $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
+            if ($me) { $openingAsOn = if ($me.Books) { $me.Books } else { $me.From } }
+        } catch { }
+        if ($openingAsOn) {
+            Write-Host ("  Openings: {0} ledgers carry one, as at {1}" -f $ledgerOpening.Count, $openingAsOn)
+        } else {
+            # Without the date they are not usable, so they are not sent at all.
+            Write-Warning ("  Openings: {0} read, but Tally did not say when the books begin -- not sent." -f $ledgerOpening.Count)
+            $ledgerOpening = @{}
+        }
+    } catch {
+        Write-Warning ("  Ledger openings not fetched: {0}" -f $_.Exception.Message)
+        Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
     }
-    Write-Host ("  Balances: {0} ledgers carry one, as at {1}" -f $ledgerClosing.Count, $ToDate)
-} elseif ($WithBalances) {
-    Write-Host "  Balances: skipped (the company does not look loaded; see the check below)"
 }
 
 # ---- SAFETY: refuse to run if the company isn't really loaded -------------
@@ -916,12 +913,12 @@ $mContacts = [ordered]@{}
 foreach ($ln in ($ledgerContacts.Keys | Sort-Object)) { $mContacts[$ln] = $ledgerContacts[$ln] }
 $mIds = [ordered]@{}
 foreach ($ln in ($ledgerIds.Keys | Sort-Object)) { $mIds[$ln] = $ledgerIds[$ln] }
-$mClosing = [ordered]@{}
-foreach ($ln in ($ledgerClosing.Keys | Sort-Object)) { $mClosing[$ln] = $ledgerClosing[$ln] }
+$mOpening = [ordered]@{}
+foreach ($ln in ($ledgerOpening.Keys | Sort-Object)) { $mOpening[$ln] = $ledgerOpening[$ln] }
 # The date is stored WITH the balances: a balance without the day it was struck on
 # is not a fact anyone can use, and each company here covers one financial year.
 $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds;
-                         closing = $mClosing; closingAsOn = $ToDate }
+                         opening = $mOpening; openingAsOn = $openingAsOn }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

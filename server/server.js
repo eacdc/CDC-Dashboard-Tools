@@ -1029,54 +1029,61 @@ app.get('/api/bills/audit', async (req, res) => {
     }
 
     // And the third reading, which needs no bill references at all: the party's own
-    // LEDGER BALANCE, every posting to its name added up. Bill-reference netting is
-    // only ever as good as the references Tally was given -- an old receipt posted on
-    // account, or a year-end "Due As on" balancing bill, leaves invoices reading open
-    // forever though the customer paid. The balance cannot drift that way, so where
-    // the two disagree it is the references that are incomplete, not the money.
-    const balanced = await db.collection('vouchers').aggregate([
-      { $match: { date: { $lte: asOn } } },
-      { $project: { branch: 1, kv: { $concatArrays: [
-        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
-        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
-      { $unwind: '$kv' },
-      { $group: { _id: { branch: '$branch', ledger: '$kv.k' }, sum: { $sum: '$kv.v' } } },
-    ], { allowDiskUse: true }).toArray();
-
+    // LEDGER BALANCE. Bill-reference netting is only ever as good as the references
+    // Tally was given -- an old receipt posted on account, or a year-end "Due As on"
+    // balancing bill, leaves invoices reading open forever though the customer paid.
+    // A balance cannot drift that way, so where the two disagree it is the references
+    // that are incomplete, not the money.
+    //
+    // A balance is TWO things, and adding vouchers up gives only one of them:
+    //
+    //     what a party owes = its opening balance + every posting since
+    //
+    // The opening is what was already owed before the oldest voucher we hold, and no
+    // amount of allocation completeness recovers it. It comes from the ledger master
+    // (`opening`/`openingAsOn`) -- a STORED Tally field, unlike the closing balance,
+    // which Tally has to walk every posting to work out and would not produce for 886
+    // ledgers in five minutes. Postings are then counted from that same day forward,
+    // never earlier, or the opening would be counted twice.
     const balOf = { kol: new Map(), ahm: new Map() };
-    for (const r of balanced) {
-      const m = balOf[r._id.branch];
-      if (!m || !r._id.ledger) continue;
+    const openOf = { kol: null, ahm: null };
+    for (const br of ['kol', 'ahm']) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const openMap = (m && m.opening && Object.keys(m.opening).length) ? m.opening : null;
+      const from = (openMap && m.openingAsOn) || null;
+      openOf[br] = {
+        asOn: from, ledgers: openMap ? Object.keys(openMap).length : 0,
+        note: from ? null
+          : "No pull has brought Tally's opening balances yet, so this is movement since the oldest voucher held, not a balance. Run the pipeline once and ask again.",
+      };
+
       // Only ledgers that can BE outstanding. Every posting in the books nets to zero
       // by double entry, so sweeping in the sales, bank and expense ledgers would
       // report a grand total of exactly nothing and bury the parties among them.
-      // Sundry Debtors and Creditors, plus whatever the file itself names -- Tally
-      // raises bills against fixed-asset and commission ledgers too.
-      const p = S.canon(r._id.ledger);
-      const side = yoy.sundryOf(S, r._id.ledger);
-      if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[r._id.branch].has(p)) continue;
-      const open = -r.sum;             // same Dr-positive scale as the bill netting
-      m.set(p, (m.get(p) || 0) + open);
-    }
+      const add = (ledger, open) => {
+        if (!ledger) return;
+        const side = yoy.sundryOf(S, ledger);
+        const p = S.canon(ledger);
+        if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(p)) return;
+        balOf[br].set(p, (balOf[br].get(p) || 0) + open);
+      };
 
-    // What Tally itself says each party owes. The vouchers can only ever show movement
-    // since the oldest one we hold -- April 2015 for Kolkata -- so a customer who
-    // already owed money before that cannot be got right by adding vouchers up, however
-    // complete the allocations are. These come from the ledger master and arrive only
-    // once a pull has run since they were asked for, so their absence is reported
-    // rather than left to look like a company that owes nothing.
-    const tallyOf = { kol: null, ahm: null };
-    for (const br of ['kol', 'ahm']) {
-      const m = readMaster(await db.collection('masters').findOne({ branch: br }));
-      if (!m || !m.closing || !Object.keys(m.closing).length) continue;
-      const map = new Map();
-      for (const [ln, amt] of Object.entries(m.closing)) {
-        const side = yoy.sundryOf(S, ln);
-        if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(S.canon(ln))) continue;
-        const p = S.canon(ln);
-        map.set(p, (map.get(p) || 0) + -amt);          // Dr-positive, like the rest
-      }
-      tallyOf[br] = { asOn: m.closingAsOn || null, parties: map };
+      // The opening first, on the same Dr-positive scale as everything else.
+      if (from && from <= asOn) for (const [ln, amt] of Object.entries(openMap)) add(ln, -amt);
+
+      // Then the postings, from the day the opening stands on -- anything earlier is
+      // already inside it.
+      const match = { branch: br, date: { $lte: asOn } };
+      if (from) match.date.$gte = from;
+      const moved = await db.collection('vouchers').aggregate([
+        { $match: match },
+        { $project: { kv: { $concatArrays: [
+          { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+          { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+        { $unwind: '$kv' },
+        { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
+      ], { allowDiskUse: true }).toArray();
+      for (const r of moved) add(r._id, -r.sum);
     }
 
     // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
@@ -1135,15 +1142,10 @@ app.get('/api/bills/audit', async (req, res) => {
         // The same comparison run on the ledger balance instead of the bill netting.
         // If this agrees where the other does not, outstanding should be built on the
         // balance and the references kept for the ageing only.
-        // Tally's own closing balances, when a pull has brought them. Against the
-        // right date this is not an approximation of outstanding -- it IS outstanding,
-        // and the vouchers are only needed for the ageing.
-        tally: tallyOf[br] ? {
-          asOn: tallyOf[br].asOn, parties: tallyOf[br].parties.size,
-          total: round([...tallyOf[br].parties.values()].reduce((a, v) => a + v, 0)),
-          sameDate: tallyOf[br].asOn === asOn,
-        } : { asOn: null, parties: 0, total: 0, sameDate: false,
-          note: 'No pull has brought Tally\'s own ledger balances yet. Run the pipeline once and ask again -- until then the vouchers can only show movement since the oldest one held.' },
+        // Where the opening half of the balance came from, and the day it stands
+        // on -- or why there is not one yet, so a partial figure is never read as a
+        // whole one.
+        opening: openOf[br],
         balanceTotal: round(rows.reduce((a, r) => a + r.balance, 0)),
         balanceAgree: rows.filter((r) => Math.abs(r.balanceDiff) < 1).length,
         balanceDiffer: rows.filter((r) => Math.abs(r.balanceDiff) >= 1).length,
