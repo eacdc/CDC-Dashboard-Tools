@@ -510,6 +510,12 @@ NCTB is the case that settled this: four export invoices totalling ₹3.08 Cr sh
 to **exactly zero** — the ₹2.39 Cr receipt of February 2017 was posted without naming a
 bill. Tally is right to omit the party; the references are simply not there to net.
 
+**At any date but the one the file was printed on, there is no verdict to give.** The
+file is stale by definition then, and disagreeing with it proves nothing either way —
+saying "not yet" would be crying wolf at the calendar. `verdict.comparable` is false,
+and what the date *does* give is outstanding as the vouchers and Tally's openings have
+it, which only Tally itself can judge.
+
 Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
 the vouchers carry invoices raised since the file was printed, and the file cannot.
 

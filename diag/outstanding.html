@@ -33,6 +33,7 @@
   .verdict{padding:14px;border-radius:10px;font-size:14px;line-height:1.55}
   .verdict.yes{background:#dcfce7;border:1px solid #86efac;color:#14532d}
   .verdict.no{background:#fef3c7;border:1px solid #fcd34d;color:#78350f}
+  .verdict.info{background:#e0f2fe;border:1px solid #7dd3fc;color:#075985}
   .verdict b{font-size:15px}
   a{color:var(--teal)}
   .copybar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -174,11 +175,16 @@
     var v=d.verdict;
     out.innerHTML=
       '<section><h2>THE ANSWER</h2><div class="body">'
-      +'<div class="verdict '+(v.safeToSwitch?'yes':'no')+'">'
-      +'<b>'+(v.safeToSwitch?'Yes — the vouchers give the same figures.':'Not yet — some parties differ.')+'</b><br>'
+      // Three states, not two: agreed, disagreed, and "this date cannot judge it".
+      +'<div class="verdict '+(v.safeToSwitch?'yes':(v.comparable===false?'info':'no'))+'">'
+      +'<b>'+(v.safeToSwitch?'Yes — the vouchers give the same figures.'
+             :(v.comparable===false?'Nothing is being tested at this date.':'Not yet — some parties differ.'))+'</b><br>'
       +esc(v.says)+'</div>'
-      +'<div class="note" style="padding:10px 0 0">Compared as at <b>'+esc(fmtDate(d.asOn))+'</b>, the date of the newest bill '
-      +'in the uploaded files — which is the date Tally printed them.</div></div></section>'
+      +'<div class="note" style="padding:10px 0 0">Compared as at <b>'+esc(fmtDate(d.asOn))+'</b>. '
+      +(v.comparable===false
+        ? 'Tally printed the uploaded file on <b>'+esc(fmtDate(d.snapshot))+'</b>, so it is not a yardstick for this date.'
+        : 'That is the day Tally printed the uploaded file, which is the only date the two sides can be measured against each other.')
+      +'</div></div></section>'
       +Object.keys(d.branches).map(function(k){
         return '<section><h2>'+esc((NAME[k]||k).toUpperCase())+'</h2>'+branchBlock(k,d.branches[k])+'</section>';
       }).join('')
