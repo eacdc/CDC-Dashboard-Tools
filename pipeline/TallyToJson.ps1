@@ -88,6 +88,20 @@ $ErrorActionPreference = "Stop"
 
 if ($ChunkSize -lt 1) { throw "-ChunkSize must be at least 1." }
 
+# ---- guard: -TallyUrl has to be a real address ------------------------------
+# A malformed URL is not a passing blip, so it must not be retried like one: a
+# placeholder left in by mistake ("http://127.0.0.1:PORT") otherwise fails five times
+# over fourteen seconds, each time asking whether Tally is idle at the Gateway -- a
+# question that has nothing to do with it. Say what is actually wrong, once.
+try { $null = [System.Uri]$TallyUrl } catch {
+    throw ("-TallyUrl '{0}' is not a valid address. Expected something like " +
+           "http://127.0.0.1:9019 -- with the PORT NUMBER your Tally serves on " +
+           "(TallyPrime: F1 > Settings > Connectivity), not the word PORT.") -f $TallyUrl
+}
+if (-not ([System.Uri]$TallyUrl).IsAbsoluteUri) {
+    throw "-TallyUrl '$TallyUrl' is missing its scheme. Write it as http://127.0.0.1:9019"
+}
+
 # ---- guard: a reset needs somewhere to push and a full pull to refill with ----
 # -Incremental posts only what changed since the last ALTERID, which after a wipe
 # is not enough to rebuild the branch. Clear it with a full-range run instead.
