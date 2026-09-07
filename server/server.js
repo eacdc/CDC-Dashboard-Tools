@@ -1015,6 +1015,11 @@ app.get('/api/bills/audit', async (req, res) => {
 
     const vchOf = { kol: new Map(), ahm: new Map() };
     const shapeOf = { kol: new Map(), ahm: new Map() };
+    // Every ledger Tally keeps bill-by-bill, whatever group it sits in. Tally's own
+    // Outstandings report counts exactly these, so a ledger here that our balance
+    // filter drops is money Tally reports and we do not -- which is the shape a
+    // shortfall against Tally's totals takes.
+    const billLedgers = { kol: new Set(), ahm: new Set() };
     for (const r of netted) {
       const ledger = r._id.ledger, m = vchOf[r._id.branch];
       if (!ledger || !m) continue;
@@ -1022,6 +1027,7 @@ app.get('/api/bills/audit', async (req, res) => {
       if (Math.abs(open) < 0.5) continue;                        // settled to the rupee
       const p = S.canon(ledger);
       m.set(p, (m.get(p) || 0) + open);
+      billLedgers[r._id.branch].add(p);
       const sh = shapeOf[r._id.branch].get(p)
         || shapeOf[r._id.branch].set(p, { openRefs: 0, oneSided: 0, oneSidedAmount: 0 }).get(p);
       sh.openRefs++;
@@ -1047,6 +1053,7 @@ app.get('/api/bills/audit', async (req, res) => {
     // never earlier, or the opening would be counted twice.
     const balOf = { kol: new Map(), ahm: new Map() };
     const openOf = { kol: null, ahm: null };
+    const missedOf = { kol: new Map(), ahm: new Map() };
     for (const br of ['kol', 'ahm']) {
       const m = readMaster(await db.collection('masters').findOne({ branch: br }));
       const openMap = (m && m.opening && Object.keys(m.opening).length) ? m.opening : null;
@@ -1073,11 +1080,20 @@ app.get('/api/bills/audit', async (req, res) => {
       // Only ledgers that can BE outstanding. Every posting in the books nets to zero
       // by double entry, so sweeping in the sales, bank and expense ledgers would
       // report a grand total of exactly nothing and bury the parties among them.
+      // What the filter turns away, kept rather than dropped on the floor: a ledger
+      // Tally keeps bill-by-bill but that sits outside Sundry Debtors and Creditors --
+      // an advance, a deposit, a branch account -- is money Tally's Outstandings
+      // counts and this does not. Naming those is how a shortfall gets found instead
+      // of guessed at.
+      const missed = new Map();
       const add = (ledger, open) => {
         if (!ledger) return;
         const side = yoy.sundryOf(S, ledger);
         const p = S.canon(ledger);
-        if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(p)) return;
+        if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(p)) {
+          if (billLedgers[br].has(p)) missed.set(p, (missed.get(p) || 0) + open);
+          return;
+        }
         balOf[br].set(p, (balOf[br].get(p) || 0) + open);
       };
 
@@ -1097,6 +1113,7 @@ app.get('/api/bills/audit', async (req, res) => {
         { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
       ], { allowDiskUse: true }).toArray();
       for (const r of moved) add(r._id, -r.sum);
+      missedOf[br] = missed;
     }
 
     // Does the branch even have vouchers reaching back that far? Ahmedabad's start in
@@ -1159,6 +1176,19 @@ app.get('/api/bills/audit', async (req, res) => {
         // on -- or why there is not one yet, so a partial figure is never read as a
         // whole one.
         opening: openOf[br],
+        // Ledgers Tally keeps bill-by-bill that this balance leaves out, because they
+        // sit outside Sundry Debtors and Creditors. Tally's own Outstandings counts
+        // them, so this is where a shortfall against its totals will be found -- named,
+        // with the group each sits in, rather than left as an unexplained difference.
+        outsideParties: (() => {
+          const rows = [...missedOf[br].entries()]
+            .filter(([, v]) => Math.abs(v) >= 0.5)
+            .map(([party, amount]) => ({ party, amount: round(amount),
+              group: yoy.chainOf(S, party).join(' > ') }))
+            .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+          return { count: rows.length, total: round(rows.reduce((a, r) => a + r.amount, 0)),
+            worst: rows.slice(0, 100) };
+        })(),
         balanceTotal: round(rows.reduce((a, r) => a + r.balance, 0)),
         balanceAgree: rows.filter((r) => Math.abs(r.balanceDiff) < 1).length,
         balanceDiffer: rows.filter((r) => Math.abs(r.balanceDiff) >= 1).length,

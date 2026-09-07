@@ -133,7 +133,20 @@
           +esc(fmtDate(f.opening.asOn))+'</b> ('+f.opening.ledgers.toLocaleString('en-IN')+' ledgers carry one), '
           +'plus every posting since. What was owed before the oldest voucher we hold is in there.'
         : '<span class="muted">'+esc((f.opening&&f.opening.note)||'')+'</span>')
-      +'</div></div>';
+      +'</div>'
+      // Tally's own Outstandings counts every ledger it keeps bill-by-bill, whatever
+      // group it sits in. This balance counts only Sundry Debtors and Creditors, so
+      // anything else bill-wise is money Tally reports and this does not -- named here
+      // rather than left as an unexplained difference against Tally's totals.
+      +((f.outsideParties&&f.outsideParties.count)
+        ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'
+          +'Left out of that balance: <b>'+rupees(f.outsideParties.total)+'</b> across '
+          +f.outsideParties.count.toLocaleString('en-IN')+' ledgers that Tally keeps bill-by-bill but that sit '
+          +'<b>outside Sundry Debtors and Creditors</b> — advances, deposits, branch accounts. '
+          +'Tally&rsquo;s own Outstandings counts these; this balance does not. '
+          +'<b>If that figure matches your gap against Tally, this is the whole of it.</b></div>'
+        : '')
+      +'</div>';
 
     // The merge list first: it is the larger pile and the one with something to do
     // about it, and clearing it is what makes the real differences readable.
@@ -147,6 +160,16 @@
           +'<td class="mono">'+esc(p.b.party)+'</td><td class="num">'+rupees(p.amount)+'</td></tr>';}).join('')
         +'</tbody></table></div>'
         +(f.namePairs>f.pairs.length?'<div class="note">… and '+(f.namePairs-f.pairs.length)+' more pairs, smaller.</div>':'')
+      : '';
+    // The ones left out, named, so the gap can be located rather than argued about.
+    var outside=(f.outsideParties&&f.outsideParties.count)
+      ? '<div class="note" style="padding-top:10px"><b>Ledgers Tally counts as outstanding and this balance leaves out</b></div>'
+        +'<div class="scroll"><table><thead><tr><th>Ledger</th><th>Group it sits under</th>'
+        +'<th style="text-align:right">Balance</th></tr></thead><tbody>'
+        +f.outsideParties.worst.map(function(r){return '<tr><td><a href="./?q='+encodeURIComponent(r.party)+'&branch='+esc(k)+'">'+esc(r.party)+'</a></td>'
+          +'<td class="mono muted">'+esc(r.group)+'</td><td class="num">'+rupees(r.amount)+'</td></tr>';}).join('')
+        +'</tbody></table></div>'
+        +(f.outsideParties.count>f.outsideParties.worst.length?'<div class="note">… and '+(f.outsideParties.count-f.outsideParties.worst.length)+' more, smaller.</div>':'')
       : '';
     var real=f.differAfterPairs
       ? shapeTable(f.shape)
@@ -168,7 +191,7 @@
         +'</tbody></table></div>'
         +(f.differAfterPairs>f.worst.length?'<div class="note">… and '+(f.differAfterPairs-f.worst.length)+' more, smaller.</div>':'')
       : '<div class="note" style="color:var(--green)"><b>Every remaining party agrees to the rupee.</b></div>';
-    return head+pairs+real;
+    return head+outside+pairs+real;
   }
 
   function render(d){

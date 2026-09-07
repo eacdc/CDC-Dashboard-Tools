@@ -1,5 +1,21 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.32 (server + diag) — September 2026 — Name what the balance leaves out
+
+Checked against Tally itself on 7 September 2026: receivables ₹91,15,27,343 less
+payables ₹54,92,50,483 is **₹36,22,58,458**, against our **₹34,67,31,766** — short by
+**₹1,55,26,692**, 4.3%.
+
+There is a specific asymmetry to look at before guessing. Tally's Outstandings counts
+every ledger it keeps **bill-by-bill**, whatever group it sits in — advances, deposits,
+branch accounts. Our bill netting already does the same. Our *balance* does not: it
+counts only Sundry Debtors and Creditors. So every bill-wise ledger outside those groups
+is money Tally reports and the balance does not.
+
+`outsideParties` now names each one with the group it sits under and its amount, and
+totals them. If that total matches the gap, the gap is explained rather than argued
+about — and the fix is then obvious.
+
 ## v2.31 (server + diag) — September 2026 — At the wrong date there is no verdict to give
 
 Asked as at today, the comparison reported "Not yet — some parties differ" against a
