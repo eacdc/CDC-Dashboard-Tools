@@ -154,16 +154,16 @@ function ToAmount($s) {
     $c = ("$s" -replace "[^0-9.\-]",""); $n=0.0
     [double]::TryParse($c,[ref]$n)|Out-Null; return [math]::Round($n,2)
 }
-function Post-Tally([string]$body) {
+function Post-Tally([string]$body, [int]$Attempts = 5, [int]$TimeoutSec = 180) {
     # TallyPrime's HTTP gateway only answers while Tally is idle at the "Gateway of
     # Tally" screen; a momentarily-open menu/dialog makes the request fail. Retry a
     # few times so a brief blip doesn't abort the whole run.
-    $r = $null; $attempt = 0; $max = 5
+    $r = $null; $attempt = 0; $max = $Attempts
     while ($true) {
         $attempt++
         try {
             $r = Invoke-WebRequest -Uri $TallyUrl -Method Post -Body $body `
-                 -ContentType "text/xml;charset=utf-8" -UseBasicParsing -TimeoutSec 180
+                 -ContentType "text/xml;charset=utf-8" -UseBasicParsing -TimeoutSec $TimeoutSec
             break
         } catch {
             if ($attempt -ge $max) { throw }
@@ -697,21 +697,15 @@ $ledgerPayload = @"
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
-      <!-- Dates matter here. Tally reports OPENINGBALANCE as at SVFROMDATE and
-           CLOSINGBALANCE as at SVTODATE, so stating them makes the two numbers mean
-           something we can hold on to; left out, they follow whatever period the
-           company happens to be open at and cannot be compared with anything. -->
-      <SVFROMDATE>$FromDate</SVFROMDATE>
-      <SVTODATE>$ToDate</SVTODATE>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerList" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <!-- OPENINGBALANCE / CLOSINGBALANCE are what a party actually OWES, straight
-             from Tally. The vouchers can only ever show movement since the oldest one
-             we hold (April 2015 for Kolkata), so a customer who already owed money
-             before that cannot be got right by adding vouchers up. -->
-        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL,PARTYGSTIN,GSTREGISTRATIONTYPE,OPENINGBALANCE,CLOSINGBALANCE</FETCH>
+        <!-- Names, groups and contacts only. Balances are asked for SEPARATELY below:
+             adding them here makes Tally compute every ledger's balance before it
+             answers at all, which on a real company runs past the timeout and reads
+             as a hang -- and takes the whole sync down with it. -->
+        <FETCH>NAME,PARENT,GUID,LEDGERCONTACT,LEDGERMOBILE,LEDGERPHONE,EMAIL,PARTYGSTIN,GSTREGISTRATIONTYPE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -741,8 +735,7 @@ $ledgerToGroup = @{}   # ledger name -> immediate group
 $groupToParent = @{}   # group name  -> parent group (or "" at root)
 $ledgerContacts = @{}  # ledger name -> @{ name; email; mobile }  (party contact block)
 $ledgerIds = @{}       # ledger name -> stable Tally GUID (survives renames)
-$ledgerOpening = @{}   # ledger name -> balance as at -FromDate  (raw Tally sign)
-$ledgerClosing = @{}   # ledger name -> balance as at -ToDate    (raw Tally sign)
+$ledgerClosing = @{}   # ledger name -> balance as at -ToDate (raw Tally sign); see below
 
 [xml]$lx = Post-Tally $ledgerPayload
 foreach ($l in $lx.SelectNodes("//LEDGER")) {
@@ -765,14 +758,6 @@ foreach ($l in $lx.SelectNodes("//LEDGER")) {
     if ($cName -or $cEmail -or $cMobile -or $cGstin) {
         $ledgerContacts[$name] = [ordered]@{ name = $cName; email = $cEmail; mobile = $cMobile; gstin = $cGstin }
     }
-    # What the party owes, in Tally's own words, at the two dates asked for above.
-    # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the non-zero
-    # ones are kept -- most ledgers are square and would treble the master document
-    # for nothing.
-    $ob = ToAmount (xval $l.OPENINGBALANCE)
-    $cb = ToAmount (xval $l.CLOSINGBALANCE)
-    if ($ob -ne 0) { $ledgerOpening[$name] = $ob }
-    if ($cb -ne 0) { $ledgerClosing[$name] = $cb }
 }
 Write-Host ("  Ledgers : {0}  (contacts: {1})" -f $ledgerToGroup.Count, $ledgerContacts.Count)
 
@@ -782,6 +767,59 @@ foreach ($g in $gx.SelectNodes("//GROUP")) {
     $groupToParent[$name] = xval $g.PARENT
 }
 Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
+
+# ---- what each party actually OWES, in Tally's own words --------------------
+# A SEPARATE request on purpose. Asked alongside the ledger list, Tally computes
+# every ledger's balance before answering at all -- past the timeout on a real
+# company, which reads as a hang and takes the whole sync down with it. Here it is
+# its own request, tried ONCE rather than five times, and a failure costs only the
+# balances: the sync carries on without them.
+#
+# CLOSINGBALANCE as at SVTODATE is the figure that matters, and stating the dates is
+# what makes it mean something -- left out, Tally answers for whatever period the
+# company happens to be open at. OPENINGBALANCE is not asked for: nothing reads it,
+# and it would double what Tally has to work out.
+$balancePayload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
+  <TYPE>Collection</TYPE><ID>LedgerBalances</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+      <SVFROMDATE>$FromDate</SVFROMDATE>
+      <SVTODATE>$ToDate</SVTODATE>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="LedgerBalances" ISMODIFY="No">
+        <TYPE>Ledger</TYPE>
+        <FETCH>NAME,CLOSINGBALANCE</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+# Not worth asking when the company plainly is not loaded -- the safety check below
+# is about to refuse the run anyway, and this is the one request that can cost minutes.
+if ($ledgerToGroup.Count -lt $MinLedgers) {
+    Write-Host "  Balances: skipped (the company does not look loaded; see the check below)"
+} else {
+try {
+    [xml]$bx = Post-Tally $balancePayload 1 300
+    foreach ($l in $bx.SelectNodes("//LEDGER")) {
+        $bn = xval $l.NAME; if (-not $bn) { continue }
+        # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
+        # non-zero ones are kept -- most ledgers are square and would swell the
+        # master document for nothing.
+        $cb = ToAmount (xval $l.CLOSINGBALANCE)
+        if ($cb -ne 0) { $ledgerClosing[$bn] = $cb }
+    }
+    Write-Host ("  Balances: {0} ledgers carry one, as at {1}" -f $ledgerClosing.Count, $ToDate)
+} catch {
+    Write-Warning ("  Ledger balances not fetched: {0}" -f $_.Exception.Message)
+    Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
+}
+}
 
 # ---- SAFETY: refuse to run if the company isn't really loaded -------------
 # A live CDC company has thousands of ledgers. If Tally returns only a handful,
@@ -859,15 +897,12 @@ $mContacts = [ordered]@{}
 foreach ($ln in ($ledgerContacts.Keys | Sort-Object)) { $mContacts[$ln] = $ledgerContacts[$ln] }
 $mIds = [ordered]@{}
 foreach ($ln in ($ledgerIds.Keys | Sort-Object)) { $mIds[$ln] = $ledgerIds[$ln] }
-$mOpening = [ordered]@{}
-foreach ($ln in ($ledgerOpening.Keys | Sort-Object)) { $mOpening[$ln] = $ledgerOpening[$ln] }
 $mClosing = [ordered]@{}
 foreach ($ln in ($ledgerClosing.Keys | Sort-Object)) { $mClosing[$ln] = $ledgerClosing[$ln] }
-# The dates are stored WITH the balances: a balance without the day it was struck on
+# The date is stored WITH the balances: a balance without the day it was struck on
 # is not a fact anyone can use, and each company here covers one financial year.
 $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds;
-                         opening = $mOpening; closing = $mClosing;
-                         openingAsOn = $FromDate; closingAsOn = $ToDate }
+                         closing = $mClosing; closingAsOn = $ToDate }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

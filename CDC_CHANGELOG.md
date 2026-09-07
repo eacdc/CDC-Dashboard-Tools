@@ -1,5 +1,24 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.22 (pipeline) — September 2026 — Ask for the balances separately, and let -Branches win
+
+Two faults, both visible in one run's log.
+
+**The balance fetch hung the sync — my own doing in v2.20.** Asked alongside the ledger
+list, `CLOSINGBALANCE` makes Tally compute every ledger's balance *before it answers at
+all*; on a real company that runs past `Post-Tally`'s 180-second timeout, which is
+exactly the three-minute gap the log showed, and the whole sync fails with it. It is now
+its own request, tried **once** rather than five times, with a failure costing only the
+balances — the sync carries on and says so. It is skipped outright when the ledger count
+already says the company is not loaded, and `OPENINGBALANCE` is no longer asked for at
+all: nothing reads it, and it doubled the work. `Post-Tally` takes an attempt count and
+timeout, defaults unchanged.
+
+**`-Branches ahm` ran Kolkata too.** `run_daily.ps1` assigned `CDC_BRANCHES` over the
+parameter after the fact, so the env var beat what was typed on the command line — the
+log said `branches=kol,ahm` right under a command that asked for one. The env var is a
+default now, applied only when `-Branches` was not passed.
+
 ## v2.21 (pipeline) — September 2026 — Reach Tally on 127.0.0.1, never localhost
 
 A pull that had been working started failing with "Unable to connect to the remote
