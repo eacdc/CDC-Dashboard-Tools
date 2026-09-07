@@ -219,9 +219,34 @@
       +'<div class="note">A party\'s outstanding on the Projected page is <b>the uploaded CSV plus the invoices inside the loaded date range</b>, less its receipts. <b>Mind the gap:</b> what the file <i>covers up to</i> matters more than when it was uploaded — if the loaded range starts LATER than that, every unpaid bill raised in between is in neither source, and simply does not appear. Either export Bills Receivable again as of today, or widen the range back to where the file ends.</div>';
   }
 
+  // What this party owes, first, because it is the question people actually arrive
+  // with. Opening and postings are shown apart: if the total looks wrong, which of the
+  // two halves is wrong is most of the diagnosis.
+  function balanceSection(d){
+    var b=d.balance;
+    if(!b||!b.asOn&&!b.total) return '';
+    var brs=Object.keys(b.byBranch||{}).filter(function(k){return b.byBranch[k].total!==0||b.byBranch[k].opening!==0;});
+    return '<section><h2>WHAT THIS PARTY OWES</h2><div class="body">'
+      +'<div style="font-size:22px;font-weight:700">'+rupees(b.total)+'</div>'
+      +'<div class="muted" style="margin-top:2px">'
+      +(b.total>0?'owed to us':(b.total<0?'owed by us':'square'))
+      +' &mdash; every ledger this name matches, added together</div>'
+      +'<div style="margin-top:10px">Opening balance from Tally'
+      +(b.asOn?(' as at <b>'+esc(fmtDate(b.asOn))+'</b>'):'')+': <b>'+rupees(b.opening)+'</b>'
+      +' &nbsp;+&nbsp; every posting since: <b>'+rupees(b.postings)+'</b></div>'
+      +(brs.length>1
+        ? '<div class="muted" style="margin-top:6px">'+brs.map(function(k){
+            return k.toUpperCase()+' '+rupees(b.byBranch[k].total);}).join(' &middot; ')+'</div>'
+        : '')
+      +'<div class="note" style="padding:10px 0 0">Put this beside the same party in Tally. '
+      +'If it matches, the vouchers can carry outstanding on their own; if not, the two halves above '
+      +'say which one to look at.</div></div></section>';
+  }
+
   function render(d){
     out.innerHTML=
-      '<section><h2>1 &middot; WHICH LEDGERS THIS NAME COULD MEAN</h2>'+ledgersTable(d)+'</section>'
+      balanceSection(d)
+      +'<section><h2>1 &middot; WHICH LEDGERS THIS NAME COULD MEAN</h2>'+ledgersTable(d)+'</section>'
       +'<section><h2>2 &middot; WHAT YEAR ON YEAR HAS STORED</h2>'+storedTable(d)+'</section>'
       +'<section><h2>3 &middot; EVERY VOUCHER, AND WHY IT COUNTED OR DID NOT</h2>'+voucherRows(d)+'</section>'
       +'<section><h2>4 &middot; THE BILLS BEHIND THE OUTSTANDING FIGURE</h2>'+billsSection(d)+'</section>'

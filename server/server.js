@@ -1358,6 +1358,38 @@ app.get('/api/yoy/diag', async (req, res) => {
         if (r.date > acc.last) acc.last = r.date;
       }
     }
+    // What this party actually OWES, the way outstanding is meant to be computed: the
+    // opening balance Tally itself carries, plus every posting to the name since that
+    // day. Shown per ledger and totalled over all the spellings, so the one figure a
+    // customer asks about -- "what is pending against me" -- can be read here and put
+    // beside Tally without adding vouchers up by hand.
+    const balance = { asOn: null, opening: 0, postings: 0, total: 0, byBranch: {} };
+    for (const br of (branch === 'all' ? ['kol', 'ahm'] : [branch])) {
+      const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const seenDates = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
+      const from = (seenDates.length === 1 && /^\d{8}$/.test(seenDates[0])) ? seenDates[0] : null;
+      let op = 0, po = 0;
+      if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) op += -mm.opening[ln];
+      const match = { branch: br };
+      if (from) match.date = { $gte: from };
+      const rows2 = await db.collection('vouchers').aggregate([
+        { $match: match },
+        { $project: { kv: { $concatArrays: [
+          { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+          { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+        { $unwind: '$kv' },
+        { $match: { 'kv.k': { $in: [...all] } } },
+        { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
+      ], { allowDiskUse: true }).toArray();
+      for (const r of rows2) po += -r.sum;
+      const r2 = (n) => Math.round(n * 100) / 100;
+      balance.byBranch[br] = { openingAsOn: from, opening: r2(op), postings: r2(po), total: r2(op + po) };
+      balance.opening = r2(balance.opening + op);
+      balance.postings = r2(balance.postings + po);
+      balance.total = r2(balance.total + op + po);
+      if (from && (!balance.asOn || from < balance.asOn)) balance.asOn = from;
+    }
+
     // Which references the CSV knows and the vouchers do not, and the other way round.
     const csvRefs = new Set();
     for (const key of Object.keys(bills.csv)) for (const b of bills.csv[key].mine) csvRefs.add(b.ref);
@@ -1368,7 +1400,7 @@ app.get('/api/yoy/diag', async (req, res) => {
     res.json({
       ok: true, q, branch, fy,
       aliasesFor: Object.keys(aliases).filter((v) => names.has(aliases[v]) || all.has(v)).map((v) => ({ from: v, to: aliases[v] })),
-      ledgers, matched: matches.length, stored, truncated, vouchers, bills,
+      ledgers, matched: matches.length, stored, truncated, vouchers, bills, balance,
     });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
