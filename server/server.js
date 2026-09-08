@@ -1547,7 +1547,9 @@ app.get('/api/yoy/diag', async (req, res) => {
       unknownLedgers: {
         count: orphans.size,
         amount: Math.round([...orphans.values()].reduce((a, o) => a + o.amount, 0) * 100) / 100,
-        worst: [...orphans.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 10),
+        // All of them, not a top ten: this list is worked through in one sitting, and a
+        // merge session that can only see the ten biggest leaves the rest for next time.
+        worst: [...orphans.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 200),
       },
     });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }

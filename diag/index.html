@@ -322,6 +322,27 @@
       +blocks+'</div></section>';
   }
 
+  // Every ledger in the books that no master defines, whatever was searched for. The
+  // list is worked through in one sitting, so it is all of them and not a top ten --
+  // and it is sorted by money, because that is the order to spend the sitting in.
+  function unknownSection(d){
+    var u=d.unknownLedgers; if(!u||!u.count) return '';
+    var rows=(u.worst||[]).map(function(o){
+      return '<tr><td class="mono">'+esc(o.name)+'</td>'
+        +'<td class="mono muted">'+esc((o.branches||[]).join(', ').toUpperCase())+'</td>'
+        +'<td class="num muted">'+o.vouchers.toLocaleString('en-IN')+'</td>'
+        +'<td class="num">'+rupees(o.amount)+'</td></tr>';
+    }).join('');
+    return '<section><h2>LEDGERS NO MASTER DEFINES &mdash; '+u.count+'</h2><div class="body">'
+      +'<div class="note" style="padding:0 0 10px">The vouchers use these names and Tally no longer does &mdash; '
+      +'renamed or deleted since, with the old entries keeping the spelling of the day. Each has no group, so it '
+      +'cannot be a debtor or creditor, and it is left out of outstanding. <b>Merge each into its current name</b> '
+      +'with <b>&#128279; Merge names</b> on the portal. Sorted by money, which is the order to work in.</div>'
+      +'<div class="scroll"><table><thead><tr><th>Ledger on the vouchers</th><th>Branch</th>'
+      +'<th style="text-align:right">Vouchers</th><th style="text-align:right">Carries</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table></div></div></section>';
+  }
+
   function render(d){
     out.innerHTML=
       balanceSection(d)
@@ -330,6 +351,7 @@
       +'<section><h2>2 &middot; WHAT YEAR ON YEAR HAS STORED</h2>'+storedTable(d)+'</section>'
       +'<section><h2>3 &middot; EVERY VOUCHER, AND WHY IT COUNTED OR DID NOT</h2>'+voucherRows(d)+'</section>'
       +'<section><h2>4 &middot; THE BILLS BEHIND THE OUTSTANDING FIGURE</h2>'+billsSection(d)+'</section>'
+      +unknownSection(d)
       +'<section><h2>THE RAW ANSWER</h2><div class="body">'
       +'<div class="copybar"><button type="button" id="copyjson">\ud83d\udccb Copy JSON</button>'
       +'<span class="muted">everything on this page, as one block \u2014 paste it when asking someone to look</span>'

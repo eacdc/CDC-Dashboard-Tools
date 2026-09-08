@@ -1,6 +1,24 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.48 (diag) — September 2026 — All 42 of them, in the order to work through
+
+The first run of the new check found **42 ledgers no master defines, carrying ₹61.3 Cr**
+between them — the largest being `Citi Bank (Ahmedabad)` at ₹55 Cr on 26 Kolkata
+vouchers. The endpoint returned the ten biggest, which is a finding; the list is worked
+through in one sitting, which needs all of them.
+
+`/diag/?` now has a **LEDGERS NO MASTER DEFINES** section: every one, with its branch,
+how many vouchers use it and what it carries, sorted by money.
+
+`VIVA COSMETICS` turned out to be one customer under three names in sequence —
+`VIVA COSMETICS PVT LTD.` (Oct–Dec 2025, in no master), `VIVA COSMETICS` (Jan 2026 on),
+and `Viva Cosmetics Private Limited` (Jul 2026 on, under a different group). The bill
+allocations prove it rather than suggest it: receipt `BR/128/26-27`, booked against
+`VIVA COSMETICS`, settles `CDC/5132`, `5216`, `5441`, `5522`, `5577` and `5623` — every
+one raised against the old `PVT LTD.` name. So the ₹18,28,367 the old name appears to be
+owed was collected under the new one.
+
 ## v2.47 (server, diag) — September 2026 — "Unclassified" is a missing ledger, not a bad group
 
 `VIVA COSMETICS PVT LTD.` classified as **Unclassified** and carried ₹18,28,367. Looking
