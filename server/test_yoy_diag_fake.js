@@ -327,6 +327,24 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'and shows the two halves it is made of, so a wrong one can be told from the other: '
     + JSON.stringify(bal.byBranch.kol));
 
+  // A balance is struck on a day, and Tally strikes it today. A voucher dated ahead --
+  // a post-dated cheque, a sale entered for next week -- is in the books but not in
+  // today's balance, and counting it makes a party look owing money nobody has billed
+  // it for. Shown apart, because money on its way is worth seeing.
+  const ahead = new Date(Date.now() + 40 * 86400000).toISOString().slice(0, 10).replace(/-/g, '');
+  vs.push(V('kol', ahead, { 'Sales Accounts': 800000 }, { 'Carbonlite Print & Publishing': -800000 }));
+  const balF = (await get('/api/yoy/diag?q=Carbonlite&branch=kol')).balance;
+  assert(balF.total === bal.total,
+    'a voucher dated after today does not change what the party owes today, because Tally does not count it either: '
+    + JSON.stringify([bal.total, balF.total]));
+  assert(balF.later === 800000 && balF.byLedger['Carbonlite Print & Publishing'].later === 800000,
+    'it is reported apart instead of dropped -- money on its way is worth seeing, it is just not outstanding yet: '
+    + JSON.stringify(balF.later));
+  assert(balF.upTo === new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, ''),
+    "and the day it was struck on is today in the BOOKS' timezone, not the server's -- India is 5.5 hours "
+    + 'ahead, so a UTC today would drop a whole morning of entries: ' + balF.upTo);
+  vs.pop();
+
   const r = b.refs['CDC/4919/25-26'];
   assert(r && r.raised === 61705 && r.settled === 15064 && r.net === 46641,
     'the vouchers themselves show the bill raised, what was settled against it and what is still open: '
