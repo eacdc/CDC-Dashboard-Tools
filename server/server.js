@@ -36,6 +36,14 @@ function ymd(d) {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 }
 function isYmd(s) { return typeof s === 'string' && /^\d{8}$/.test(s); }
+// Days before or after a YYYYMMDD, through a real date so month ends and leap years
+// look after themselves. Noon, so a daylight-saving jump cannot land on the day before.
+function ymdAdd(s, days) {
+  if (!isYmd(s)) return s;
+  const d = new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), 12);
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+}
 
 // Which financial years does this ingest/sync payload touch? Used to refresh only
 // those years of the year-on-year summary. Endpoints alone are not enough -- a
@@ -1105,7 +1113,15 @@ app.get('/api/bills/audit', async (req, res) => {
       };
 
       // The opening first, on the same Dr-positive scale as everything else.
-      if (from && from <= asOn) for (const [ln, amt] of Object.entries(openMap)) add(ln, -amt);
+      //
+      // It stands at the START of its day, which is the same instant as the END of the
+      // day before -- so an opening dated 1 April IS the balance on 31 March, and asking
+      // as at 31 March must use it. Comparing `from <= asOn` alone refused it and
+      // returned zero for every party, at exactly the date the page tells you to press:
+      // the bills file was printed 31 March 2025 and the openings stand on 1 April 2025,
+      // the one date where the two sources CAN be put side by side.
+      const opensOn = from ? ymdAdd(from, -1) : null;
+      if (opensOn && opensOn <= asOn) for (const [ln, amt] of Object.entries(openMap)) add(ln, -amt);
 
       // Then the postings, from the day the opening stands on -- anything earlier is
       // already inside it.
