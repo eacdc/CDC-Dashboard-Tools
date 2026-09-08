@@ -1,5 +1,26 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.39 (pipeline) — September 2026 — Ask which port serves which company
+
+Two of this week's failed runs were the same mistake in different clothes: a branch
+pulled from a port that was not serving it. Once the port belonged to another Tally
+entirely; once the company had simply not been reopened after a restart.
+
+`run_daily.ps1` now probes **both usual ports** (9019 and 9001), asks each which
+companies it has open, and pulls every company from whichever port is actually serving
+it. A company open on **both** is pulled **once**, from whichever answered first — it is
+the same company either way. A company open on neither is skipped with a line saying so,
+instead of being pulled from the wrong place and stopped by the MinLedgers guard, which
+is a guard rather than a plan.
+
+`-TallyUrl` or `CDC_TALLY_URL` still pins one port and skips the probe entirely;
+`-TallyUrls` changes the list.
+
+The lookup is `TallyToJson.ps1 -ListCompaniesJson` — the same discovery `-ListCompanies`
+prints, as JSON and nothing else — so there is one implementation of it and not two free
+to drift apart. It tries once with a ten-second timeout, so probing a dead port costs a
+moment rather than fourteen seconds of retries.
+
 ## v2.38 (pipeline + server + diag) — September 2026 — Derive the date, and say that it is derived
 
 Naming the current period's own first day timed out too, and the two minutes of Tally
