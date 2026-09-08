@@ -125,7 +125,19 @@ foreach ($u in $urls) {
     $found = @()
     try {
         $raw = & powershell -ExecutionPolicy Bypass -File $extract -ListCompaniesJson -TallyUrl $u 2>$null
-        if ($raw) { $found = @($raw | ConvertFrom-Json) }
+        $txt = ($raw | Out-String).Trim()
+        if ($txt) {
+            # PowerShell 5.1's ConvertFrom-Json hands a JSON array back as ONE object
+            # rather than emitting its rows, and @() then wraps that instead of
+            # unrolling it. The foreach below runs ONCE with $r as the whole array, and
+            # "$($r.Company)" member-enumerates to every company name joined by spaces:
+            # one impossible company that matches no branch, so BOTH are skipped as not
+            # open while they sit open on the screen. Flatten it here, once.
+            foreach ($x in @(ConvertFrom-Json $txt)) {
+                if ($x -is [System.Collections.IEnumerable] -and $x -isnot [string]) { $found += @($x) }
+                else { $found += $x }
+            }
+        }
     } catch { $found = @() }
     if (-not $found -or $found.Count -eq 0) { Say ("  {0}: no company answered" -f $u); continue }
     foreach ($r in $found) {
@@ -148,7 +160,18 @@ foreach ($b in $syncBranches) {
     # and leaves the other branch alone; pulling anyway would return an empty master
     # and lean on the MinLedgers guard to stop it, which is a guard, not a plan.
     if (-not $servedBy.ContainsKey($b.Company)) {
-        Say ("  not open on any of {0} -- skipped. Open it in Tally (Alt+F3 > Select Company) and re-run." -f ($urls -join ', '))
+        # Say what the ports DID answer with. A company open on screen but missing here
+        # is a name that does not match -- a stray space, a renamed year, or a list this
+        # script failed to read apart -- and the two lists side by side show which at a
+        # glance. Without them this reads as "Tally is not open", which sends you to
+        # look at the one thing that is fine.
+        Say ("  not open on any of {0} -- skipped." -f ($urls -join ', '))
+        if ($servedBy.Count -gt 0) {
+            Say ("  the ports answered with: {0}" -f (($servedBy.Keys | ForEach-Object { "'" + $_ + "'" }) -join ', '))
+            Say  "  if one of those IS this branch, the name differs from the one in this script -- copy it in exactly."
+        } else {
+            Say  "  open it in Tally (Alt+F3 > Select Company) and re-run."
+        }
         continue
     }
     $TallyUrl = $servedBy[$b.Company]
