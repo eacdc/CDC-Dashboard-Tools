@@ -1385,7 +1385,11 @@ app.get('/api/yoy/diag', async (req, res) => {
     // day. Shown per ledger and totalled over all the spellings, so the one figure a
     // customer asks about -- "what is pending against me" -- can be read here and put
     // beside Tally without adding vouchers up by hand.
-    const balance = { asOn: null, opening: 0, postings: 0, total: 0, byBranch: {}, byLedger: {} };
+    // Today, in the books' own timezone. The server runs in UTC and India is 5.5 hours
+    // ahead, so until half past five in the morning here UTC is still on yesterday --
+    // and a balance would drop a whole day's entries for no reason anyone could see.
+    const upTo = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
+    const balance = { asOn: null, upTo, opening: 0, postings: 0, later: 0, total: 0, byBranch: {}, byLedger: {} };
     for (const br of (branch === 'all' ? ['kol', 'ahm'] : [branch])) {
       const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
       const seenDates = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
@@ -1398,25 +1402,37 @@ app.get('/api/yoy/diag', async (req, res) => {
       // which half is wrong IS the diagnosis: a wrong opening means the master, a wrong
       // postings figure means vouchers we do not hold. One number cannot say which.
       const each = (ln, half, amt) => {
-        const e = balance.byLedger[ln] || (balance.byLedger[ln] = { opening: 0, postings: 0, total: 0 });
+        const e = balance.byLedger[ln] || (balance.byLedger[ln] = { opening: 0, postings: 0, later: 0, total: 0 });
         e[half] = Math.round((e[half] + amt) * 100) / 100;
         e.total = Math.round((e.opening + e.postings) * 100) / 100;
       };
       if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) { op += -mm.opening[ln]; each(ln, 'opening', -mm.opening[ln]); }
       const match = { branch: br };
       if (from) match.date = { $gte: from };
+      // A balance is struck ON A DAY, and Tally strikes it today. A voucher dated
+      // ahead -- a post-dated cheque, a sale entered for next week -- is in the books
+      // but not in today's balance, and adding it here makes a party look owing money
+      // it has not been billed for yet. Split rather than dropped: money that IS coming
+      // is worth seeing, it just is not outstanding today.
       const rows2 = await db.collection('vouchers').aggregate([
         { $match: match },
-        { $project: { kv: { $concatArrays: [
+        { $project: { date: 1, kv: { $concatArrays: [
           { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
           { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
         { $unwind: '$kv' },
         { $match: { 'kv.k': { $in: [...all] } } },
-        { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
+        { $group: { _id: '$kv.k',
+          sum: { $sum: { $cond: [{ $gt: ['$date', upTo] }, 0, '$kv.v'] } },
+          later: { $sum: { $cond: [{ $gt: ['$date', upTo] }, '$kv.v', 0] } } } },
       ], { allowDiskUse: true }).toArray();
-      for (const r of rows2) { po += -r.sum; each(r._id, 'postings', -r.sum); }
+      let la = 0;
+      for (const r of rows2) {
+        po += -r.sum; each(r._id, 'postings', -r.sum);
+        la += -(r.later || 0); each(r._id, 'later', -(r.later || 0));
+      }
       const r2 = (n) => Math.round(n * 100) / 100;
-      balance.byBranch[br] = { openingAsOn: from, opening: r2(op), postings: r2(po), total: r2(op + po) };
+      balance.later = r2(balance.later + la);
+      balance.byBranch[br] = { openingAsOn: from, opening: r2(op), postings: r2(po), total: r2(op + po), later: r2(la) };
       balance.opening = r2(balance.opening + op);
       balance.postings = r2(balance.postings + po);
       balance.total = r2(balance.total + op + po);

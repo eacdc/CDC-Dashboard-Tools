@@ -113,7 +113,11 @@
         +'<td class="mono muted">'+esc(l.chain.join(' › '))+'</td>'
         +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl.opening))+'</td>'
         +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl.postings))+'</td>'
-        +'<td class="num"><b>'+(bl==null?'<span class="muted">—</span>':rupees(bl.total))+'</b></td></tr>';
+        +'<td class="num"><b>'+(bl==null?'<span class="muted">—</span>':rupees(bl.total))+'</b></td>'
+        // A voucher dated ahead is in the books but not in today's balance, and Tally
+        // leaves it out too. Shown rather than hidden: money on its way is worth
+        // knowing about, it just is not outstanding yet.
+        +'<td class="num">'+(bl==null||!bl.later?'<span class="muted">—</span>':rupees(bl.later))+'</td></tr>';
     }).join('');
     // The two halves, per ledger. When one disagrees with Tally, which half is wrong
     // says where to look: the opening means the ledger master, the postings mean
@@ -124,7 +128,8 @@
     return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th>'
       +'<th style="text-align:right">Opening from Tally</th>'
       +'<th style="text-align:right">Postings since</th>'
-      +'<th style="text-align:right">What it owes</th></tr></thead>'
+      +'<th style="text-align:right">What it owes</th>'
+      +'<th style="text-align:right">Dated ahead</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'+note;
   }
 
@@ -246,7 +251,15 @@
       +'<b>Tally is asked one ledger at a time</b>, so compare the per-ledger figures below, not this total.</div>'
       +'<div style="margin-top:10px">Opening balance from Tally'
       +(b.asOn?(' as at <b>'+esc(fmtDate(b.asOn))+'</b>'):'')+': <b>'+rupees(b.opening)+'</b>'
-      +' &nbsp;+&nbsp; every posting since: <b>'+rupees(b.postings)+'</b></div>'
+      +' &nbsp;+&nbsp; every posting since'
+      +(b.upTo?(' up to <b>'+esc(fmtDate(b.upTo))+'</b>'):'')+': <b>'+rupees(b.postings)+'</b></div>'
+      // Vouchers dated ahead are in the books but not in today's balance, and Tally
+      // leaves them out of its closing balance too. Named, not hidden -- a party whose
+      // figure looks light by exactly this much has its answer right here.
+      +(b.later
+        ? '<div class="muted" style="margin-top:6px">Another <b>'+rupees(b.later)+'</b> sits on vouchers '
+          +'dated after today. Not outstanding yet, and Tally leaves it out of its closing balance too.</div>'
+        : '')
       +(brs.length>1
         ? '<div class="muted" style="margin-top:6px">'+brs.map(function(k){
             return k.toUpperCase()+' '+rupees(b.byBranch[k].total);}).join(' &middot; ')+'</div>'

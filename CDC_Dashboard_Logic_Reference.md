@@ -512,6 +512,15 @@ held is *later* than `openingAsOn`, whatever moved in between is in neither half
 party is understated at once. `/api/bills/audit` compares the two and says so
 (`opening.gap`) rather than letting a right-looking figure through.
 
+**The postings stop at today, and today is in the books' timezone.** A voucher dated ahead
+— a post-dated cheque, a sale entered for next week — is in the books but not in today's
+balance, and Tally's closing balance leaves it out too. Counting it made
+`Vijay Shree Textiles Pvt Ltd -Howrah` read ₹74,56,698 against Tally's ₹71,87,035 while
+`-Tirupur` matched to the rupee on the same page. It is reported apart (`balance.later`,
+the `Dated ahead` column) rather than dropped: money on its way is worth seeing, it is
+simply not outstanding yet. The server runs in UTC and India is 5.5 hours ahead, so
+"today" is `Date.now() + 5.5h` — a UTC today would silently drop a whole morning.
+
 It is still a separate request, tried once, and a failure costs only the openings — the
 voucher sync must never wait on Tally's arithmetic again. The audit says plainly when no
 pull has brought them, so a half-figure is never read as a balance.

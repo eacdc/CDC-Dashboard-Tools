@@ -1,5 +1,23 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.42 (server, diag) — September 2026 — A balance is struck on a day
+
+`/diag/?` added up every posting a party had, including vouchers dated **after today** —
+post-dated cheques, entries made for next week. Tally leaves those out of its closing
+balance, so the party read as owing money nobody had billed it for.
+
+Found by `Vijay Shree Textiles Pvt Ltd -Howrah`: ₹74,56,698 here against Tally's
+₹71,87,035, while `-Tirupur` on the same page matched to the rupee. One ledger right and
+one wrong, from the same opening and the same formula, is what said the difference was in
+the vouchers rather than in the method.
+
+Postings now stop at **today**, in the books' own timezone — the server runs in UTC and
+India is 5.5 hours ahead, so a UTC "today" would drop a whole morning of entries.
+
+What was dated ahead is **shown, not dropped**: a `Dated ahead` column on the ledger table
+and a line under the total. Money on its way is worth seeing; it is just not outstanding
+yet. `/api/bills/audit` already stopped at its own date and is unchanged.
+
 ## v2.41 (pipeline, server, diag) — September 2026 — The opening stands on the books date
 
 `OPENINGBALANCE` is the balance on the day the **books begin**, and the day is now read
