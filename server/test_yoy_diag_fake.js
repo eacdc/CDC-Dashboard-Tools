@@ -644,7 +644,7 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const audGap = await get('/api/bills/audit?asOn=20260228');
   assert(audGap.branches.kol.opening.gap === true
     && /oldest kol voucher held/.test(audGap.branches.kol.opening.note || ''),
-    'an opening older than the oldest voucher held leaves a gap in NEITHER half, and it is said: '
+    'an opening older than the oldest voucher held is REPORTED, as a question rather than a verdict -- the guard cannot tell an empty day from a missing one: '
     + JSON.stringify(audGap.branches.kol.opening.note));
   mko.openingAsOn = '20251007';
   const audNoGap = await get('/api/bills/audit?asOn=20260228');
