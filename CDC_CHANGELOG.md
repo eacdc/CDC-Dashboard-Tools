@@ -1,5 +1,32 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.41 (pipeline, server, diag) — September 2026 — The opening stands on the books date
+
+`OPENINGBALANCE` is the balance on the day the **books begin**, and the day is now read
+off the company's own `BOOKSFROM` rather than worked out.
+
+The previous version guessed it — 1 April of the financial year the last entry falls in —
+because a ledger read in Tally seemed to show ₹66,23,663 where the master stored
+₹67,56,324, and the current period was blamed for the difference. The report had been
+sitting on a period box nobody had looked at. Asked from 1 April 2025, Tally answers
+₹67,56,324 for that ledger, exactly what `OPENINGBALANCE` gives, and opening + every
+posting since equals the closing balance Tally prints today.
+
+The guess cost a whole financial year of postings on every ledger at once: Howrah read
+₹73,19,696 against Tally's ₹71,87,035, and Tirupur ₹6,54,088 against ₹4,55,687. Both
+close to the rupee now.
+
+The request still names no date — naming one makes Tally recompute, which is what wedged
+the sync twice — so nothing about the timing changes.
+
+Two guards came with it. A master written by the old pull is flagged, and
+`/diag/outstanding.html` says the date was guessed and asks for a re-run rather than
+presenting it as Tally's word. And if the oldest voucher held is later than the opening's
+day, the months in between are in neither half; the audit now reports that gap
+(`opening.gap`) instead of quietly understating every party.
+
+**Re-run the pipeline once for each branch** to replace the stored date.
+
 ## v2.40 (pipeline) — September 2026 — An env var is a default, not an override
 
 The port probe went in and immediately did not probe: `CDC_TALLY_URL` was set on the

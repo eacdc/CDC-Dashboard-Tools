@@ -133,9 +133,15 @@
           +esc(fmtDate(f.opening.asOn))+'</b> ('+f.opening.ledgers.toLocaleString('en-IN')+' ledgers carry one), '
           +'plus every posting since. What was owed before the oldest voucher we hold is in there.'
           +(f.opening.derived
-            ? ' <b>The date is worked out, not stated by Tally</b> — Tally will not say which day its openings'
-              +' stand on without recomputing every one of them, which takes minutes. It is 1 April of the'
-              +' financial year the last entry falls in.'
+            ? ' <b>That date was guessed, not read from Tally</b> — an older pull worked it out as 1 April of'
+              +' the financial year the last entry falls in, which is a year too late and drops a whole'
+              +' year of postings from every ledger. Re-run the pipeline: it now reads the company&rsquo;s'
+              +' own books date instead.'
+            : '')
+          +(f.opening.gap
+            ? ' <b style="color:var(--red)">The vouchers do not reach back that far.</b> The oldest one held is '
+              +esc(fmtDate(f.opening.firstVoucher))+', so whatever moved between the two dates is in neither'
+              +' half and every figure below is short by that much.'
             : '')
         : '<span class="muted">'+esc((f.opening&&f.opening.note)||'')+'</span>')
       +'</div>'

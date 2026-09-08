@@ -1071,10 +1071,12 @@ app.get('/api/bills/audit', async (req, res) => {
       const from = (openMap && seen.length === 1 && /^\d{8}$/.test(seen[0])) ? seen[0] : null;
       openOf[br] = {
         asOn: from, ledgers: openMap ? Object.keys(openMap).length : 0,
-        // Tally will not say which day its openings stand on without recomputing every
-        // one of them -- two minutes, and it wedged the voucher sync. So the day is
-        // worked out from the company's own last entry. Said plainly, because a derived
-        // date presented as Tally's word is how a wrong year gets counted twice.
+        // The day comes from the company's BOOKSFROM -- Tally's own field, read off the
+        // company rather than computed, so asking for it costs nothing. An older pull
+        // guessed the day instead (1 April of the year the last entry fell in, a year
+        // too late, which dropped a whole financial year of postings from every ledger);
+        // masters written by it still carry the flag, and a guessed date is said
+        // plainly, because one presented as Tally's word is how a year goes missing.
         derived: !!(m && m.openingAsOnDerived),
         note: from ? null
           : (openMap
@@ -1128,6 +1130,21 @@ app.get('/api/bills/audit', async (req, res) => {
     for (const br of ['kol', 'ahm']) {
       const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
       firstOf[br] = f.length ? f[0].date : null;
+    }
+
+    // The opening stands on a day; the postings have to reach back to that same day or
+    // the difference is simply absent. Kolkata's vouchers begin a decade before its
+    // books date, so there is normally slack here -- but a branch loaded only from last
+    // April, against a books date older than that, would understate every party at once
+    // and look entirely reasonable doing it. Say it rather than let it pass.
+    for (const br of ['kol', 'ahm']) {
+      const o = openOf[br];
+      if (!o || !o.asOn) continue;
+      o.firstVoucher = firstOf[br];
+      o.gap = !!(firstOf[br] && firstOf[br] > o.asOn);
+      if (o.gap) {
+        o.note = `The opening balances stand on ${o.asOn}, but the oldest ${br} voucher held is ${firstOf[br]}. Whatever moved in between is in neither half, so every figure here is short by that much.`;
+      }
     }
 
     const round = (n) => Math.round(n * 100) / 100;
