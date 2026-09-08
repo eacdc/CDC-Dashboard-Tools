@@ -1318,6 +1318,39 @@ app.get('/api/yoy/diag', async (req, res) => {
     // 1. the ledgers this name could mean
     const needle = q.toLowerCase();
     const matches = Object.keys(xd.ledgers).filter((n) => n.toLowerCase().includes(needle)).sort();
+
+    // A name can be on the VOUCHERS and in no master at all -- a ledger renamed or
+    // deleted in Tally since, whose old entries keep the old spelling. Those are exactly
+    // the ones that classify as "Unclassified", drop out of debtor/creditor, and are
+    // left out of outstanding. Searching only the master meant the one ledger you came
+    // here to ask about was the one the page could not find. So the vouchers are asked
+    // too: every ledger name they use, and which of them no master knows.
+    const scope = branch === 'all' ? ['kol', 'ahm'] : [branch];
+    const orphans = new Map();
+    for (const br of scope) {
+      const rows = await db.collection('vouchers').aggregate([
+        { $match: { branch: br } },
+        { $project: { kv: { $concatArrays: [
+          { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+          { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+        { $unwind: '$kv' },
+        { $group: { _id: '$kv.k', n: { $sum: 1 }, sum: { $sum: '$kv.v' } } },
+      ], { allowDiskUse: true }).toArray();
+      for (const r of rows) {
+        const n = String(r._id || '');
+        if (!n || xd.ledgers[n] !== undefined) continue;      // the master knows it
+        const o = orphans.get(n) || { name: n, vouchers: 0, amount: 0, branches: [] };
+        o.vouchers += r.n;
+        o.amount = Math.round((o.amount - r.sum) * 100) / 100; // Dr-positive, as everywhere
+        if (!o.branches.includes(br)) o.branches.push(br);
+        orphans.set(n, o);
+      }
+    }
+    const orphanHits = [...orphans.values()].filter((o) => o.name.toLowerCase().includes(needle))
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    for (const o of orphanHits) matches.push(o.name);
+    matches.sort();
+
     const canonOf = {};
     const ledgers = matches.slice(0, 60).map((name) => {
       const canon = S.canon(name);
@@ -1330,6 +1363,16 @@ app.get('/api/yoy/diag', async (req, res) => {
         plCategory: yoy.catOf(S, name) || 'not a P&L account',
         interBranch: !!S.ib[name],
         guid: xd.ids[name] || null,
+        // Said outright, because "Unclassified" on its own reads as a classification
+        // problem when it is a MISSING LEDGER: the vouchers use this name and no
+        // master defines it, so nothing can be worked out about it at all.
+        notInMaster: orphans.has(name) || undefined,
+        onVouchers: orphans.has(name) ? orphans.get(name).vouchers : undefined,
+        whyUnclassified: orphans.has(name)
+          ? 'No master defines this ledger, so it has no group and cannot be a debtor or creditor. '
+            + 'Tally has since renamed or deleted it, and these vouchers keep the spelling of the day. '
+            + 'Merge it into the current name on the portal, and every figure of its follows.'
+          : undefined,
       };
     });
 
@@ -1498,6 +1541,14 @@ app.get('/api/yoy/diag', async (req, res) => {
       ok: true, q, branch, fy,
       aliasesFor: Object.keys(aliases).filter((v) => names.has(aliases[v]) || all.has(v)).map((v) => ({ from: v, to: aliases[v] })),
       ledgers, matched: matches.length, stored, truncated, vouchers, bills, balance,
+      // Every ledger in the books that no master defines, not just the searched one.
+      // One is a curiosity; the count and the money say whether it is a habit worth
+      // a merge session. The list is the ten that carry the most.
+      unknownLedgers: {
+        count: orphans.size,
+        amount: Math.round([...orphans.values()].reduce((a, o) => a + o.amount, 0) * 100) / 100,
+        worst: [...orphans.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 10),
+      },
     });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
