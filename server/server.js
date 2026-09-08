@@ -1159,7 +1159,12 @@ app.get('/api/bills/audit', async (req, res) => {
       o.firstVoucher = firstOf[br];
       o.gap = !!(firstOf[br] && firstOf[br] > o.asOn);
       if (o.gap) {
-        o.note = `The opening balances stand on ${o.asOn}, but the oldest ${br} voucher held is ${firstOf[br]}. Whatever moved in between is in neither half, so every figure here is short by that much.`;
+        // A question, not a verdict. The first time this fired, the answer was that
+        // Ahmedabad simply had no entries on the day its books open -- and it had
+        // announced "every figure here is short", which sent somebody to re-pull a day
+        // that held nothing. A guard that cannot tell an empty day from a missing one
+        // must say which it cannot tell.
+        o.note = `The opening balances stand on ${o.asOn} and the oldest ${br} voucher held is ${firstOf[br]}. If anything was posted in between it is in neither half; if nothing was, this is fine. Re-pull those days to settle it.`;
       }
     }
 

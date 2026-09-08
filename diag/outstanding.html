@@ -139,9 +139,10 @@
               +' own books date instead.'
             : '')
           +(f.opening.gap
-            ? ' <b style="color:var(--red)">The vouchers do not reach back that far.</b> The oldest one held is '
-              +esc(fmtDate(f.opening.firstVoucher))+', so whatever moved between the two dates is in neither'
-              +' half and every figure below is short by that much.'
+            ? ' <b style="color:var(--amber)">The oldest voucher held is '
+              +esc(fmtDate(f.opening.firstVoucher))+'</b>, a little later than that. If anything was posted'
+              +' in between it is in neither half; if the books were simply quiet, this is fine. Re-pull'
+              +' those days to settle it.'
             : '')
         : '<span class="muted">'+esc((f.opening&&f.opening.note)||'')+'</span>')
       +'</div>'
