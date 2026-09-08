@@ -34,6 +34,8 @@ param(
     # past once is never looked at again -- and the only cure is to pull those days in
     # full. Doing that through this script means the token stays in the environment
     # where it belongs, instead of being typed into a command line.
+    # NOTE: nothing below may declare a local $from or $to. PowerShell variable names are
+    # case-insensitive, so such a local IS this parameter -- see $dtFrom / $dtTo later.
     [string]$From = "",
     [string]$To   = "",
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
@@ -78,10 +80,14 @@ $want = @($Branches.ToLower() -split '[,;\s]+' | Where-Object { $_ })
 $syncBranches = @($branchDefs | Where-Object { $want -contains $_.Branch })
 if ($syncBranches.Count -eq 0) { throw "No valid branch in -Branches '$Branches' (expected kol and/or ahm)." }
 
-$to   = (Get-Date)
-$from = $to.AddDays(-1 * [math]::Max(0, $TrailingDays - 1))
-$FromDate = $from.ToString('yyyyMMdd')
-$ToDate   = $to.ToString('yyyyMMdd')
+# $dtTo / $dtFrom, NOT $to / $from: PowerShell variable names are case-insensitive, so
+# a local $to IS the -To parameter. Named that way, -To 20260401 landed in $to and the
+# next line asked a string for .AddDays(). The same trap as $branches / -Branches above,
+# and the reason both carry a note.
+$dtTo   = (Get-Date)
+$dtFrom = $dtTo.AddDays(-1 * [math]::Max(0, $TrailingDays - 1))
+$FromDate = $dtFrom.ToString('yyyyMMdd')
+$ToDate   = $dtTo.ToString('yyyyMMdd')
 # A named window replaces the trailing one, and turns the incremental sync off for this
 # run: asking Tally what CHANGED is exactly what missed these days in the first place.
 $Rescan = $false
