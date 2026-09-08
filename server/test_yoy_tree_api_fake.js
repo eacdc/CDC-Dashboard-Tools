@@ -206,6 +206,14 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(oldName.count === 1,
     'asking for the old name still answers for itself -- the merge is one-way, it does not hide a name');
 
+  // EXCEPT when the caller is holding one ledger's own report out of Tally. Tally is
+  // asked one ledger at a time, so our sum of the merged spellings put beside its one
+  // is a discrepancy that is not there -- and hunting it is a wasted afternoon.
+  const exact = await get('/api/yoy/vouchers?exact=1&branch=kol&ledger=Other%20Customer&from=20240401&to=20250331');
+  assert(exact.count === 1 && exact.exact === true && exact.names.join(',') === 'Other Customer',
+    'exact=1 answers for that ledger ALONE, because Tally prints one ledger at a time: '
+    + JSON.stringify([exact.count, exact.names]));
+
   server.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : '\n== year-on-year drill-down API passed ==');
   process.exit(fails ? 1 : 0);

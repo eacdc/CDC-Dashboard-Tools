@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDC · One ledger, ours against Tally's own export</title>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--ink:#0f172a;--dim:#64748b;--teal:#0f766e;--red:#dc2626;--amber:#b45309;--green:#15803d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{margin:0;font-size:16px}
+  .sub{font-size:12px;color:var(--dim);margin-top:3px}
+  main{padding:18px 20px;max-width:1100px}
+  button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--teal);
+         background:var(--teal);color:#fff;cursor:pointer;font-weight:600}
+  button:disabled{opacity:.55;cursor:progress}
+  input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:16px;overflow:hidden}
+  h2{margin:0;padding:10px 14px;font-size:12.5px;background:#f1f5f9;border-bottom:1px solid var(--line);
+     font-family:ui-monospace,monospace;letter-spacing:.03em;color:#334155}
+  .body{padding:12px 14px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--dim);
+     font-family:ui-monospace,monospace;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:6px 10px;border-bottom:1px solid #f1f5f9}
+  td.num{text-align:right;font-family:ui-monospace,monospace;white-space:nowrap}
+  .mono{font-family:ui-monospace,monospace}
+  .muted{color:var(--dim)}
+  .off{color:var(--red);font-weight:600}
+  .note{font-size:12px;color:var(--dim)}
+  .err{color:var(--red);font-family:ui-monospace,monospace;font-size:12.5px}
+  .verdict{padding:14px;border-radius:10px;font-size:14px;line-height:1.55}
+  .verdict.yes{background:#dcfce7;border:1px solid #86efac;color:#14532d}
+  .verdict.no{background:#fef3c7;border:1px solid #fcd34d;color:#78350f}
+  .verdict.info{background:#e0f2fe;border:1px solid #7dd3fc;color:#075985}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  a{color:var(--teal)}
+</style>
+</head>
+<body>
+<header>
+  <h1>One ledger, ours against Tally&rsquo;s own export</h1>
+  <div class="sub">A total agreeing proves little and a total disagreeing says nothing about where. This puts the two
+    lists of vouchers side by side and names the ones that differ &mdash; by voucher number, which both sides carry.
+    Nothing is uploaded or stored: the file is read in this browser and compared against what the API already serves
+    &middot; <a href="./">the party explainer</a> &middot; <a href="./outstanding.html">every party at once</a></div>
+</header>
+<main>
+  <section><h2>THE LEDGER, AS TALLY NAMES IT</h2><div class="body">
+    <div class="row">
+      <select id="branch"><option value="kol">Kolkata</option><option value="ahm">Ahmedabad</option></select>
+      <input id="ledger" placeholder="Vijay Shree Textiles Pvt Ltd -Howrah" style="min-width:340px;flex:1">
+    </div>
+    <div class="row">
+      <label>from <input id="from" type="date"></label>
+      <label>to <input id="to" type="date"></label>
+      <input id="file" type="file" accept=".xlsx,.xls,.csv">
+      <button id="go">Compare</button>
+    </div>
+    <div class="note">In Tally: open the ledger, <b>Alt+F2</b> for the period, <b>F1</b> for Detailed so it lists
+      vouchers rather than months, then <b>Alt+E &rarr; Current &rarr; Excel</b>. The dates above are filled in from
+      the file&rsquo;s own heading, so they cannot drift from what you exported.</div>
+    <div id="err" class="err" style="margin-top:8px"></div>
+  </div></section>
+  <div id="out"></div>
+</main>
+<script src="../vendor/xlsx.full.min.js"></script>
+<script>
+(function(){
+  // The library is vendored and served from this origin -- the office network cannot
+  // reach a CDN, and a page that silently does nothing is worse than one that says why.
+  if(!window.XLSX){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    document.head.appendChild(s);
+  }
+  var $=function(id){return document.getElementById(id);};
+  var out=$('out'), err=$('err');
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function rupees(n){
+    var v=Math.round((n||0)*100)/100, neg=v<0, a=Math.abs(v);
+    a=(Math.round(a*100)%100)?a.toFixed(2):String(Math.round(a));
+    var p=a.split('.'), i=p[0];
+    var last3=i.slice(-3), rest=i.slice(0,-3);
+    if(rest) last3=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+','+last3;
+    return (neg?'-':'')+'₹'+last3+(p[1]?'.'+p[1]:'');
+  }
+  function fmt8(d){if(!d||d.length<8)return d||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+
+  // ---- reading Tally's export ------------------------------------------------
+  // Tally writes a letterhead first, then a Date/Particulars/Vch Type/Vch No./Debit/
+  // Credit header, then the rows, then Opening and Closing balance lines. Column
+  // POSITIONS move between versions, so the header row is found by its own words and
+  // the columns are taken from where the words are -- never from a fixed index.
+  function d8(v){
+    if(v instanceof Date){
+      return String(v.getFullYear())+('0'+(v.getMonth()+1)).slice(-2)+('0'+v.getDate()).slice(-2);
+    }
+    var s=String(v||'').trim();
+    var m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);            // 2025-04-01 00:00:00
+    if(m) return m[1]+m[2]+m[3];
+    var M={jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+           jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    m=s.match(/^(\d{1,2})[-\/ ]([A-Za-z]{3})[A-Za-z]*[-\/ ](\d{2,4})$/);  // 1-Apr-25
+    if(m){
+      var y=m[3].length===2?(parseInt(m[3],10)>=70?'19'+m[3]:'20'+m[3]):m[3];
+      return y+M[m[2].toLowerCase()]+('0'+m[1]).slice(-2);
+    }
+    return '';
+  }
+  function num(v){
+    if(typeof v==='number') return v;
+    var s=String(v||'').replace(/[,\s₹]/g,'');
+    if(!s) return 0;
+    var n=parseFloat(s);
+    return isFinite(n)?n:0;
+  }
+  function readExport(rows){
+    var hdr=-1, col={};
+    for(var i=0;i<rows.length && i<60;i++){
+      var low=rows[i].map(function(c){return String(c==null?'':c).trim().toLowerCase();});
+      if(low.indexOf('date')>=0 && low.indexOf('debit')>=0 && low.indexOf('credit')>=0){
+        hdr=i;
+        for(var j=0;j<low.length;j++){
+          if(low[j]==='date') col.date=j;
+          else if(low[j]==='debit') col.debit=j;
+          else if(low[j]==='credit') col.credit=j;
+          else if(low[j]==='particulars') col.part=j;
+          else if(low[j].indexOf('vch type')>=0) col.type=j;
+          else if(low[j].indexOf('vch no')>=0) col.no=j;
+        }
+        break;
+      }
+    }
+    if(hdr<0) throw new Error('No Date/Debit/Credit header row in this file. Is it the ledger report, exported as Excel or CSV?');
+    var res={opening:null,closing:null,rows:[],from:'',to:''};
+    // The period, off the letterhead: "1-Apr-25 to 8-Sep-26". Read rather than typed,
+    // so the comparison can never be made over a different window than the export.
+    for(var k=0;k<hdr;k++){
+      var line=rows[k].map(function(c){return String(c==null?'':c);}).join(' ');
+      var pm=line.match(/(\d{1,2}[-\/][A-Za-z]{3}[A-Za-z]*[-\/]\d{2,4})\s*to\s*(\d{1,2}[-\/][A-Za-z]{3}[A-Za-z]*[-\/]\d{2,4})/i);
+      if(pm){ res.from=d8(pm[1]); res.to=d8(pm[2]); break; }
+    }
+    for(var r=hdr+1;r<rows.length;r++){
+      var row=rows[r];
+      // Tally splits the particulars over two columns -- "To" in one, the account name
+      // in the next -- but only when the next one IS the continuation. Where the layout
+      // puts an amount there instead, joining them blindly staples a figure onto the
+      // description of every row.
+      var nxt=row[col.part+1];
+      var part=String(row[col.part]==null?'':row[col.part]).trim()
+             +(typeof nxt==='number'||nxt instanceof Date?'':' '+String(nxt==null?'':nxt).trim());
+      var dr=num(row[col.debit]), cr=num(row[col.credit]);
+      // Dr-positive throughout, the same scale the API answers on.
+      var amt=Math.round((dr-cr)*100)/100;
+      if(/opening balance/i.test(part)){ res.opening=amt; continue; }
+      // The closing line is the BALANCING entry, so Tally prints it on the opposite
+      // side: a debtor owing money shows it under Credit. Taken at face value it comes
+      // out negative and the page reports a customer as owing us nothing.
+      if(/closing balance/i.test(part)){ res.closing=-amt; continue; }
+      var dt=d8(row[col.date]);
+      if(!dt) continue;                       // the grand-total line carries no date
+      var no=String(row[col.no]==null?'':row[col.no]).trim();
+      res.rows.push({date:dt,no:no,type:String(row[col.type]==null?'':row[col.type]).trim(),
+                     particulars:part.trim(),amount:amt});
+    }
+    return res;
+  }
+
+  // A voucher can touch one ledger more than once, and each side may write it as one
+  // row or several. Summing by voucher number before comparing is what stops that
+  // shape difference from reading as a missing entry.
+  function fold(list){
+    var m={};
+    list.forEach(function(v){
+      var k=v.no||('(no number) '+v.date);
+      if(!m[k]) m[k]={no:v.no,date:v.date,type:v.type,particulars:v.particulars||'',amount:0};
+      m[k].amount=Math.round((m[k].amount+v.amount)*100)/100;
+      if(v.date<m[k].date) m[k].date=v.date;
+    });
+    return m;
+  }
+
+  function table(title,rows,cls){
+    if(!rows.length) return '';
+    var body=rows.map(function(r){
+      return '<tr><td class="mono">'+esc(fmt8(r.date))+'</td>'
+        +'<td class="mono">'+esc(r.no||'(none)')+'</td>'
+        +'<td>'+esc(r.type||'')+'<div class="muted" style="font-size:11px">'+esc(r.particulars||'')+'</div></td>'
+        +'<td class="num'+(cls==='diff'?' off':'')+'">'+rupees(r.amount)+'</td>'
+        +(cls==='diff'?'<td class="num">'+rupees(r.ours)+'</td><td class="num off">'+rupees(r.amount-r.ours)+'</td>':'')
+        +'</tr>';
+    }).join('');
+    return '<section><h2>'+esc(title)+' &mdash; '+rows.length+'</h2>'
+      +'<div class="scroll"><table><thead><tr><th>Date</th><th>Vch No.</th><th>Type</th>'
+      +(cls==='diff'?'<th style="text-align:right">Tally</th><th style="text-align:right">Ours</th><th style="text-align:right">Difference</th>'
+                    :'<th style="text-align:right">Amount</th>')
+      +'</tr></thead><tbody>'+body+'</tbody></table></div></section>';
+  }
+
+  function compare(tal,ours){
+    var A=fold(tal.rows), B=fold(ours);
+    var onlyT=[], onlyO=[], diff=[], agreed=0, agreedAmt=0;
+    Object.keys(A).forEach(function(k){
+      if(!(k in B)){ onlyT.push(A[k]); return; }
+      var d=Math.round((A[k].amount-B[k].amount)*100)/100;
+      if(Math.abs(d)<0.5){ agreed++; agreedAmt+=A[k].amount; }
+      else { var e={}; for(var p in A[k]) e[p]=A[k][p]; e.ours=B[k].amount; diff.push(e); }
+    });
+    Object.keys(B).forEach(function(k){ if(!(k in A)) onlyO.push(B[k]); });
+    var srt=function(a,b){return a.date<b.date?-1:(a.date>b.date?1:0);};
+    onlyT.sort(srt); onlyO.sort(srt); diff.sort(srt);
+
+    var talMove=0; Object.keys(A).forEach(function(k){talMove+=A[k].amount;});
+    var ourMove=0; Object.keys(B).forEach(function(k){ourMove+=B[k].amount;});
+    talMove=Math.round(talMove*100)/100; ourMove=Math.round(ourMove*100)/100;
+    var gap=Math.round((ourMove-talMove)*100)/100;
+    var named=Math.round((onlyO.reduce(function(a,v){return a+v.amount;},0)
+                         -onlyT.reduce(function(a,v){return a+v.amount;},0)
+                         +diff.reduce(function(a,v){return a+(v.ours-v.amount);},0))*100)/100;
+
+    // The verdict is about the MOVEMENT, not the closing balance: the opening is
+    // Tally's own figure on both sides, so a difference there is a different bug and
+    // mixing the two hides whichever is smaller.
+    var v=Math.abs(gap)<0.5
+      ? '<div class="verdict yes"><b>Every voucher agrees.</b> '+agreed.toLocaleString('en-IN')
+        +' vouchers, '+rupees(talMove)+' of movement, matched by number and amount. '
+        +'Whatever else this ledger disagrees about, it is not the vouchers.</div>'
+      : '<div class="verdict no"><b>'+rupees(gap)+'</b> more on our side than Tally’s, over '
+        +(Object.keys(A).length).toLocaleString('en-IN')+' vouchers. '
+        +(Math.abs(named-gap)<0.5
+          ? 'The lists below account for all of it.'
+          : 'The lists below account for '+rupees(named)+' of it — the rest is a rounding or shape difference worth a second look.')
+        +'</div>';
+
+    var head='<section><h2>THE TWO SIDES</h2><div class="body">'
+      +'<div class="scroll"><table><tbody>'
+      +'<tr><td>Opening, as Tally prints it</td><td class="num">'+(tal.opening==null?'<span class="muted">not in the file</span>':rupees(tal.opening))+'</td></tr>'
+      +'<tr><td>Movement in Tally’s export</td><td class="num">'+rupees(talMove)+'</td></tr>'
+      +'<tr><td>Movement in our vouchers</td><td class="num'+(Math.abs(gap)<0.5?'':' off')+'">'+rupees(ourMove)+'</td></tr>'
+      +'<tr><td>Closing, as Tally prints it</td><td class="num">'+(tal.closing==null?'<span class="muted">not in the file</span>':rupees(tal.closing))+'</td></tr>'
+      +(tal.opening==null?'':'<tr><td><b>What we would say it owes</b></td><td class="num"><b>'
+        +rupees(Math.round((tal.opening+ourMove)*100)/100)+'</b></td></tr>')
+      +'</tbody></table></div>'
+      +'<div class="note" style="margin-top:8px">'+agreed.toLocaleString('en-IN')+' vouchers agree to the rupee'
+      +(onlyT.length||onlyO.length||diff.length?', and the rest are named below.':'.')+'</div>'
+      +'</div></section>';
+
+    out.innerHTML=v+head
+      +table('IN TALLY, NOT IN OUR VOUCHERS',onlyT,'t')
+      +table('IN OUR VOUCHERS, NOT IN TALLY',onlyO,'o')
+      +table('BOTH HOLD IT, AT DIFFERENT AMOUNTS',diff,'diff');
+  }
+
+  function fail(m){ err.textContent=m; }
+
+  $('go').addEventListener('click',function(){
+    err.textContent=''; out.innerHTML='';
+    var f=$('file').files[0];
+    if(!f) return fail('Choose the Excel or CSV you exported from Tally first.');
+    var ledger=$('ledger').value.trim();
+    if(!ledger) return fail('Type the ledger name exactly as Tally spells it.');
+    if(!window.XLSX) return fail('The spreadsheet reader has not loaded. Reload the page; if it keeps happening, the vendored copy is missing.');
+    $('go').disabled=true;
+    var fr=new FileReader();
+    fr.onload=function(){
+      var tal;
+      try{
+        var wb=XLSX.read(new Uint8Array(fr.result),{type:'array',cellDates:true});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        tal=readExport(XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true}));
+      }catch(e){ $('go').disabled=false; return fail(String(e.message||e)); }
+      // The file's own period wins over the boxes: comparing our vouchers over a wider
+      // window than the export would report every voucher outside it as ours alone.
+      var from=tal.from||($('from').value||'').replace(/-/g,'');
+      var to=tal.to||($('to').value||'').replace(/-/g,'');
+      if(!/^\d{8}$/.test(from)||!/^\d{8}$/.test(to)){
+        $('go').disabled=false;
+        return fail('The file does not carry its period, so fill in the from and to dates by hand.');
+      }
+      $('from').value=from.slice(0,4)+'-'+from.slice(4,6)+'-'+from.slice(6,8);
+      $('to').value=to.slice(0,4)+'-'+to.slice(4,6)+'-'+to.slice(6,8);
+      var u='/api/yoy/vouchers?exact=1&limit=2000&branch='+encodeURIComponent($('branch').value)
+        +'&ledger='+encodeURIComponent(ledger)+'&from='+from+'&to='+to;
+      fetch(u).then(function(r){return r.json();}).then(function(j){
+        $('go').disabled=false;
+        if(j.ok===false) return fail(j.error||'the API refused');
+        if(j.truncated) return fail('More than 2000 vouchers in that window. Export a shorter period.');
+        // Our amounts are in Tally's raw sign (-ve = Dr). Flipped once, here, so both
+        // sides are Dr-positive and a sign convention cannot masquerade as a difference.
+        compare(tal,(j.vouchers||[]).map(function(v){
+          return {date:v.date,no:v.no,type:v.type,particulars:v.party||'',
+                  amount:Math.round(-v.amount*100)/100};
+        }));
+      }).catch(function(e){ $('go').disabled=false; fail(String(e.message||e)); });
+    };
+    fr.onerror=function(){ $('go').disabled=false; fail('Could not read that file.'); };
+    fr.readAsArrayBuffer(f);
+  });
+
+  var q=new URLSearchParams(location.search);
+  if(q.get('ledger')) $('ledger').value=q.get('ledger');
+  if(q.get('branch')) $('branch').value=q.get('branch');
+})();
+</script>
+</body>
+</html>
