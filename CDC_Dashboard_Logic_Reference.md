@@ -512,6 +512,14 @@ held is *later* than `openingAsOn`, whatever moved in between is in neither half
 party is understated at once. `/api/bills/audit` compares the two and says so
 (`opening.gap`) rather than letting a right-looking figure through.
 
+**This has been proved end to end on a real ledger.** `Vijay Shree Textiles Pvt Ltd
+-Howrah`, Kolkata, 1 Apr 2025 to 8 Sep 2026: 328 vouchers, every one matched to Tally's
+own export by number and amount, movement ₹6,79,379 on both sides, and opening ₹67,56,324
+plus that movement equal to the ₹74,35,703 closing balance Tally prints — to the rupee.
+Getting there took three real defects (a guessed opening date, postings with no end date,
+and two vouchers the incremental sync had missed), and each is written up above or in the
+changelog. The formula itself was never the problem.
+
 **The postings stop at today, and today is in the books' timezone.** A voucher dated ahead
 — a post-dated cheque, a sale entered for next week — is in the books but not in today's
 balance, and Tally's closing balance leaves it out too. Counting it made
