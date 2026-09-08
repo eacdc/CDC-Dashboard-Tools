@@ -103,6 +103,16 @@ try { $null = [System.Uri]$TallyUrl } catch {
 if (-not ([System.Uri]$TallyUrl).IsAbsoluteUri) {
     throw "-TallyUrl '$TallyUrl' is missing its scheme. Write it as http://127.0.0.1:9019"
 }
+# localhost resolves to the IPv6 loopback first on Windows, and Tally answers over IPv4
+# far more reliably -- an IPv6 request can leave its socket in CLOSE_WAIT, wedging the
+# listener until Tally is restarted. Corrected here rather than refused, so an old
+# scheduled task or environment variable cannot quietly reintroduce it, and said out
+# loud so nobody wonders why the address in the log is not the one they typed.
+if ($TallyUrl -match '^(https?://)localhost(:\d+)?(/.*)?$') {
+    $fixedUrl = $TallyUrl -replace '://localhost', '://127.0.0.1'
+    Write-Host ("  -TallyUrl {0} -> {1} (localhost resolves to IPv6 first, which wedges Tally)" -f $TallyUrl, $fixedUrl)
+    $TallyUrl = $fixedUrl
+}
 
 # ---- guard: a reset needs somewhere to push and a full pull to refill with ----
 # -Incremental posts only what changed since the last ALTERID, which after a wipe

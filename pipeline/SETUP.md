@@ -276,8 +276,13 @@ sit behind different ports, and 9001 can belong to another user's Tally entirely
 the same company either way. A company open on neither is **skipped** with a line
 saying so, rather than pulled from the wrong place and stopped by the MinLedgers guard.
 
-Pin one port with `-TallyUrl` or `CDC_TALLY_URL` and no probing happens. Change the
-list with `-TallyUrls "http://127.0.0.1:9019,http://127.0.0.1:9002"`.
+`-TallyUrl` on the command line is a deliberate act: it pins one port and no probing
+happens. **`CDC_TALLY_URL` only goes to the front of the list** - a value set once on one
+machine must not quietly cancel the search that finds the other branch. Change the list
+with `-TallyUrls "http://127.0.0.1:9019,http://127.0.0.1:9002"`.
+
+Any `localhost` address is rewritten to `127.0.0.1`, and the rewrite is logged. An old
+scheduled task or environment variable should not be able to reintroduce the IPv6 hang.
 
 The lookup itself lives in `TallyToJson.ps1 -ListCompaniesJson`, which prints the same
 companies `-ListCompanies` shows, as JSON and nothing else. One implementation, so the

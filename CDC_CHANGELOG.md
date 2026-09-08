@@ -1,5 +1,21 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.40 (pipeline) — September 2026 — An env var is a default, not an override
+
+The port probe went in and immediately did not probe: `CDC_TALLY_URL` was set on the
+machine to `http://localhost:9019`, and it **replaced** the list instead of joining it,
+so 9001 was never tried — and it put back the `localhost` form that wedges Tally over
+IPv6. The same mistake as `-Branches` a few versions ago, in different clothes.
+
+`-TallyUrl` on the command line is a deliberate act and still pins one port. The env var
+now goes to the **front of the list** and nothing more: a value set once, on one machine,
+must not quietly cancel the search that finds the other branch.
+
+And any `localhost` address is rewritten to `127.0.0.1` — in `run_daily.ps1` and in
+`TallyToJson.ps1`, so it holds however the script is called — with the rewrite logged
+rather than done behind your back. An old scheduled task should not be able to
+reintroduce a hang we have already diagnosed.
+
 ## v2.39 (pipeline) — September 2026 — Ask which port serves which company
 
 Two of this week's failed runs were the same mistake in different clothes: a branch
