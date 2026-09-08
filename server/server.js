@@ -1071,6 +1071,11 @@ app.get('/api/bills/audit', async (req, res) => {
       const from = (openMap && seen.length === 1 && /^\d{8}$/.test(seen[0])) ? seen[0] : null;
       openOf[br] = {
         asOn: from, ledgers: openMap ? Object.keys(openMap).length : 0,
+        // Tally will not say which day its openings stand on without recomputing every
+        // one of them -- two minutes, and it wedged the voucher sync. So the day is
+        // worked out from the company's own last entry. Said plainly, because a derived
+        // date presented as Tally's word is how a wrong year gets counted twice.
+        derived: !!(m && m.openingAsOnDerived),
         note: from ? null
           : (openMap
             ? `Tally's opening balances arrived but the day they stand on did not (${JSON.stringify(m.openingAsOn)}), so they cannot be added to anything and are left out. This is movement since the oldest voucher held, not a balance.`

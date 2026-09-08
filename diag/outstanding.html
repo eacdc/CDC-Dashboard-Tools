@@ -132,6 +132,11 @@
         ? 'That balance includes each party&rsquo;s <b>opening balance from Tally</b> as at <b>'
           +esc(fmtDate(f.opening.asOn))+'</b> ('+f.opening.ledgers.toLocaleString('en-IN')+' ledgers carry one), '
           +'plus every posting since. What was owed before the oldest voucher we hold is in there.'
+          +(f.opening.derived
+            ? ' <b>The date is worked out, not stated by Tally</b> — Tally will not say which day its openings'
+              +' stand on without recomputing every one of them, which takes minutes. It is 1 April of the'
+              +' financial year the last entry falls in.'
+            : '')
         : '<span class="muted">'+esc((f.opening&&f.opening.note)||'')+'</span>')
       +'</div>'
       // Tally's own Outstandings counts every ledger it keeps bill-by-bill, whatever
