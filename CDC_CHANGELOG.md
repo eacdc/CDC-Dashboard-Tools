@@ -1,6 +1,25 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.46 (server) — September 2026 — Two questions, and the verdict answered the wrong one
+
+Run at the file's own date, the audit reported "988 of 1697 parties come out
+differently" — which reads as 988 gaps in the data. It is not.
+
+Two different questions live in that page:
+
+- **Does the file still hold anything?** Decided only by what is in the file and *not* in
+  the vouchers. Kolkata: **one party, ₹27,232**. Everything else is the vouchers knowing
+  more, not less.
+- **Do the two net the same, bill for bill?** A different question, and a party settled
+  **on account** rather than against its bills answers it no while owing nothing — its
+  bills stay open on paper and its balance is square. Culturama is the plain case: bills
+  ₹7.27 Cr open, balance ₹55.6 lakh, and both are right.
+
+The verdict now leads with the first figure (`verdict.onlyInTheFile`), describes the
+second for what it is, and points at the balance — the figure that has been checked
+against Tally directly, a ledger at a time, on `/diag/ledger.html`.
+
 ## v2.45 (server) — September 2026 — An opening dated 1 April IS the balance on 31 March
 
 `/diag/outstanding.html` tells you to press **the file's date** for the comparison that

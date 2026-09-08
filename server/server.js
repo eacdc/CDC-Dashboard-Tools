@@ -1257,8 +1257,15 @@ app.get('/api/bills/audit', async (req, res) => {
     // give. Saying "not yet" there would be crying wolf at the calendar.
     const atSnapshot = asOn === snapshot;
     const balTotal = round(live.reduce((a, b) => a + b.balanceTotal, 0));
+    // What the FILE holds that the vouchers do not. Nothing else can keep the file
+    // alive: a difference the other way is the vouchers knowing more, not less.
+    const lonely = live.reduce((a, b) => {
+      const t = (b.shape && b.shape.onlyInTally) || { parties: 0, money: 0 };
+      return { parties: a.parties + t.parties, money: a.money + t.money };
+    }, { parties: 0, money: 0 });
     out.verdict = {
       partiesCompared: parties, partiesDiffering: differ, namePairs: paired,
+      onlyInTheFile: { parties: lonely.parties, money: round(lonely.money) },
       branchesNotCompared: Object.keys(out.branches).filter((b) => !out.branches[b].coversDate),
       comparable: atSnapshot,
       safeToSwitch: atSnapshot && differ === 0,
@@ -1266,7 +1273,20 @@ app.get('/api/bills/audit', async (req, res) => {
         ? `Nothing is being tested here. The uploaded file is what Tally printed on ${snapshot}, and this is asked as at ${asOn} -- the parties have traded in between, so differing from it is expected and proves nothing either way. What this date DOES give is outstanding as the vouchers and Tally's own openings have it: ₹${Math.round(balTotal).toLocaleString('en-IN')}. Check that against Tally itself; the file cannot judge it. Press "the file's date" for the comparison that can.`
         : differ === 0
         ? `Every one of the ${parties} parties with an open bill comes out at the same figure from the vouchers as from Tally's own snapshot of ${asOn}.${pairNote} Outstanding can be computed from the vouchers.`
-        : `${differ} of ${parties} parties come out differently from the vouchers than from Tally's snapshot of ${asOn}.${pairNote} Each is listed with both figures; understand them before switching anything over.`,
+        // Two questions get confused here, and the count of differences answers the
+        // less useful one. "Can the file be retired" is decided by what the file holds
+        // that the vouchers DO NOT -- everything else is the vouchers knowing more.
+        // "Do the two agree bill for bill" is a different question, and a party settled
+        // ON ACCOUNT rather than against its bills answers it no while owing nothing:
+        // its bills stay open on paper and its balance is square. So the shortfall is
+        // stated first, and the count of differences is described for what it is.
+        : `${lonely.parties === 0
+            ? 'Nothing in the file is missing from the vouchers'
+            : `${lonely.parties} ${lonely.parties === 1 ? 'party' : 'parties'} and ₹${Math.round(Math.abs(lonely.money)).toLocaleString('en-IN')} appear in the file and nowhere in the vouchers`}`
+          + ` -- that is the only figure that decides whether the file still holds anything.`
+          + ` The other way round, ${differ} of ${parties} parties net differently bill for bill.${pairNote}`
+          + ` Much of that is a party settled ON ACCOUNT rather than against its bills: the bills stay open on paper while the balance is square, and both are right.`
+          + ` The balance is the figure to trust and the one to check against Tally -- a ledger at a time, on /diag/ledger.html.`,
     };
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }

@@ -470,6 +470,15 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(aud2.branches.kol.differ === 1 && aud2.verdict.safeToSwitch === false,
     'and comparing across different dates is reported as a difference rather than hidden');
 
+  // Two questions live in this endpoint and the count of differences answers the less
+  // useful one. Whether the FILE still holds anything is decided by what is in it and
+  // not in the vouchers -- everything the other way is the vouchers knowing more. The
+  // verdict has to lead with that, or a page full of differences reads as a page full
+  // of missing data.
+  assert(aud2.verdict.onlyInTheFile && aud2.verdict.onlyInTheFile.parties === 0,
+    'the verdict states what the FILE holds that the vouchers do not, because nothing else can keep it alive: '
+    + JSON.stringify(aud2.verdict.onlyInTheFile));
+
   // Ahmedabad's vouchers start after this snapshot, so every bill of its would read
   // as lost. That is the question being wrong, not the answer, and it must say so
   // rather than counting against the verdict.
@@ -487,6 +496,12 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const ghost = aud3.branches.kol.worst.find((r) => r.party === 'Some Other Customer');
   assert(ghost && ghost.csv === 7000 && ghost.vouchers === 0 && ghost.onlyIn === 'csv',
     'a party only Tally knows is listed with both figures and which side it came from: ' + JSON.stringify(ghost));
+  assert(aud3.verdict.onlyInTheFile.parties === 1 && aud3.verdict.onlyInTheFile.money === -7000
+    && /1 party and \u20b97,000 appear in the file and nowhere in the vouchers/.test(aud3.verdict.says),
+    'and the verdict LEADS with it, because that is the only figure that keeps the file alive: '
+    + JSON.stringify(aud3.verdict.onlyInTheFile));
+  assert(/settled ON ACCOUNT/.test(aud3.verdict.says),
+    'then explains the differences the other way -- a party settled on account nets differently while owing nothing');
 
   // The commonest difference by far is not money at all: one customer under two
   // spellings, the bill raised against one and settled against the other, so the two
