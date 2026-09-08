@@ -488,24 +488,21 @@ every posting to work one out: 886 ledgers that come back *by name* in two secon
 not produced their balances in five minutes, and asked alongside the ledger list it took
 the whole sync down with it. `OPENINGBALANCE` is a different animal — a **stored** field
 on the ledger master, typed in when the ledger was created or carried in when the year
-was opened — so it costs no more to read than the name does. **The date is stated in the request, not inferred from the answer.** Left to itself,
-`OPENINGBALANCE` comes back as at the start of the company's **current period**, not the
-beginning of its books — measured on a real ledger whose books open 1 April 2025: Tally
-answered ₹66,23,663, which is its balance on **1 April 2026**, the current period's first
-day. Labelling that with the books date and then adding postings from the books date
-counts a whole financial year **twice**, for every ledger at once. So `SVFROMDATE` is set
-to the books date and the same date is stored beside the figures; a company whose books
-date cannot be established is not asked at all, since an opening balance whose day is a
-guess is worse than none. Asking for the books date costs nothing extra — at the
-beginning of books the opening is the stored master figure, with nothing to compute.
+was opened — so it costs no more to read than the name does. **The date is stated in the request, and it is the one Tally already holds.** Two
+measured facts shape this. Left to itself, `OPENINGBALANCE` comes back as at the start of
+the company's **current period**, not the beginning of its books — a ledger whose books
+open 1 April 2025 answered ₹66,23,663, which is its balance on **1 April 2026**.
+Labelling that with the books date and adding postings from the books date counts a whole
+financial year **twice**, for every ledger at once. But asking for the books date instead
+does not work either: Tally then recomputes every opening from the start of the books,
+and 6,466 ledgers did not answer in two minutes.
 
-**One date, and a usable one.** Tally can answer a field twice — attribute and element
-both — and the array that makes travels all the way to Mongo, where a date *string*
-compared against an array matches no voucher at all: every posting vanishes and the
-openings come back alone, dressed up as a balance and looking entirely plausible. The
-pipeline flattens it to one eight-digit string, and the server takes the same date twice
-as harmless while refusing two *different* dates outright — picking one would be a guess
-about which day the money stands on.
+So `SVFROMDATE` is set to **1 April of the financial year the company's last entry falls
+in** — the period Tally is sitting in, and the only one it can answer instantly — and the
+same date is stored beside the figures as `openingAsOn`, with the postings counted from
+there. Stating it is what makes it honest: if Tally's period is not that day it
+recomputes, the request times out, and there are simply no openings — rather than a
+right-looking figure standing on the wrong day.
 
 It is still a separate request, tried once, and a failure costs only the openings — the
 voucher sync must never wait on Tally's arithmetic again. The audit says plainly when no
