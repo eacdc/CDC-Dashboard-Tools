@@ -1,6 +1,20 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.49 (server) — September 2026 — Merging a ledger has to actually bring its money back
+
+Merging an old ledger into its current name is the whole remedy for a ledger no master
+defines. It did not work: the outstanding balance classified by the **raw** spelling, so
+the old name stayed unclassified, stayed outside Sundry Debtors, and its money stayed out
+of outstanding — the merge changed nothing.
+
+It now classifies by the name it **merges into**, the way the fold does (`canonKeys` runs
+before `sundryOf` there). The raw name is still tried as a fallback, for a merge pointing
+somewhere the master does not know.
+
+Found by asking the obvious question — *after merging these 42, is it fixed?* — of the
+code rather than of memory.
+
 ## v2.48 (diag) — September 2026 — All 42 of them, in the order to work through
 
 The first run of the new check found **42 ledgers no master defines, carrying ₹61.3 Cr**

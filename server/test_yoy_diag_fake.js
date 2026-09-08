@@ -689,6 +689,26 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'while vouchers that do reach back to the opening day raise nothing, because there is no gap to report');
   mko.openingAsOn = '20251001';
 
+  // A ledger no master defines is unclassified, so it falls out of outstanding
+  // entirely -- and MERGING it into the current name is the whole remedy. That only
+  // works if the balance classifies by the name it merges into, the way the fold does.
+  // Asking the raw spelling instead left the old name unclassified for ever: the merge
+  // changed nothing and its money stayed out.
+  vs.push(V('kol', '20251103', { 'Sales Accounts': 90000 },
+    { 'Carbonlite Print & Publishing (OLD NAME)': -90000 }));
+  const audLost = await get('/api/bills/audit?asOn=20260228');
+  assert(!audLost.branches.kol.balanceWorst.some((r) => /OLD NAME/.test(r.party)),
+    'before the merge the old name is nowhere in the balance, because nothing classifies it');
+  fakeDb.collection('aliases').docs.push({ _id: 'party',
+    map: { 'Carbonlite Print & Publishing (OLD NAME)': 'Carbonlite Print & Publishing' } });
+  const audMerged = await get('/api/bills/audit?asOn=20260228');
+  const cm = audMerged.branches.kol.balanceWorst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(cm && cm.balance === 50000 + 75846 + 90000,
+    'merging it into the current name brings its money back into outstanding, which is the point of merging: '
+    + JSON.stringify(cm && cm.balance));
+  fakeDb.collection('aliases').docs.pop();
+  vs.pop();
+
   // Tally's Outstandings counts every ledger it keeps bill-by-bill, whatever group it
   // sits in -- an advance, a deposit, a branch account. This balance counts only Sundry
   // Debtors and Creditors, so those are money Tally reports and it does not. Dropping

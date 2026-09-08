@@ -1103,8 +1103,14 @@ app.get('/api/bills/audit', async (req, res) => {
       const missed = new Map();
       const add = (ledger, open) => {
         if (!ledger) return;
-        const side = yoy.sundryOf(S, ledger);
+        // Classified by the name it MERGES INTO, which is what the fold does
+        // (canonKeys runs before sundryOf there). Asking the raw spelling instead left
+        // an old, renamed ledger unclassified for ever: merging it into the current
+        // name -- the whole remedy for a ledger no master defines -- changed nothing
+        // here, and its money stayed out of outstanding. The raw name is still tried
+        // as a fallback, for a merge that points somewhere the master does not know.
         const p = S.canon(ledger);
+        const side = yoy.sundryOf(S, p) || yoy.sundryOf(S, ledger);
         if (side !== 'debtor' && side !== 'creditor' && !csvByBranch[br].has(p)) {
           if (billLedgers[br].has(p)) missed.set(p, (missed.get(p) || 0) + open);
           return;
