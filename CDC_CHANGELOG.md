@@ -1,6 +1,24 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.47 (server, diag) — September 2026 — "Unclassified" is a missing ledger, not a bad group
+
+`VIVA COSMETICS PVT LTD.` classified as **Unclassified** and carried ₹18,28,367. Looking
+it up on `/diag/?` found nothing — and that was the whole story: the page searched only
+the ledger master, and this name is not in any master. The vouchers use it; Tally has
+since renamed or deleted it, and the old entries keep the spelling of the day.
+
+A ledger no master defines has no group, so it cannot be a Sundry Debtor, so it drops out
+of outstanding entirely. The one ledger you go to the page to ask about was the one it
+could not look up.
+
+The vouchers are now asked too. Such a ledger is **found**, tagged *no master defines it*,
+and the row says why — with **how many others are like it and what they carry between
+them** (`unknownLedgers`), because one is a curiosity and a habit is a merge session.
+
+The fix for each is the same: merge it into the current name with **🔗 Merge names** on
+the portal, and every figure of its follows.
+
 ## v2.46 (server) — September 2026 — Two questions, and the verdict answered the wrong one
 
 Run at the file's own date, the audit reported "988 of 1697 parties come out

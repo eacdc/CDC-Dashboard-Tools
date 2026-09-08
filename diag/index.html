@@ -109,6 +109,10 @@
       var tags='';
       if(l.mergedAway) tags+='<span class="tag warn">merged into '+esc(l.canonical)+'</span>';
       if(l.interBranch) tags+='<span class="tag warn">inter-branch</span>';
+      // "Unclassified" reads as a classification problem. It is a MISSING LEDGER: the
+      // vouchers use this name and no master defines it, so nothing can be worked out
+      // about it at all. Say which, or the real answer never gets looked for.
+      if(l.notInMaster) tags+='<span class="tag bad">no master defines it</span>';
       tags+='<span class="tag '+(l.role==='debtor'?'good':(l.role==='creditor'?'good':'bad'))+'">'+esc(l.role)+'</span>';
       // Each ledger's own balance, because Tally is asked one ledger at a time and
       // our sum of three put beside its one is how two right answers look wrong.
@@ -129,6 +133,18 @@
     var note=d.ledgers.length>1
       ? '<div class="note"><b>'+d.ledgers.length+' separate ledgers</b> carry this name. Each page shows whichever of them has activity, so the same customer can look like different rows in different places. To make them one, use <b>🔗 Merge names</b> on the portal.'
       : '';
+    // The explanation belongs beside the row that needs it, not in a legend.
+    var orphan=d.ledgers.filter(function(l){return l.notInMaster;});
+    if(orphan.length){
+      note+='<div class="note" style="color:var(--red)"><b>'
+        +esc(orphan.map(function(l){return l.name;}).join(', '))
+        +'</b> &mdash; '+esc(orphan[0].whyUnclassified||'')
+        +(d.unknownLedgers&&d.unknownLedgers.count>orphan.length
+          ? ' <b>'+d.unknownLedgers.count+' ledgers in the books are like this</b>, carrying '
+            +rupees(d.unknownLedgers.amount)+' between them.'
+          : '')
+        +'</div>';
+    }
     return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th>'
       +'<th style="text-align:right">Opening from Tally</th>'
       +'<th style="text-align:right">Postings since</th>'

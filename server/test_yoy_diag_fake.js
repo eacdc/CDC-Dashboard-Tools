@@ -213,6 +213,28 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   const d = await get('/api/yoy/diag?q=Carbonlite&branch=ahm&fy=2026-27');
   assert(d.ok === true, 'the diagnostic answers');
 
+  // A ledger can be on the VOUCHERS and in no master at all: renamed or deleted in
+  // Tally since, with its old entries keeping the old spelling. Those are exactly the
+  // ones that classify as "Unclassified", fall out of debtor/creditor, and are left out
+  // of outstanding -- and searching only the master meant the one ledger you came here
+  // to ask about was the one the page could not find.
+  vs.push(V('ahm', '20260601', { 'Export Sales': 40000 },
+    { 'Carbonlite Print & Publishing (OLD NAME)': -40000 }));
+  const dOrph = await get('/api/yoy/diag?q=Carbonlite&branch=ahm&fy=2026-27');
+  const orph = dOrph.ledgers.find((l) => l.name === 'Carbonlite Print & Publishing (OLD NAME)');
+  assert(orph && orph.notInMaster === true && orph.chain.join('') === 'Unclassified',
+    'a ledger the vouchers use and no master defines is FOUND, instead of being the one name the page cannot look up: '
+    + JSON.stringify(orph && [orph.name, orph.chain]));
+  assert(/No master defines this ledger/.test(orph.whyUnclassified || '')
+    && /renamed or deleted/.test(orph.whyUnclassified || ''),
+    'and says why it is Unclassified, which is a missing ledger rather than a classification problem');
+  assert(dOrph.unknownLedgers.count >= 1
+    && dOrph.unknownLedgers.worst.some((o) => o.name === 'Carbonlite Print & Publishing (OLD NAME)'
+      && o.amount === 40000),
+    'and how many OTHER ledgers are like it, with their money -- one is a curiosity, a habit is a merge session: '
+    + JSON.stringify(dOrph.unknownLedgers));
+  vs.pop();
+
   // ---- 1. the ledgers this name could mean ----------------------------------
   assert(d.ledgers.length === 3, 'it finds all three ledgers carrying the name, not just the one being looked at');
   const byName = {};
