@@ -327,6 +327,17 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'and shows the two halves it is made of, so a wrong one can be told from the other: '
     + JSON.stringify(bal.byBranch.kol));
 
+  // Month by month, because when a ledger disagrees with Tally the month it STARTS
+  // disagreeing in is the whole search -- Tally's ledger report opens on a monthly
+  // summary, so the two can be read down side by side. Worth nothing unless the months
+  // add back to the same postings figure, so that is what is asserted.
+  const mo = bal.byMonth && bal.byMonth['Carbonlite Print & Publishing'];
+  assert(mo && Object.values(mo).reduce((a, v) => a + v, 0) === cbl.postings,
+    'the months add back to the postings figure they are a breakdown of, or they explain nothing: '
+    + JSON.stringify(mo));
+  assert(Object.keys(mo).every((k) => /^\d{6}$/.test(k)),
+    'and each is a month, not a date, so it lines up with the summary Tally opens on');
+
   // A balance is struck on a day, and Tally strikes it today. A voucher dated ahead --
   // a post-dated cheque, a sale entered for next week -- is in the books but not in
   // today's balance, and counting it makes a party look owing money nobody has billed

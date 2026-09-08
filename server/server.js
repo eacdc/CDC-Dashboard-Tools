@@ -1389,7 +1389,8 @@ app.get('/api/yoy/diag', async (req, res) => {
     // ahead, so until half past five in the morning here UTC is still on yesterday --
     // and a balance would drop a whole day's entries for no reason anyone could see.
     const upTo = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
-    const balance = { asOn: null, upTo, opening: 0, postings: 0, later: 0, total: 0, byBranch: {}, byLedger: {} };
+    const balance = { asOn: null, upTo, opening: 0, postings: 0, later: 0, total: 0,
+      byBranch: {}, byLedger: {}, byMonth: {} };
     for (const br of (branch === 'all' ? ['kol', 'ahm'] : [branch])) {
       const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
       const seenDates = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
@@ -1421,14 +1422,20 @@ app.get('/api/yoy/diag', async (req, res) => {
           { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
         { $unwind: '$kv' },
         { $match: { 'kv.k': { $in: [...all] } } },
-        { $group: { _id: '$kv.k',
-          sum: { $sum: { $cond: [{ $gt: ['$date', upTo] }, 0, '$kv.v'] } },
-          later: { $sum: { $cond: [{ $gt: ['$date', upTo] }, '$kv.v', 0] } } } },
+        { $group: { _id: { k: '$kv.k', d: '$date' }, sum: { $sum: '$kv.v' } } },
       ], { allowDiskUse: true }).toArray();
+      // By ledger AND by month. When a ledger disagrees with Tally, the month it starts
+      // disagreeing in is the whole search: Tally's own ledger report opens on a monthly
+      // summary, so the two columns can be read side by side and the argument is down to
+      // one month before anybody opens a voucher.
       let la = 0;
       for (const r of rows2) {
-        po += -r.sum; each(r._id, 'postings', -r.sum);
-        la += -(r.later || 0); each(r._id, 'later', -(r.later || 0));
+        const ln = r._id.k, dt = String(r._id.d || ''), amt = -r.sum;
+        if (dt > upTo) { la += amt; each(ln, 'later', amt); continue; }
+        po += amt; each(ln, 'postings', amt);
+        const mk = dt.slice(0, 6);
+        const m = balance.byMonth[ln] || (balance.byMonth[ln] = {});
+        m[mk] = Math.round(((m[mk] || 0) + amt) * 100) / 100;
       }
       const r2 = (n) => Math.round(n * 100) / 100;
       balance.later = r2(balance.later + la);

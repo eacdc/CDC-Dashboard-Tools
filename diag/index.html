@@ -97,6 +97,9 @@
   function fmtDate(d){if(!d||d.length<8)return d||'';
     var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+  function fmtMonth(k){if(!k||k.length<6)return k||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return M[parseInt(k.slice(4,6),10)-1]+' '+k.slice(0,4);}
 
   // ---- 1. the ledgers this name could mean ---------------------------------
   function ledgersTable(d){
@@ -269,10 +272,44 @@
       +'say which one to look at.</div></div></section>';
   }
 
+  // Month by month, with the balance the ledger stood at each month end. When a ledger
+  // disagrees with Tally, the month it STARTS disagreeing in is the whole search --
+  // Tally's own ledger report opens on a monthly summary, so the two run side by side
+  // and the argument is down to one month before anybody opens a voucher.
+  function monthsSection(d){
+    var b=d.balance; if(!b||!b.byMonth) return '';
+    var lns=Object.keys(b.byMonth).filter(function(l){
+      return Object.keys(b.byMonth[l]).length;});
+    if(!lns.length) return '';
+    var blocks=lns.map(function(l){
+      var mm=b.byMonth[l], keys=Object.keys(mm).sort();
+      var run=(b.byLedger[l]&&b.byLedger[l].opening)||0;
+      var rows=keys.map(function(k){
+        run=Math.round((run+mm[k])*100)/100;
+        return '<tr><td class="mono">'+esc(fmtMonth(k))+'</td>'
+          +'<td class="num">'+rupees(mm[k])+'</td>'
+          +'<td class="num"><b>'+rupees(run)+'</b></td></tr>';
+      }).join('');
+      return '<div style="margin-bottom:14px"><div class="mono" style="margin-bottom:4px">'+esc(l)+'</div>'
+        +'<div class="scroll"><table><thead><tr><th>Month</th>'
+        +'<th style="text-align:right">Moved</th>'
+        +'<th style="text-align:right">Balance at month end</th></tr></thead>'
+        +'<tbody><tr><td class="mono muted">opening</td><td class="num muted">&mdash;</td>'
+        +'<td class="num"><b>'+rupees((b.byLedger[l]&&b.byLedger[l].opening)||0)+'</b></td></tr>'
+        +rows+'</tbody></table></div></div>';
+    }).join('');
+    return '<section><h2>MONTH BY MONTH, AGAINST TALLY</h2><div class="body">'
+      +'<div class="note" style="padding:0 0 10px">In Tally open this ledger and press '
+      +'<b>Alt+F2</b> for the full year &mdash; it opens on a monthly summary. Read the two '
+      +'<b>Balance at month end</b> columns down until they part. That month holds the difference.</div>'
+      +blocks+'</div></section>';
+  }
+
   function render(d){
     out.innerHTML=
       balanceSection(d)
       +'<section><h2>1 &middot; WHICH LEDGERS THIS NAME COULD MEAN</h2>'+ledgersTable(d)+'</section>'
+      +monthsSection(d)
       +'<section><h2>2 &middot; WHAT YEAR ON YEAR HAS STORED</h2>'+storedTable(d)+'</section>'
       +'<section><h2>3 &middot; EVERY VOUCHER, AND WHY IT COUNTED OR DID NOT</h2>'+voucherRows(d)+'</section>'
       +'<section><h2>4 &middot; THE BILLS BEHIND THE OUTSTANDING FIGURE</h2>'+billsSection(d)+'</section>'
