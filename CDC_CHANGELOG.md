@@ -1,5 +1,20 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.37 (pipeline) — September 2026 — Ask for the period Tally already holds
+
+Asking for the books date (v2.36) does not work: Tally recomputes every opening from the
+start of the books, and 6,466 Kolkata ledgers did not answer in two minutes.
+
+But the failed attempt settled the question it was chasing. The undated answer is the
+balance at the start of the company's **current period** — which is precisely why it is
+instant: that is the period Tally is already sitting in. So the date is worked out
+(**1 April of the financial year the company's last entry falls in**), stated in the
+request, and stored beside the figures, with postings counted from there.
+
+Stating it is what makes it honest rather than a second guess: if Tally's period is not
+that day, it recomputes, the request times out, and there are no openings — instead of a
+right-looking figure standing on the wrong day.
+
 ## v2.36 (pipeline) — September 2026 — Ask Tally which day the opening stands on
 
 Measured on `Vijay Shree Textiles Pvt Ltd -Howrah`, whose books open 1 April 2025: Tally

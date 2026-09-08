@@ -795,15 +795,23 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # The vouchers supply the postings. The opening supplies what was already owed before
 # the oldest voucher we hold, which no amount of adding vouchers up can recover.
 #
-# ASK FOR THE DATE. Left to itself, OPENINGBALANCE comes back as at the start of the
-# company's CURRENT PERIOD, not the beginning of its books -- measured: a ledger whose
-# books open 1-Apr-2025 answered 66,23,663, which is its balance on 1-Apr-2026, the
-# current period's first day. Labelling that as the books date and then adding postings
-# from the books date counts a whole financial year TWICE, for every ledger at once.
+# ASK FOR THE DATE TALLY ALREADY HAS. Two things are measured here, and both matter.
 #
-# So the date is stated, and the same date is stored beside the figures. Asking for the
-# books date costs nothing extra: at the beginning of books the opening is the stored
-# master figure, with nothing to compute.
+# Left to itself, OPENINGBALANCE comes back as at the start of the company's CURRENT
+# PERIOD, not the beginning of its books: a ledger whose books open 1-Apr-2025 answered
+# 66,23,663, which is its balance on 1-Apr-2026. Labelling that with the books date and
+# adding postings from the books date counts a whole financial year TWICE, for every
+# ledger at once.
+#
+# But asking for the books date instead does not work either -- Tally then has to
+# recompute every opening from the start of the books, and 6,466 ledgers did not answer
+# in two minutes. The period it already holds is the only one it can answer instantly.
+#
+# So the current period's first day is worked out (1 April of the financial year the
+# company's last entry falls in), stated in the request, and stored beside the figures.
+# Stating it is what makes it honest: if Tally's period is NOT that day, it recomputes,
+# the request times out, and we get no openings -- rather than a right-looking figure
+# standing on the wrong day.
 $ledgerOpening = @{}
 # The date FIRST: it goes into the request, so a date we cannot establish means we do
 # not ask at all. An opening balance whose day is a guess is worse than none.
@@ -811,13 +819,21 @@ $openingAsOn = ""
 try {
     $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
     if ($me) {
-        # ONE date, as a string. Tally can answer a field twice (attribute and element
-        # both), which makes this an array -- and an array travels all the way to Mongo,
-        # where a date field compared against one matches no voucher at all and every
-        # posting silently vanishes from the balance.
-        $d = if ($me.Books) { $me.Books } else { $me.From }
-        $openingAsOn = "$(@($d)[0])".Trim()
-        if ($openingAsOn -notmatch '^\d{8}$') { $openingAsOn = "" }
+        # 1 April of the financial year the company's last entry falls in -- which is
+        # the period Tally is sitting in, and so the one it can answer from at once.
+        # Every field is unwrapped with @()[0]: Tally can answer one twice (attribute
+        # and element both), and the array that makes travels all the way to Mongo,
+        # where a date field compared against one matches no voucher at all.
+        $ref = "$(@($me.To)[0])".Trim()
+        if ($ref -notmatch '^\d{8}$') { $ref = $ToDate }
+        if ($ref -match '^\d{8}$') {
+            $ry = [int]$ref.Substring(0,4); $rm = [int]$ref.Substring(4,2)
+            $fy = if ($rm -ge 4) { $ry } else { $ry - 1 }
+            $openingAsOn = "{0}0401" -f $fy
+            # Never before the books begin: there is nothing to open a balance on.
+            $bk = "$(@($me.Books)[0])".Trim()
+            if ($bk -match '^\d{8}$' -and $openingAsOn -lt $bk) { $openingAsOn = $bk }
+        }
     }
 } catch { }
 if (-not $openingAsOn) {
