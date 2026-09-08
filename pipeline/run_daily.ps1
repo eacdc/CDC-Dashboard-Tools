@@ -95,10 +95,30 @@ Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" 
 #
 # FIRST PORT WINS. A company open on both ports is the same company either way, so
 # it is pulled once, from whichever answered first.
+# localhost resolves to the IPv6 loopback first on Windows, and Tally answers over
+# IPv4 far more reliably -- an IPv6 request can leave its socket in CLOSE_WAIT and
+# wedge the listener until Tally is restarted. A CDC_TALLY_URL set years ago should
+# not be able to reintroduce that, so the host is corrected and the correction said.
+function Fix-Loopback([string]$u) {
+    if ($u -match '^(https?://)(localhost)(:\d+)?(/.*)?$') {
+        $fixed = $u -replace '://localhost', '://127.0.0.1'
+        Say ("  {0} -> {1} (localhost resolves to IPv6 first, which wedges Tally)" -f $u, $fixed)
+        return $fixed
+    }
+    return $u
+}
+
+# -TallyUrl on the command line is a deliberate act: pin it and ask no further. The
+# ENV VAR is only a stored default -- it goes to the FRONT of the list, it does not
+# replace it, or a value set once for one machine quietly cancels the search that
+# found the other branch.
 $urls = @()
-if ($TallyUrl) { $urls = @($TallyUrl) }                       # pinned: ask no further
-elseif ($env:CDC_TALLY_URL) { $urls = @($env:CDC_TALLY_URL) }
-else { $urls = @($TallyUrls -split '[,;\s]+' | Where-Object { $_ }) }
+if ($TallyUrl) { $urls = @((Fix-Loopback $TallyUrl)) }
+else {
+    if ($env:CDC_TALLY_URL) { $urls += (Fix-Loopback $env:CDC_TALLY_URL) }
+    foreach ($u in ($TallyUrls -split '[,;\s]+' | Where-Object { $_ })) { $urls += (Fix-Loopback $u) }
+    $urls = @($urls | Select-Object -Unique)
+}
 
 $servedBy = @{}
 foreach ($u in $urls) {
