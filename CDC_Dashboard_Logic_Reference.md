@@ -488,21 +488,29 @@ every posting to work one out: 886 ledgers that come back *by name* in two secon
 not produced their balances in five minutes, and asked alongside the ledger list it took
 the whole sync down with it. `OPENINGBALANCE` is a different animal — a **stored** field
 on the ledger master, typed in when the ledger was created or carried in when the year
-was opened — so it costs no more to read than the name does. **The date is stated in the request, and it is the one Tally already holds.** Two
-measured facts shape this. Left to itself, `OPENINGBALANCE` comes back as at the start of
-the company's **current period**, not the beginning of its books — a ledger whose books
-open 1 April 2025 answered ₹66,23,663, which is its balance on **1 April 2026**.
-Labelling that with the books date and adding postings from the books date counts a whole
-financial year **twice**, for every ledger at once. But asking for the books date instead
-does not work either: Tally then recomputes every opening from the start of the books,
-and 6,466 ledgers did not answer in two minutes.
+was opened — so it costs no more to read than the name does.
 
-So `SVFROMDATE` is set to **1 April of the financial year the company's last entry falls
-in** — the period Tally is sitting in, and the only one it can answer instantly — and the
-same date is stored beside the figures as `openingAsOn`, with the postings counted from
-there. Stating it is what makes it honest: if Tally's period is not that day it
-recomputes, the request times out, and there are simply no openings — rather than a
-right-looking figure standing on the wrong day.
+**`OPENINGBALANCE` stands on the day the books begin,** and the request names no date at
+all. Naming one — any one, including the current period's own first day — makes Tally
+recompute every opening: 6,466 ledgers did not answer in two minutes, twice, and the
+grinding left Tally too busy to answer the voucher sync either. So the day is read off
+the company instead, from **`BOOKSFROM`**, and stored beside the figures as
+`openingAsOn`; the postings are counted from there.
+
+That it *is* the books date was established the hard way, and the wrong answer is worth
+keeping. A ledger read in Tally seemed to show ₹66,23,663 against a stored ₹67,56,324,
+and the difference was blamed on the current period — so the date was labelled 1 April
+2026 and a whole financial year of postings was dropped from every ledger at once. The
+report had simply been sitting on a period box nobody had looked at. Asked from 1 April
+2025, Tally answers **₹67,56,324** for that ledger — to the rupee what `OPENINGBALANCE`
+gives — and opening + every posting since then equals the closing balance Tally prints
+today. **Read the whole screen before believing one line of it; the period box is part of
+the answer.**
+
+Because the two halves meet at a date, they can also fail to meet: if the oldest voucher
+held is *later* than `openingAsOn`, whatever moved in between is in neither half and every
+party is understated at once. `/api/bills/audit` compares the two and says so
+(`opening.gap`) rather than letting a right-looking figure through.
 
 It is still a separate request, tried once, and a failure costs only the openings — the
 voucher sync must never wait on Tally's arithmetic again. The audit says plainly when no

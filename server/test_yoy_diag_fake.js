@@ -591,6 +591,22 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   assert(audBad.branches.kol.opening.asOn === null
     && /cannot be added to anything/.test(audBad.branches.kol.opening.note || ''),
     'and it says so, rather than handing back the openings alone dressed up as a balance');
+
+  // The opening stands on a day and the postings are counted from that same day. If the
+  // vouchers do not reach back that far, the months in between are in NEITHER half --
+  // every party understated at once, and nothing about the figure looks wrong. This is
+  // the shape of the bug that cost a whole financial year: a books date read one way,
+  // the postings counted from another.
+  mko.openingAsOn = '20150401';
+  const audGap = await get('/api/bills/audit?asOn=20260228');
+  assert(audGap.branches.kol.opening.gap === true
+    && /oldest kol voucher held/.test(audGap.branches.kol.opening.note || ''),
+    'an opening older than the oldest voucher held leaves a gap in NEITHER half, and it is said: '
+    + JSON.stringify(audGap.branches.kol.opening.note));
+  mko.openingAsOn = '20251007';
+  const audNoGap = await get('/api/bills/audit?asOn=20260228');
+  assert(audNoGap.branches.kol.opening.gap === false && !audNoGap.branches.kol.opening.note,
+    'while vouchers that do reach back to the opening day raise nothing, because there is no gap to report');
   mko.openingAsOn = '20251001';
 
   // Tally's Outstandings counts every ledger it keeps bill-by-bill, whatever group it
