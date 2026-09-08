@@ -1,4 +1,18 @@
+
 # CDC Dashboard Tools — CHANGELOG
+
+## v2.45 (server) — September 2026 — An opening dated 1 April IS the balance on 31 March
+
+`/diag/outstanding.html` tells you to press **the file's date** for the comparison that
+means something. Pressing it returned **zero for every party**.
+
+The openings stand on 1 April 2025 and the bills file was printed 31 March 2025 — the
+same instant, and the one date where the two sources can be put side by side at all. The
+code compared `openingAsOn <= asOn` and refused them by a single day, leaving a page full
+of zeroes that looked like an answer.
+
+An opening stands at the *start* of its day. It now applies from the day before, and the
+comparison the page recommends actually runs.
 
 ## v2.44 (pipeline) — September 2026 — Re-pull one window, without typing the token
 

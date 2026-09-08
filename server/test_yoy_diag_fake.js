@@ -609,6 +609,20 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
     'the SAME date twice is harmless and taken, opening and postings both: '
     + JSON.stringify([audDup.branches.kol.opening.asOn, cd && cd.balance]));
 
+  // An opening stands at the START of its day, which is the same instant as the END of
+  // the day before. Asked as at 30 September, an opening dated 1 October is the answer --
+  // refusing it returns ZERO for every party, and it returns it at exactly the date the
+  // page tells you to press: the bills file was printed the day before the openings
+  // stand on, the one date where the two sources can be put side by side at all.
+  const audEve = await get('/api/bills/audit?asOn=20250930');
+  const ce = audEve.branches.kol.balanceWorst.find((r) => r.party === 'Carbonlite Print & Publishing');
+  assert(audEve.branches.kol.balanceTotal !== 0 && ce && ce.balance === 50000,
+    'an opening dated the day AFTER the question is the answer to it, because that is the same instant: '
+    + JSON.stringify([audEve.branches.kol.balanceTotal, ce && ce.balance]));
+  const audBefore = await get('/api/bills/audit?asOn=20250929');
+  assert(audBefore.branches.kol.balanceTotal === 0,
+    'a day earlier than that it is not, because nothing yet stands on it');
+
   // Two DIFFERENT dates are a disagreement, and picking one would be a guess about
   // which day the money stands on. Refuse both rather than half-apply.
   mko.openingAsOn = ['20251001', '20260101'];
