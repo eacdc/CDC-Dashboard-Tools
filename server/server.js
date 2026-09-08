@@ -1372,8 +1372,15 @@ app.get('/api/yoy/diag', async (req, res) => {
       // Per ledger as well as in total. A customer under three spellings is one
       // customer here, but Tally is asked one ledger at a time -- and comparing our
       // sum of three against Tally's one is how two right answers look wrong.
-      const each = (ln, amt) => { balance.byLedger[ln] = Math.round(((balance.byLedger[ln] || 0) + amt) * 100) / 100; };
-      if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) { op += -mm.opening[ln]; each(ln, -mm.opening[ln]); }
+      // Per ledger, and split into its two halves. If a ledger disagrees with Tally,
+      // which half is wrong IS the diagnosis: a wrong opening means the master, a wrong
+      // postings figure means vouchers we do not hold. One number cannot say which.
+      const each = (ln, half, amt) => {
+        const e = balance.byLedger[ln] || (balance.byLedger[ln] = { opening: 0, postings: 0, total: 0 });
+        e[half] = Math.round((e[half] + amt) * 100) / 100;
+        e.total = Math.round((e.opening + e.postings) * 100) / 100;
+      };
+      if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) { op += -mm.opening[ln]; each(ln, 'opening', -mm.opening[ln]); }
       const match = { branch: br };
       if (from) match.date = { $gte: from };
       const rows2 = await db.collection('vouchers').aggregate([
@@ -1385,7 +1392,7 @@ app.get('/api/yoy/diag', async (req, res) => {
         { $match: { 'kv.k': { $in: [...all] } } },
         { $group: { _id: '$kv.k', sum: { $sum: '$kv.v' } } },
       ], { allowDiskUse: true }).toArray();
-      for (const r of rows2) { po += -r.sum; each(r._id, -r.sum); }
+      for (const r of rows2) { po += -r.sum; each(r._id, 'postings', -r.sum); }
       const r2 = (n) => Math.round(n * 100) / 100;
       balance.byBranch[br] = { openingAsOn: from, opening: r2(op), postings: r2(po), total: r2(op + po) };
       balance.opening = r2(balance.opening + op);

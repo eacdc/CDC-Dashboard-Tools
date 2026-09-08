@@ -314,10 +314,14 @@ const V = (branch, date, ledgers, party_ledgers, type) => ({
   // Per ledger too. A customer under three spellings is one customer here, but Tally
   // is asked one ledger at a time, and comparing our sum of three against Tally's one
   // is how two right answers look like a discrepancy.
-  assert(bal.byLedger && bal.byLedger['Carbonlite Print & Publishing'] === 61705 - 15064,
+  const cbl = bal.byLedger && bal.byLedger['Carbonlite Print & Publishing'];
+  assert(cbl && cbl.total === 61705 - 15064,
     'each ledger carries its own balance, so it can be put beside that one ledger in Tally: '
     + JSON.stringify(bal.byLedger));
-  assert(Object.values(bal.byLedger).reduce((a, v) => a + v, 0) === bal.total,
+  assert(cbl.opening === 0 && cbl.postings === 61705 - 15064,
+    'split into its two halves, because when a ledger disagrees with Tally, WHICH half is '
+    + 'wrong is the diagnosis: ' + JSON.stringify(cbl));
+  assert(Object.values(bal.byLedger).reduce((a, v) => a + v.total, 0) === bal.total,
     'and the per-ledger figures add up to the total shown, with nothing between them');
   assert(bal.byBranch.kol && bal.byBranch.kol.opening + bal.byBranch.kol.postings === bal.total,
     'and shows the two halves it is made of, so a wrong one can be told from the other: '

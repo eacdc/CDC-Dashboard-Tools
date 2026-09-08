@@ -1,5 +1,19 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.35 (server + diag) — September 2026 — Split each ledger into its two halves
+
+Checked one real ledger against Tally: `Vijay Shree Textiles Pvt Ltd -Howrah` closes at
+**₹69,60,996** in Tally against our **₹68,49,330** — within ₹1,11,666 on a ₹69 lakh
+balance, and a re-sync did not move it, so it is not a timing gap.
+
+There are only two candidates for a difference like that: a **wrong opening** (the
+ledger master) or **missing postings** (vouchers we do not hold). The page split those
+two halves for the party but not for each ledger, so it could not say which — while
+Tally is only ever asked one ledger at a time.
+
+Each ledger row now carries **Opening from Tally · Postings since · What it owes**. One
+look says which half to chase.
+
 ## v2.34 (server + diag) — September 2026 — Compare one ledger with one ledger
 
 The party check looked like a wild disagreement — ours ₹71,06,616 against the phone's

@@ -111,12 +111,19 @@
       var bl=(d.balance&&d.balance.byLedger)?d.balance.byLedger[l.name]:null;
       return '<tr><td class="mono">'+esc(l.name)+tags+'</td>'
         +'<td class="mono muted">'+esc(l.chain.join(' › '))+'</td>'
-        +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl))+'</td></tr>';
+        +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl.opening))+'</td>'
+        +'<td class="num">'+(bl==null?'<span class="muted">—</span>':rupees(bl.postings))+'</td>'
+        +'<td class="num"><b>'+(bl==null?'<span class="muted">—</span>':rupees(bl.total))+'</b></td></tr>';
     }).join('');
+    // The two halves, per ledger. When one disagrees with Tally, which half is wrong
+    // says where to look: the opening means the ledger master, the postings mean
+    // vouchers we do not hold.
     var note=d.ledgers.length>1
       ? '<div class="note"><b>'+d.ledgers.length+' separate ledgers</b> carry this name. Each page shows whichever of them has activity, so the same customer can look like different rows in different places. To make them one, use <b>🔗 Merge names</b> on the portal.'
       : '';
     return '<div class="scroll"><table><thead><tr><th>Ledger in Tally</th><th>Group it sits under</th>'
+      +'<th style="text-align:right">Opening from Tally</th>'
+      +'<th style="text-align:right">Postings since</th>'
       +'<th style="text-align:right">What it owes</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'+note;
   }
