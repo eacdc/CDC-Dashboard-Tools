@@ -16,9 +16,11 @@
       MONGODB_URI       Atlas connection string   (for the direct-loader path)
       CDC_INGEST_URL    e.g. https://cdc-api...   (for the hosted-API path)
       CDC_INGEST_TOKEN  shared secret token       (optional, with CDC_INGEST_URL)
-      CDC_TALLY_URL     e.g. http://127.0.0.1:9019 (which Tally to pull from; the
-                        default 9001 can belong to ANOTHER user's Tally on a shared
-                        or terminal-server box -- see SETUP.md)
+      CDC_TALLY_URL     pins ONE Tally to pull from. Left unset, ports 9019 and 9001
+                        are both probed and each company is pulled from whichever is
+                        actually serving it -- on a shared or terminal-server box the
+                        two branches often sit behind different ports, and 9001 can
+                        belong to another user's Tally entirely (see SETUP.md).
 
     RUN:  powershell -ExecutionPolicy Bypass -File .\run_daily.ps1
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -TrailingDays 7
@@ -27,10 +29,13 @@ param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
-    # Which Tally to pull from. On a shared/RDP machine port 9001 belongs to whichever
-    # instance started first -- possibly another user's -- so pin your own instance's
-    # port here or in CDC_TALLY_URL rather than trusting the default.
-    [string]$TallyUrl  = $(if ($env:CDC_TALLY_URL) { $env:CDC_TALLY_URL } else { "http://127.0.0.1:9001" }),
+    # Which Tally to pull from. Left alone, BOTH usual ports are probed and each
+    # company is pulled from whichever one is actually serving it -- on a shared or
+    # RDP box the two branches often sit behind different ports, and 9001 can belong
+    # to another user's Tally entirely. Pass -TallyUrl to pin one, or -TallyUrls to
+    # change the list. CDC_TALLY_URL still pins one, as before.
+    [string]$TallyUrl  = "",
+    [string]$TallyUrls = "http://127.0.0.1:9019,http://127.0.0.1:9001",
     [string]$IngestUrl   = $env:CDC_INGEST_URL,     # falls back to the env var
     [string]$IngestToken = $env:CDC_INGEST_TOKEN,
     [string]$Branches    = "kol,ahm"                # which branch(es) THIS machine syncs (e.g. "kol").
@@ -82,8 +87,52 @@ if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / 
 
 Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, (($syncBranches | ForEach-Object { $_.Branch }) -join ','))
 
+# ---- which Tally is serving which company? ---------------------------------
+# Asking beats assuming: the port a branch lives on moves about, and pulling from
+# the wrong one either returns nothing (the MinLedgers guard then refuses, as it
+# should) or, on a shared box, somebody else's books. TallyToJson does the lookup
+# -- one implementation, free to be right in one place -- and reports it as JSON.
+#
+# FIRST PORT WINS. A company open on both ports is the same company either way, so
+# it is pulled once, from whichever answered first.
+$urls = @()
+if ($TallyUrl) { $urls = @($TallyUrl) }                       # pinned: ask no further
+elseif ($env:CDC_TALLY_URL) { $urls = @($env:CDC_TALLY_URL) }
+else { $urls = @($TallyUrls -split '[,;\s]+' | Where-Object { $_ }) }
+
+$servedBy = @{}
+foreach ($u in $urls) {
+    $found = @()
+    try {
+        $raw = & powershell -ExecutionPolicy Bypass -File $extract -ListCompaniesJson -TallyUrl $u 2>$null
+        if ($raw) { $found = @($raw | ConvertFrom-Json) }
+    } catch { $found = @() }
+    if (-not $found -or $found.Count -eq 0) { Say ("  {0}: no company answered" -f $u); continue }
+    foreach ($r in $found) {
+        $nm = "$($r.Company)"
+        if (-not $nm) { continue }
+        if ($servedBy.ContainsKey($nm)) {
+            Say ("  {0}: also serves '{1}' -- already taken from {2}, pulling it once" -f $u, $nm, $servedBy[$nm])
+        } else {
+            $servedBy[$nm] = $u
+            Say ("  {0}: serves '{1}'" -f $u, $nm)
+        }
+    }
+}
+if ($servedBy.Count -eq 0) { throw ("No Tally answered on {0}. Is Tally open at 'Gateway of Tally', and is its port one of these? (F1 > Settings > Connectivity)" -f ($urls -join ', ')) }
+
+
 foreach ($b in $syncBranches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
+    # No port is serving this company, so there is nothing to pull. Skipping says so
+    # and leaves the other branch alone; pulling anyway would return an empty master
+    # and lean on the MinLedgers guard to stop it, which is a guard, not a plan.
+    if (-not $servedBy.ContainsKey($b.Company)) {
+        Say ("  not open on any of {0} -- skipped. Open it in Tally (Alt+F3 > Select Company) and re-run." -f ($urls -join ', '))
+        continue
+    }
+    $TallyUrl = $servedBy[$b.Company]
+    Say ("  pulling from {0}" -f $TallyUrl)
     try {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `

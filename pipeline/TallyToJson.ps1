@@ -68,6 +68,8 @@ param(
     [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
                                          #   instead of replacing the live one (see run_backfill.ps1)
     [switch]$ListCompanies,              # print the companies this Tally knows about, then exit
+    [switch]$ListCompaniesJson,          # the same, as JSON on stdout and nothing else, so a
+                                         #   caller can decide which port serves which company
     [switch]$Reset,                      # wipe this branch over -FromDate..-ToDate in MongoDB before
                                          #   pushing. Use after the WRONG company was pulled into a
                                          #   branch: those vouchers carry the other company's GUIDs,
@@ -638,7 +640,7 @@ function CompField($node, [string]$field) {
 # machine the port can belong to a DIFFERENT Tally instance (another user's
 # session), and then "company not loaded" is true but points at the wrong thing.
 # Naming the companies that Tally DOES have open makes that obvious immediately.
-function Get-OpenCompanyRows {
+function Get-OpenCompanyRows([int]$Attempts = 5, [int]$TimeoutSec = 180) {
     $companyPayload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
@@ -656,7 +658,7 @@ function Get-OpenCompanyRows {
   </DESC></BODY>
 </ENVELOPE>
 "@
-    $rawXml = Post-Tally $companyPayload
+    $rawXml = Post-Tally $companyPayload $Attempts $TimeoutSec
     $script:CompaniesRawPath = Join-Path $OutDir "companies_raw.xml"
     [System.IO.File]::WriteAllText($script:CompaniesRawPath, $rawXml, (New-Object System.Text.UTF8Encoding($false)))
     [xml]$cx = $rawXml
@@ -677,6 +679,18 @@ function Get-OpenCompanyRows {
     return ,$rows
 }
 
+if ($ListCompaniesJson) {
+    # The same discovery, as data. run_daily uses it to find out which Tally is
+    # serving which company, so it can pull each one from exactly one port -- and
+    # a second implementation of this lookup, free to drift from the first, is
+    # exactly what should not exist.
+    $rows = @()
+    # One attempt, short: a caller probing several ports must not spend fourteen
+    # seconds of retries discovering that nothing is listening on one of them.
+    try { $rows = Get-OpenCompanyRows 1 10 } catch { $rows = @() }
+    Write-Output (ConvertTo-Json @($rows) -Compress -Depth 4)
+    return
+}
 if ($ListCompanies) {
     $rows = Get-OpenCompanyRows
     $rawPath = $script:CompaniesRawPath

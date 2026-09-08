@@ -258,6 +258,31 @@ Open the dashboard (`/consolidated/` or `/projected/`), keep the default
 
 ---
 
+## Which port serves which company
+
+`run_daily.ps1` does not assume. Left alone it probes **both usual ports** - 9019 and
+9001 - asks each which companies it has open, and pulls every company from whichever
+port is actually serving it. On a shared or terminal-server box the two branches often
+sit behind different ports, and 9001 can belong to another user's Tally entirely.
+
+```
+[09:57:00] http://127.0.0.1:9019: serves 'CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26'
+[09:57:01] http://127.0.0.1:9001: serves 'CDC PRINTERS 2025-26'
+[09:57:01] --- branch kol (CDC PRINTERS 2025-26) ---
+[09:57:01]   pulling from http://127.0.0.1:9001
+```
+
+**A company open on both ports is pulled once**, from whichever answered first - it is
+the same company either way. A company open on neither is **skipped** with a line
+saying so, rather than pulled from the wrong place and stopped by the MinLedgers guard.
+
+Pin one port with `-TallyUrl` or `CDC_TALLY_URL` and no probing happens. Change the
+list with `-TallyUrls "http://127.0.0.1:9019,http://127.0.0.1:9002"`.
+
+The lookup itself lives in `TallyToJson.ps1 -ListCompaniesJson`, which prints the same
+companies `-ListCompanies` shows, as JSON and nothing else. One implementation, so the
+two can never disagree about what is open.
+
 ## "Unable to connect to the remote server" - and Tally hangs
 
 `netstat -ano | findstr :9019` tells you which of two very different things is wrong.
