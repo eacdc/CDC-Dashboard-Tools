@@ -1,5 +1,25 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.36 (pipeline) — September 2026 — Ask Tally which day the opening stands on
+
+Measured on `Vijay Shree Textiles Pvt Ltd -Howrah`, whose books open 1 April 2025: Tally
+answered `OPENINGBALANCE` = **₹66,23,663**, which is not the balance on 1 April 2025 at
+all — it is the balance on **1 April 2026**, the first day of the company's *current
+period*.
+
+We stored it labelled 1 April 2025 and then added postings from 1 April 2025, so FY
+2025-26 was counted **twice**, for all 1,027 Kolkata ledgers at once. On that ledger the
+year's movement was −₹1,11,666, which is exactly the amount we came out short against
+Tally's closing balance.
+
+`SVFROMDATE` is now set to the company's books date and the **same** date is stored with
+the figures, so the label cannot disagree with what was asked. A company whose books date
+Tally will not give is skipped entirely: an opening balance whose day is a guess is worse
+than none. Asking for the books date costs nothing — at the beginning of books the
+opening is the stored master figure, with nothing to compute.
+
+**Re-sync both branches**: openings already in the database carry the wrong date.
+
 ## v2.35 (server + diag) — September 2026 — Split each ledger into its two halves
 
 Checked one real ledger against Tally: `Vijay Shree Textiles Pvt Ltd -Howrah` closes at

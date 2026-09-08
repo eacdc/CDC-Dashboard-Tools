@@ -795,13 +795,35 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # The vouchers supply the postings. The opening supplies what was already owed before
 # the oldest voucher we hold, which no amount of adding vouchers up can recover.
 #
-# Asked WITHOUT SVFROMDATE/SVTODATE on purpose: bounded by dates Tally would compute
-# the figure instead of reading it, and we would be back to the five minutes. What
-# comes back is the balance as at the company's own beginning of books, which is what
-# openingAsOn below records.
+# ASK FOR THE DATE. Left to itself, OPENINGBALANCE comes back as at the start of the
+# company's CURRENT PERIOD, not the beginning of its books -- measured: a ledger whose
+# books open 1-Apr-2025 answered 66,23,663, which is its balance on 1-Apr-2026, the
+# current period's first day. Labelling that as the books date and then adding postings
+# from the books date counts a whole financial year TWICE, for every ledger at once.
+#
+# So the date is stated, and the same date is stored beside the figures. Asking for the
+# books date costs nothing extra: at the beginning of books the opening is the stored
+# master figure, with nothing to compute.
 $ledgerOpening = @{}
+# The date FIRST: it goes into the request, so a date we cannot establish means we do
+# not ask at all. An opening balance whose day is a guess is worse than none.
 $openingAsOn = ""
-if ($ledgerToGroup.Count -ge $MinLedgers) {
+try {
+    $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
+    if ($me) {
+        # ONE date, as a string. Tally can answer a field twice (attribute and element
+        # both), which makes this an array -- and an array travels all the way to Mongo,
+        # where a date field compared against one matches no voucher at all and every
+        # posting silently vanishes from the balance.
+        $d = if ($me.Books) { $me.Books } else { $me.From }
+        $openingAsOn = "$(@($d)[0])".Trim()
+        if ($openingAsOn -notmatch '^\d{8}$') { $openingAsOn = "" }
+    }
+} catch { }
+if (-not $openingAsOn) {
+    Write-Warning "  Openings: skipped -- Tally did not say when this company's books begin, and an opening balance without its day cannot be added to anything."
+}
+if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
     $openPayload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
@@ -810,6 +832,8 @@ if ($ledgerToGroup.Count -ge $MinLedgers) {
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+      <SVFROMDATE>$openingAsOn</SVFROMDATE>
+      <SVTODATE>$openingAsOn</SVTODATE>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerOpening" ISMODIFY="No">
@@ -832,27 +856,7 @@ if ($ledgerToGroup.Count -ge $MinLedgers) {
             $ob = ToAmount (xval $l.OPENINGBALANCE)
             if ($ob -ne 0) { $ledgerOpening[$on] = $ob }
         }
-        # The date they are AS AT: the company's own beginning of books. An opening
-        # balance without the day it stands on cannot be added to anything.
-        try {
-            $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
-            # ONE date, as a string. Tally can answer a field twice (attribute and
-            # element both), which makes this an array -- and an array travels all
-            # the way to Mongo, where a date field compared against one matches no
-            # voucher at all and every posting silently vanishes from the balance.
-            if ($me) {
-                $d = if ($me.Books) { $me.Books } else { $me.From }
-                $openingAsOn = "$(@($d)[0])".Trim()
-                if ($openingAsOn -notmatch '^\d{8}$') { $openingAsOn = "" }
-            }
-        } catch { }
-        if ($openingAsOn) {
-            Write-Host ("  Openings: {0} ledgers carry one, as at {1}" -f $ledgerOpening.Count, $openingAsOn)
-        } else {
-            # Without the date they are not usable, so they are not sent at all.
-            Write-Warning ("  Openings: {0} read, but Tally did not say when the books begin -- not sent." -f $ledgerOpening.Count)
-            $ledgerOpening = @{}
-        }
+        Write-Host ("  Openings: {0} ledgers carry one, as at {1}" -f $ledgerOpening.Count, $openingAsOn)
     } catch {
         Write-Warning ("  Ledger openings not fetched: {0}" -f $_.Exception.Message)
         Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
