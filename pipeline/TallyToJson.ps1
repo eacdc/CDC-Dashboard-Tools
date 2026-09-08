@@ -795,23 +795,25 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # The vouchers supply the postings. The opening supplies what was already owed before
 # the oldest voucher we hold, which no amount of adding vouchers up can recover.
 #
-# ASK FOR THE DATE TALLY ALREADY HAS. Two things are measured here, and both matter.
+# WHAT DAY THE OPENING STANDS ON, WITHOUT ASKING TALLY TO COMPUTE ANYTHING.
 #
-# Left to itself, OPENINGBALANCE comes back as at the start of the company's CURRENT
-# PERIOD, not the beginning of its books: a ledger whose books open 1-Apr-2025 answered
-# 66,23,663, which is its balance on 1-Apr-2026. Labelling that with the books date and
-# adding postings from the books date counts a whole financial year TWICE, for every
-# ledger at once.
+# Three things are measured, and together they leave exactly one way to do this.
 #
-# But asking for the books date instead does not work either -- Tally then has to
-# recompute every opening from the start of the books, and 6,466 ledgers did not answer
-# in two minutes. The period it already holds is the only one it can answer instantly.
+#   1. Left to itself, OPENINGBALANCE comes back as at the start of the company's
+#      CURRENT PERIOD, not the beginning of its books: a ledger whose books open
+#      1-Apr-2025 answered 66,23,663, which is its balance on 1-Apr-2026. Treating that
+#      as the books-date opening and adding postings from the books date counts a whole
+#      financial year TWICE, for every ledger at once.
+#   2. Naming ANY date makes Tally recompute -- even the current period's own first day.
+#      6,466 ledgers did not answer in two minutes, either time.
+#   3. Two minutes of grinding leaves Tally too busy to answer what comes next, so the
+#      attempt took the VOUCHER SYNC down with it. That is the worst outcome available.
 #
-# So the current period's first day is worked out (1 April of the financial year the
-# company's last entry falls in), stated in the request, and stored beside the figures.
-# Stating it is what makes it honest: if Tally's period is NOT that day, it recomputes,
-# the request times out, and we get no openings -- rather than a right-looking figure
-# standing on the wrong day.
+# So: no date in the request, which is instant, and the date is DERIVED -- 1 April of
+# the financial year the company's last entry falls in. Derived, not stated, so it is
+# recorded as such and the dashboards say so rather than presenting it as Tally's word.
+# The timeout is short for the same reason as (3): this must never be able to wedge the
+# sync again.
 $ledgerOpening = @{}
 # The date FIRST: it goes into the request, so a date we cannot establish means we do
 # not ask at all. An opening balance whose day is a guess is worse than none.
@@ -848,8 +850,6 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
-      <SVFROMDATE>$openingAsOn</SVFROMDATE>
-      <SVTODATE>$openingAsOn</SVTODATE>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerOpening" ISMODIFY="No">
@@ -860,10 +860,12 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
   </DESC></BODY>
 </ENVELOPE>
 "@
-    # Its own request, tried once, with a failure costing only the openings -- the
-    # voucher sync must never wait on this again.
+    # Its own request, tried ONCE with a short timeout. Undated it answers in about a
+    # second, so anything slower means Tally is computing something we did not ask for,
+    # and the right move is to give up at once rather than grind it into a state where
+    # the voucher sync cannot get an answer either.
     try {
-        [xml]$ox = Post-Tally $openPayload 1 120
+        [xml]$ox = Post-Tally $openPayload 1 30
         foreach ($l in $ox.SelectNodes("//LEDGER")) {
             $on = xval $l.NAME; if (-not $on) { continue }
             # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
@@ -872,7 +874,7 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
             $ob = ToAmount (xval $l.OPENINGBALANCE)
             if ($ob -ne 0) { $ledgerOpening[$on] = $ob }
         }
-        Write-Host ("  Openings: {0} ledgers carry one, as at {1}" -f $ledgerOpening.Count, $openingAsOn)
+        Write-Host ("  Openings: {0} ledgers carry one, as at {1} (derived: Tally is not asked, because asking makes it recompute)" -f $ledgerOpening.Count, $openingAsOn)
     } catch {
         Write-Warning ("  Ledger openings not fetched: {0}" -f $_.Exception.Message)
         Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
@@ -960,7 +962,8 @@ foreach ($ln in ($ledgerOpening.Keys | Sort-Object)) { $mOpening[$ln] = $ledgerO
 # The date is stored WITH the balances: a balance without the day it was struck on
 # is not a fact anyone can use, and each company here covers one financial year.
 $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds;
-                         opening = $mOpening; openingAsOn = $openingAsOn }
+                         opening = $mOpening; openingAsOn = $openingAsOn;
+                         openingAsOnDerived = $true }
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.

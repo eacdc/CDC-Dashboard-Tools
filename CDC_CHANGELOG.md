@@ -1,5 +1,27 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.38 (pipeline + server + diag) — September 2026 — Derive the date, and say that it is derived
+
+Naming the current period's own first day timed out too, and the two minutes of Tally
+grinding then took the **voucher sync** down with it — the worst outcome available, and
+caused by a request that only affects a reporting nicety. Three measurements, and
+together they leave one way to do this:
+
+1. Undated, `OPENINGBALANCE` is the balance at the start of the company's **current
+   period** — measured against Tally's own ledger screen, to the rupee.
+2. Naming **any** date makes Tally recompute; 6,466 ledgers did not answer in two
+   minutes, twice.
+3. That grinding leaves Tally unable to answer what comes next.
+
+So the request carries no date and is instant, the date is **derived** (1 April of the
+financial year the company's last entry falls in), and it is recorded and displayed as
+derived — `openingAsOnDerived`, and the comparison page says so in words. A worked-out
+date presented as Tally's word is exactly how a whole year gets counted twice.
+
+The timeout drops from 120s to 30s for the same reason as (3): undated answers in about a
+second, so anything slower means Tally is computing something we did not ask for, and the
+right move is to give up before it wedges the sync.
+
 ## v2.37 (pipeline) — September 2026 — Ask for the period Tally already holds
 
 Asking for the books date (v2.36) does not work: Tally recomputes every opening from the

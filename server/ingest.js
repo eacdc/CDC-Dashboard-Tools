@@ -181,6 +181,10 @@ async function masterSet(db, branch, master, mode) {
   if (master.opening && typeof master.opening === 'object') {
     set.opening = master.opening;
     set.openingAsOn = master.openingAsOn || null;
+    // Tally will not say which day its opening balances stand on without recomputing
+    // every one of them, so the pipeline works the day out instead. Recorded as derived
+    // rather than quietly presented as Tally's word.
+    set.openingAsOnDerived = !!master.openingAsOnDerived;
   }
   return set;
 }
@@ -199,6 +203,7 @@ function readMaster(doc) {
     closingAsOn: doc.closingAsOn || null,
     opening: doc.opening || null,
     openingAsOn: doc.openingAsOn || null,
+    openingAsOnDerived: !!doc.openingAsOnDerived,
     updatedAt: doc.updatedAt || null,
   };
 }
