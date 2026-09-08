@@ -250,6 +250,25 @@ Task Scheduler → Create Basic Task → Daily (e.g. 2:00 AM) → Action: *Start
 → `...\pipeline\run_daily.bat`. Optional arg `-TrailingDays 7` re-pulls the last
 week so edits to recent vouchers are caught. Logs land in `pipeline\logs\`.
 
+### Re-pulling one window, however far back
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -From 20260101 -To 20260331
+```
+
+The daily incremental sync only revisits what Tally reports as **changed since the last
+run**. An edit that slipped past once is therefore never looked at again — and that is
+what leaves one stale voucher sitting in an otherwise perfect ledger. `-From`/`-To`
+re-reads those days in full and overwrites each stored voucher with what Tally holds now.
+It runs through this script on purpose, so the token stays in the environment instead of
+being typed into a command line.
+
+It only **adds and overwrites**. A voucher Tally has since deleted is removed by the daily
+sync's own reconcile, not by this. Nothing outside the window is touched either way.
+
+`/diag/ledger.html` is how you find out a window needs it: export the disputed ledger out
+of Tally, and the page names the vouchers that differ.
+
 ## D. View it
 
 Open the dashboard (`/consolidated/` or `/projected/`), keep the default
