@@ -1,5 +1,25 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.44 (pipeline) — September 2026 — Re-pull one window, without typing the token
+
+`run_daily.ps1 -From 20260101 -To 20260331` re-reads those days in full and overwrites
+each stored voucher with what Tally holds now.
+
+The first thing `/diag/ledger.html` found needed exactly this. `Vijay Shree Textiles Pvt
+Ltd -Howrah`: 327 of 328 vouchers agreeing to the rupee, and the whole ₹20,995 difference
+in two of them — a journal of ₹2,428 Tally has and we never received, and a ₹23,423 sale
+we hold that Tally's ledger no longer shows.
+
+Neither was going to fix itself. The incremental sync only revisits what Tally reports as
+**changed since the last run**, so an edit that slipped past once is never looked at
+again — the daily sync had run that morning and left both exactly as they were.
+
+It goes through this script so the token stays in the environment where it belongs,
+instead of being typed into a command line. It only adds and overwrites: a voucher Tally
+has since deleted is removed by the daily sync's own reconcile, not by this, and nothing
+outside the window is touched either way. Passing a window turns the incremental sync off
+for that run — asking what changed is what missed those days in the first place.
+
 ## v2.43 (diag, server) — September 2026 — One ledger, against Tally's own export
 
 New page: **`/diag/ledger.html`**. Export one ledger out of Tally (Alt+F2 for the period,

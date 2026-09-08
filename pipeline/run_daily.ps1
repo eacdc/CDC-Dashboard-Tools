@@ -24,9 +24,18 @@
 
     RUN:  powershell -ExecutionPolicy Bypass -File .\run_daily.ps1
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -TrailingDays 7
+          powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -From 20260101 -To 20260331
+                                                  ^ re-pull one window in full, however far back
 #>
 param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
+    # Re-pull ONE window, however far back, as YYYYMMDD. The incremental sync only ever
+    # revisits what Tally reports as changed SINCE the last run, so an edit that slipped
+    # past once is never looked at again -- and the only cure is to pull those days in
+    # full. Doing that through this script means the token stays in the environment
+    # where it belongs, instead of being typed into a command line.
+    [string]$From = "",
+    [string]$To   = "",
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
     # Which Tally to pull from. Left alone, BOTH usual ports are probed and each
@@ -73,6 +82,17 @@ $to   = (Get-Date)
 $from = $to.AddDays(-1 * [math]::Max(0, $TrailingDays - 1))
 $FromDate = $from.ToString('yyyyMMdd')
 $ToDate   = $to.ToString('yyyyMMdd')
+# A named window replaces the trailing one, and turns the incremental sync off for this
+# run: asking Tally what CHANGED is exactly what missed these days in the first place.
+$Rescan = $false
+if ($From -or $To) {
+    if ($From -notmatch '^\d{8}$' -or $To -notmatch '^\d{8}$') {
+        throw "-From and -To must BOTH be given as YYYYMMDD (e.g. -From 20260128 -To 20260331)."
+    }
+    if ($To -lt $From) { throw "-To ($To) is before -From ($From)." }
+    $FromDate = $From; $ToDate = $To; $Rescan = $true
+    if ($Incremental) { $Incremental = $false }
+}
 
 # Decide push path once.
 $ingestUrl   = $IngestUrl
@@ -86,6 +106,13 @@ $mode = if ($ingestUrl) { 'api' } elseif ($hasNode -and $mongoUri) { 'loader' } 
 if ($Incremental -and -not $ingestUrl) { Say "Incremental requires -IngestUrl / CDC_INGEST_URL; falling back to full pull."; $Incremental = $false }
 
 Say ("run_daily start  range {0}..{1}  mode={2}  incremental={3}  branches={4}" -f $FromDate, $ToDate, $mode, [bool]$Incremental, (($syncBranches | ForEach-Object { $_.Branch }) -join ','))
+if ($Rescan) {
+    Say ("  RESCAN of {0}..{1} in full -- every voucher Tally holds in those days is re-read, and each one" -f $FromDate, $ToDate)
+    Say  "  overwrites the stored copy. That is what fixes a voucher edited before the sync started watching:"
+    Say  "  the incremental sync only ever revisits what CHANGED since the last run, so it never looks again."
+    Say  "  It only ADDS and OVERWRITES. A voucher Tally has since deleted is removed by the daily sync's own"
+    Say  "  reconcile, not by this, and nothing outside the window is touched either way."
+}
 
 # ---- which Tally is serving which company? ---------------------------------
 # Asking beats assuming: the port a branch lives on moves about, and pulling from
