@@ -1,5 +1,33 @@
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.43 (diag, server) — September 2026 — One ledger, against Tally's own export
+
+New page: **`/diag/ledger.html`**. Export one ledger out of Tally (Alt+F2 for the period,
+F1 for Detailed, Alt+E → Current → Excel), drop the file on the page, and it puts the two
+lists of vouchers side by side and **names the ones that differ** — in Tally but not
+ours, ours but not Tally's, and the ones both hold at different amounts. Matched by
+voucher number, which both sides carry. The file is read in the browser; nothing is
+uploaded or stored.
+
+A total agreeing proves little and a total disagreeing says nothing about where. This
+says where.
+
+Three things the export makes you get right, and each is pinned by a test:
+
+- The **period comes off the letterhead**, not the date boxes — comparing over a wider
+  window than the export reports every voucher outside it as ours alone.
+- The **closing balance is the balancing entry**, so Tally prints it on the opposite
+  side: taken at face value a customer who owes us money reads as owing nothing.
+- The **columns are found by their header words**, never by position, because Tally
+  moves them between versions.
+
+`/api/yoy/vouchers` gained **`exact=1`**: answer for that ledger alone, without the merged
+spellings. Tally prints one ledger at a time, and our sum of three beside its one is a
+discrepancy that is not there.
+
+The parser is lifted out of the page by regex and tested where it lives (`npm run
+test:export`), the same way `plEngine.js` lifts the dashboard's accounting.
+
 ## v2.42 (server, diag) — September 2026 — A balance is struck on a day
 
 `/diag/?` added up every posting a party had, including vouchers dated **after today** —

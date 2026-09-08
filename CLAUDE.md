@@ -31,6 +31,7 @@ npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
 npm run test:alias             # party name-merge suggestions
+npm run test:export            # reading Tally's own ledger export (/diag/ledger.html)
 npm run test:backfill          # historical (--historical) pushes
 
 node test_sync_guards_fake.js  # any single suite runs standalone
@@ -201,6 +202,12 @@ missing bill.
 **The CSV stays as a backup, never a fallback.** It is a record of what Tally said on
 31 March 2025; nothing computes a figure from it once the vouchers do, and no code
 path may return to it when a number looks wrong. A disagreeing number is a bug.
+
+`/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
+page names the vouchers that differ, by number. Reach for it the moment a party's balance
+is disputed — a total disagreeing says nothing about where, and hunting a decade of
+vouchers by hand is not a plan. Its parser is lifted out of the page by regex and tested
+(`npm run test:export`); renaming `readExport` fails that suite by name, deliberately.
 
 When a figure is questioned, reach for `/diag/?` before theorising: it names the
 ledgers behind one party, what the fold stored, and what it did with every voucher.

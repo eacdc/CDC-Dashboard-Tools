@@ -1482,7 +1482,12 @@ app.get('/api/yoy/vouchers', async (req, res) => {
     const match = { date: { $gte: from, $lte: to } };
     if (branch !== 'all') match.branch = branch;
     const db = await getDb();
-    const names = aliasVariants(await readAliasMap(db), ledger);
+    // Every spelling merged into this name, because the vouchers keep whatever was
+    // typed at the time. EXCEPT when the caller is holding one ledger's own report out
+    // of Tally: Tally is asked one ledger at a time, so our sum of three spellings put
+    // beside its one is a discrepancy that is not there.
+    const exact = String(req.query.exact || '') === '1';
+    const names = exact ? [ledger] : aliasVariants(await readAliasMap(db), ledger);
     const rows = await db.collection('vouchers').aggregate([
       { $match: match },
       { $addFields: { _k: { $concatArrays: [
@@ -1508,7 +1513,7 @@ app.get('/api/yoy/vouchers', async (req, res) => {
       r.amount = Math.round(amt * 100) / 100;
       delete r.ledgers; delete r.party_ledgers;
     }
-    res.json({ ledger, branch, from, to, names, count: rows.length, truncated, vouchers: rows });
+    res.json({ ledger, branch, from, to, names, exact, count: rows.length, truncated, vouchers: rows });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
