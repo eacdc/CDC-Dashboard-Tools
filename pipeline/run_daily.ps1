@@ -26,6 +26,14 @@
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -TrailingDays 7
           powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -From 20260101 -To 20260331
                                                   ^ re-pull one window in full, however far back
+          powershell -ExecutionPolicy Bypass -File .\run_daily.ps1 -Incremental -Sweep
+                                                  ^ run this week's full sweep now, without waiting
+
+    THE WEEKLY SWEEP. With -Incremental, every 7th day (-SweepDays) the run is followed
+    by a FULL re-read of the whole scan window. The incremental sync asks Tally what
+    changed since the last run, so an edit it was never told about is invisible to it for
+    ever; the sweep consults no ALTERID and so has nothing to hide behind. It only adds
+    and overwrites -- deletions are the incremental's reconcile, which runs first.
 #>
 param(
     [int]$TrailingDays = 1,                         # full mode: 1 = today only; 7 = re-pull last week
@@ -38,6 +46,11 @@ param(
     # case-insensitive, so such a local IS this parameter -- see $dtFrom / $dtTo later.
     [string]$From = "",
     [string]$To   = "",
+    # The weekly sweep. Every N days the incremental run is followed by a FULL re-read of
+    # the whole scan window, because the incremental's blind spot is exactly an edit it
+    # was never told about. 0 turns it off; -Sweep forces one now.
+    [int]$SweepDays = 7,
+    [switch]$Sweep,
     [switch]$Incremental,                           # ALTERID sync (recommended): catches backdated + deletions
     [string]$SyncFromDate = "20250401",             # incremental: earliest date to scan for changes
     # Which Tally to pull from. Left alone, BOTH usual ports are probed and each
@@ -209,12 +222,14 @@ foreach ($b in $syncBranches) {
     }
     $TallyUrl = $servedBy[$b.Company]
     Say ("  pulling from {0}" -f $TallyUrl)
+    $incOk = $false
     try {
         if ($Incremental) {
             & powershell -ExecutionPolicy Bypass -File $extract `
                 -Incremental -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
                 -TallyUrl $TallyUrl -OutDir $outDir `
                 -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
+            $incOk = ($LASTEXITCODE -eq 0)
         }
         elseif ($mode -eq 'api') {
             & powershell -ExecutionPolicy Bypass -File $extract `
@@ -231,6 +246,52 @@ foreach ($b in $syncBranches) {
                 & node $loader --dir $outDir --branch $b.Branch 2>&1 | ForEach-Object { Say $_ }
             } else {
                 Say "WARN: no CDC_INGEST_URL and no Node+MONGODB_URI - JSON written but NOT pushed."
+            }
+        }
+        # ---- the weekly sweep --------------------------------------------------
+        # The incremental sync asks Tally what changed SINCE THE LAST RUN, and that is
+        # its blind spot: an edit whose ALTERID was already below the mark -- one that
+        # slipped past on a dropped connection, or happened before this branch was ever
+        # synced -- is never looked at again. It cost a 23,423 sale and a 2,428 journal
+        # on ONE ledger, found only because somebody exported that ledger by hand.
+        #
+        # So once a week the whole scan window is re-read in full and every voucher
+        # overwritten with what Tally holds now. ALTERID is not consulted, so there is
+        # nothing for an edit to hide behind.
+        #
+        # It ADDS and OVERWRITES only. A voucher Tally has since DELETED is removed by
+        # the incremental's own reconcile, which runs first, every day.
+        # Only after a sync that worked. If the incremental just failed, Tally or the
+        # server is unreachable and a full re-read of seventeen months will fail too --
+        # slowly, and for the same reason.
+        if ($Incremental -and $incOk -and $SweepDays -gt 0 -and -not $Rescan) {
+            $stamp = Join-Path $logDir ("sweep_{0}.txt" -f $b.Branch)
+            $last  = ""
+            if (Test-Path $stamp) { $last = (Get-Content $stamp -First 1).Trim() }
+            # Counted in days elapsed, not "is it Sunday": this machine is not always on,
+            # and a sweep skipped because the box was off that night would wait a week.
+            $age = 9999
+            if ($last -match '^\d{8}$') {
+                $lastDt = [datetime]::ParseExact($last, 'yyyyMMdd', $null)
+                $age = [int]((Get-Date).Date - $lastDt.Date).TotalDays
+            }
+            if ($Sweep -or $age -ge $SweepDays) {
+                Say ("  --- weekly sweep: re-reading {0}..{1} in full ({2}) ---" -f $SyncFromDate, $ToDate,
+                     $(if ($Sweep) { "asked for with -Sweep" } elseif ($last) { "$age days since $last" } else { "never swept" }))
+                Say  "  This is the ONLY thing that catches a voucher edited before the sync started watching."
+                & powershell -ExecutionPolicy Bypass -File $extract `
+                    -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
+                    -TallyUrl $TallyUrl -OutDir $outDir `
+                    -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
+                # The date is recorded ONLY when the pull actually reached Mongo. A sweep
+                # that failed and still ticked itself off is worse than no sweep at all:
+                # it would wait another week before trying again, with the hole intact.
+                if ($LASTEXITCODE -eq 0) {
+                    Set-Content -Path $stamp -Value (Get-Date).ToString('yyyyMMdd') -Encoding ASCII
+                    Say ("  sweep done; next one in {0} days." -f $SweepDays)
+                } else {
+                    Say ("  sweep FAILED (exit {0}) -- not recorded, so the next run tries again." -f $LASTEXITCODE)
+                }
             }
         }
     } catch {

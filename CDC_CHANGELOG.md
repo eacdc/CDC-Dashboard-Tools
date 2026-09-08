@@ -1,6 +1,28 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.50 (pipeline) — September 2026 — A weekly sweep, because the incremental has a blind spot
+
+The daily incremental sync asks Tally *what changed since the last run*. An edit it was
+never told about — slipped past on a dropped connection, or made before the branch was
+first synced — carries an ALTERID below the mark and is **invisible to it for ever**.
+It cost a ₹23,423 sale and a ₹2,428 journal on `Vijay Shree Textiles Pvt Ltd -Howrah`,
+found only because somebody exported that ledger by hand and compared it.
+
+So with `-Incremental`, **every 7th day the run is now followed by a full re-read of the
+whole scan window**. No ALTERID is consulted, so an edit has nothing to hide behind.
+Nothing to schedule — it rides on the existing daily task.
+
+- Adds and overwrites only; deletions stay the incremental's reconcile, which runs first.
+- Counted in **days elapsed**, not "is it Sunday": the box is not always on, and a sweep
+  missed that night would wait another week.
+- Recorded **only when the pull reached Mongo**. `TallyToJson.ps1` now exits 3 on any push
+  failure, not just a historical one — a sweep that failed and ticked itself off anyway
+  would wait a week with the hole intact.
+- `-SweepDays 14` / `-SweepDays 0` / `-Sweep` to change, disable, or force it.
+
+The weekly run takes considerably longer than the other six.
+
 ## v2.49 (server) — September 2026 — Merging a ledger has to actually bring its money back
 
 Merging an old ledger into its current name is the whole remedy for a ledger no master

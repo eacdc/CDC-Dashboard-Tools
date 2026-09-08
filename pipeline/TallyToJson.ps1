@@ -1161,9 +1161,12 @@ if ($IngestUrl) {
         }
     }
     if (-not $failed) { Write-Host ("  Ingest OK: {0} vouchers in {1} chunk(s)." -f $sent, $chunks) }
-    # A back-fill year that never reached Mongo must not look like a success, or
-    # run_backfill.ps1 would tick it off and leave a silent hole in the history.
-    if ($failed -and $Historical) { exit 3 }
+    # A pull that never reached Mongo must not look like a success. It was already so
+    # for a back-fill year -- run_backfill.ps1 would tick the year off and leave a silent
+    # hole in the history -- and it is so for every pull now, because run_daily's weekly
+    # sweep records the date it last swept and would record one that did not happen.
+    # A caller that ignores the exit code is unaffected; one that trusts it can.
+    if ($failed) { exit 3 }
 } else {
     Write-Host "No -IngestUrl given: files written locally only."
     if ($Historical) {

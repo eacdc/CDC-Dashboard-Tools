@@ -250,6 +250,30 @@ Task Scheduler → Create Basic Task → Daily (e.g. 2:00 AM) → Action: *Start
 → `...\pipeline\run_daily.bat`. Optional arg `-TrailingDays 7` re-pulls the last
 week so edits to recent vouchers are caught. Logs land in `pipeline\logs\`.
 
+### The weekly sweep (automatic)
+
+With `-Incremental`, every 7th day the run is followed by a **full re-read of the whole
+scan window** (`-SyncFromDate`..today). Nothing to schedule: it rides on the daily task.
+
+Why it exists: the incremental sync asks Tally *what changed since the last run*. An edit
+it was never told about — one that slipped past on a dropped connection, or happened
+before the branch was first synced — has an ALTERID below the mark and is **invisible to
+it for ever**. That cost a ₹23,423 sale and a ₹2,428 journal on one ledger, found only
+because somebody exported that ledger by hand. The sweep consults no ALTERID, so an edit
+has nothing to hide behind.
+
+- It only **adds and overwrites**. Deletions are the incremental's own reconcile, which
+  runs first, every day.
+- Counted in **days elapsed**, not "is it Sunday" — this machine is not always on, and a
+  sweep missed because the box was off would wait another week.
+- The date is recorded **only when the pull reached Mongo**. A sweep that failed and
+  ticked itself off anyway is worse than none: it would wait a week with the hole intact.
+- `-SweepDays 14` changes the interval, `-SweepDays 0` turns it off, `-Sweep` runs one now.
+- The stamp lives in `pipeline\logs\sweep_<branch>.txt`. Delete it to force a sweep.
+
+It is a long pull — seventeen months of vouchers for Kolkata — so expect the weekly run
+to take considerably longer than the other six.
+
 ### Re-pulling one window, however far back
 
 ```powershell
