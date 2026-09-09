@@ -1,6 +1,25 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.51 (server, portal) — September 2026 — The Sales Analysis tab arrives with its figures
+
+Opening **Sales Analysis** showed a row of dashes across every year for both
+`SALES · SUNDRY DEBTORS` and `PURCHASES · SUNDRY CREDITORS`. Clicking a section filled
+it in — so the tab read as "there is no data here" until you happened to click.
+
+The two headline rows took their total from the party tree, and that tree — two thousand
+parties over a decade — was fetched only when a section was opened. A section's own total
+is now stored in `yoy_summary` (`partyTotals`), which the page already has: the rows fill
+on arrival, and nothing extra is fetched.
+
+Stored rather than derived from the P&L lines, because they are not the same figure: a
+sale on a voucher carrying no Sundry Debtor is attributed to nobody and so is not in this
+total, and `Net + charges` / `Gross` count shipping and GST that the P&L line does not.
+The test pins it as the sum of exactly the parties the tree would show, and that a year
+emptied of vouchers loses its total rather than keeping a stale one.
+
+**Press ↻ Rebuild once** after this deploys — the totals appear with the first rebuild.
+
 ## v2.50 (pipeline) — September 2026 — A weekly sweep, because the incremental has a blind spot
 
 The daily incremental sync asks Tally *what changed since the last run*. An edit it was

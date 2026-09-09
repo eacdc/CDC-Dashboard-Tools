@@ -574,18 +574,33 @@ async function runYoySummary(fys) {
   const fresh = yoy.finalize(S);
 
   const prev = (await db.collection('yoy_summary').findOne({ _id: 'summary' })) || { branches: {}, fys: [] };
-  let branches, allFys;
-  if (!fys || !fys.length) { branches = fresh.branches; allFys = fresh.fys; }
-  else {
+  let branches, allFys, partyTotals;
+  const touched = new Set(fys || []);
+  if (!fys || !fys.length) {
+    branches = fresh.branches; allFys = fresh.fys; partyTotals = fresh.partyTotals || {};
+  } else {
     // Partial: keep every other year exactly as it was, replace only these. A year
     // whose vouchers were all deleted must disappear, so the rebuilt years are
     // cleared first rather than merged over.
     branches = JSON.parse(JSON.stringify(prev.branches || {}));
-    const touched = new Set(fys);
     for (const b of Object.keys(branches)) for (const f of Object.keys(branches[b])) if (touched.has(f)) delete branches[b][f];
     for (const b of Object.keys(fresh.branches)) {
       branches[b] = branches[b] || {};
       for (const f of Object.keys(fresh.branches[b])) branches[b][f] = fresh.branches[b][f];
+    }
+    // The party-section totals splice the same way, one level deeper: branch, then
+    // section|measure, then year. Merging them over instead of clearing first would
+    // leave a year that lost all its vouchers showing its old figure for ever.
+    partyTotals = JSON.parse(JSON.stringify(prev.partyTotals || {}));
+    for (const b of Object.keys(partyTotals)) for (const k of Object.keys(partyTotals[b])) {
+      for (const f of Object.keys(partyTotals[b][k])) if (touched.has(f)) delete partyTotals[b][k][f];
+    }
+    for (const b of Object.keys(fresh.partyTotals || {})) {
+      partyTotals[b] = partyTotals[b] || {};
+      for (const k of Object.keys(fresh.partyTotals[b])) {
+        partyTotals[b][k] = partyTotals[b][k] || {};
+        for (const f of Object.keys(fresh.partyTotals[b][k])) partyTotals[b][k][f] = fresh.partyTotals[b][k][f];
+      }
     }
     const s = new Set();
     for (const b of Object.keys(branches)) for (const f of Object.keys(branches[b])) s.add(f);
@@ -593,7 +608,7 @@ async function runYoySummary(fys) {
   }
   const updatedAt = new Date();
   await db.collection('yoy_summary').updateOne({ _id: 'summary' }, { $set: {
-    fys: allFys, branches, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt,
+    fys: allFys, branches, partyTotals, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt,
   } }, { upsert: true });
 
   // The per-ledger detail behind each line, one document per branch+line so no single

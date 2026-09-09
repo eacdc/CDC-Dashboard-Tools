@@ -101,6 +101,27 @@ const settle = async (base) => {
   assert(d.branches.all['2023-24'].totals.revenue === 100, 'a year outside the scope is left untouched');
   assert(d.scannedVouchers === 2, 'the partial rebuild read only that year');
 
+  // The Sales Analysis headline totals ride in the same document, so they splice the
+  // same way -- and a party section that merged its years instead of clearing them
+  // first would leave a rebuilt year showing its old figure for ever.
+  const pt = () => d.partyTotals.all['sales|netpl'];
+  const ptSum = (fy) => Math.round((pt()[fy] || []).reduce((a, x) => a + x, 0) * 100) / 100;
+  assert(ptSum('2024-25') === 755,
+    'the section total for the rebuilt year follows it: ' + JSON.stringify(pt()['2024-25']));
+  assert(ptSum('2023-24') === 100,
+    'and a year outside the scope keeps the total it had');
+  // A year whose vouchers all went must lose its total too, not keep the last one.
+  fakeDb.collection('vouchers').docs = fakeDb.collection('vouchers').docs.filter((v) => !/^2024/.test(v.date));
+  await post(port, '/api/yoy/scan?fy=2024-25');
+  d = await settle(base);
+  assert(!pt()['2024-25'],
+    'a year emptied of vouchers loses its section total rather than keeping a stale one: '
+    + JSON.stringify(pt()['2024-25']));
+  assert(ptSum('2023-24') === 100, 'while the untouched years are still there');
+  fakeDb.collection('vouchers').docs.push(V('kol', '20240815', 755));
+  await post(port, '/api/yoy/scan?fy=2024-25');
+  d = await settle(base);
+
   // Ingest should refresh the year it touched, with nobody asking.
   const ing = await post(port, '/ingest', { branch: 'kol', from: '20230401', to: '20240331',
     vouchers: [{ guid: 'x1', date: '20230610', type: 'Sales', no: 'S9', ledgers: { 'Sales A/c': 40 }, party_ledgers: { 'A Customer': -40 } }] }, 'tok');

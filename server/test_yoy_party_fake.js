@@ -197,6 +197,30 @@ function leaves(nodes, out) {
   assert(mh('sales|net')[0] === 105000, 'Net + charges adds the shipping income');
   assert(mh('sales|gross')[0] === 123900, 'Gross is the full invoice the customer owes, GST included');
 
+  // ---- the section's own total, without fetching the tree -------------------
+  // The Sales Analysis tab shows two headline rows. They used to need the whole tree
+  // -- two thousand parties over a decade -- fetched first, so the tab arrived showing
+  // a row of dashes and read as "there is no data here". The total is in the summary
+  // now, and it has to be the sum of exactly the parties the tree would show.
+  for (const key of ['kol|sales|netpl', 'kol|sales|gross', 'all|purchase|netpl']) {
+    const [br, sec, meas] = key.split('|');
+    const stored = ((summary.partyTotals[br] || {})[sec + '|' + meas]) || {};
+    const byHand = {};
+    for (const name of Object.keys(party[key])) {
+      for (const fy of Object.keys(party[key][name])) {
+        const row = byHand[fy] || (byHand[fy] = new Array(12).fill(0));
+        party[key][name][fy].forEach((v, i) => { row[i] += v || 0; });
+      }
+    }
+    const r2 = (n) => Math.round(n * 100) / 100;
+    for (const fy of Object.keys(byHand)) {
+      assert(JSON.stringify(stored[fy]) === JSON.stringify(byHand[fy].map(r2)),
+        `${key} ${fy}: the stored section total IS the sum of its parties, month by month`);
+    }
+    assert(Object.keys(stored).length === Object.keys(byHand).length,
+      `${key}: and covers exactly the years that have parties, no more`);
+  }
+
   // ---- the tree opens the way the Sales Analysis page does ------------------
   const built = yoy.partyTreeFrom(party['all|sales|netpl'], xd, fys, 'sales');
   const top = built.tree.map((x) => x.n);

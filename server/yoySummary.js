@@ -307,6 +307,30 @@ function finalize(S) {
       b[fy] = row;
     }
   }
+  // The party sections' own totals, so the Sales Analysis tab can show its two
+  // headline rows on arrival instead of a row of dashes. Those rows used to need the
+  // whole tree -- two thousand parties over a decade -- fetched before they could
+  // show anything, so the tab looked empty until something was clicked.
+  //
+  // Stored, not derived from the P&L lines: a sale on a voucher carrying no Sundry
+  // Debtor is attributed to nobody and so is not in this total, and `net`/`gross`
+  // count shipping and GST that the P&L line does not.
+  out.partyTotals = {};
+  for (const branch of Object.keys(S.party || {})) {
+    const b = out.partyTotals[branch] = {};
+    for (const key of Object.keys(S.party[branch])) {
+      const byFy = b[key] = {};
+      const src = S.party[branch][key];
+      for (const name of Object.keys(src)) {
+        for (const fy of Object.keys(src[name])) {
+          const row = byFy[fy] || (byFy[fy] = new Array(12).fill(0));
+          const a = src[name][fy];
+          for (let i = 0; i < 12; i++) row[i] += a[i] || 0;
+        }
+      }
+      for (const fy of Object.keys(byFy)) byFy[fy] = byFy[fy].map(r2);
+    }
+  }
   return out;
 }
 
