@@ -3009,6 +3009,20 @@ function YoYPanel(pr){
             var ck=partyKey(r.k),isO=!!openSec[r.k],t=parties[ck];
             var idx=t?slotIndex(t.fys):null;
             var root=t?{m:t.root||{}}:null;
+            // Closed, the header still shows its total: the summary carries it, so the
+            // tab arrives with its two headline rows filled instead of a row of dashes.
+            // Opening a section fetched a tree of two thousand parties before anything
+            // could appear, which read as "there is no data here".
+            if(!root){
+              var pt=(data&&data.partyTotals&&data.partyTotals[br]&&data.partyTotals[br][r.k+'|'+meas])||null;
+              if(pt){
+                var flat={};
+                fys.forEach(function(fy,fi){var a=pt[fy];if(!a)return;
+                  for(var mi=0;mi<12;mi++)if(a[mi])flat[fi*12+mi]=a[mi];});
+                root={m:flat};
+                idx=fys.map(function(_,fi){return fi;});
+              }
+            }
             rows.push(e('tr',{key:'sec_'+r.k,style:{borderTop:'1px solid #f1f5f9',background:'#f8fafc'}},
               e('td',{onClick:function(){toggleSec(r.k);},title:'open this section down to the parties under it',
                 style:{padding:'6px 12px',whiteSpace:'nowrap',fontWeight:700,color:'#0f172a',fontSize:'11px',
