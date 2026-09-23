@@ -1,6 +1,28 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.52 (portal) — September 2026 — The merge suggestions, as a spreadsheet
+
+**⬇ Excel** on the Suggested merges panel writes the list on screen to a workbook, with
+the evidence behind every row.
+
+Two hundred suggestions is a review session, not a glance, and it is a session somebody
+else often does — the list has to be able to leave the screen. Columns: band, confidence
+as a **number** so the sheet sorts by it, both names with their outstanding figures, and
+**Why it matched** carrying the reasons verbatim. A reason that reads differently in the
+sheet than on the screen would be worse than no sheet.
+
+One thing is lifted out of the evidence into its own column: **Both active at once?**.
+Two ledgers billing in the same period are usually two real parties rather than one
+renamed, and that is the line a reviewer should stop at. Filters are on by default.
+
+Exports whatever the tier filter is showing, and says so in the filename
+(`CDC_SuggestedMerges_certain_20260923.xlsx`).
+
+The browser suite now serves the **real** SheetJS instead of a stub, catches the
+download, and reads the workbook back — a stubbed library would have left the one thing
+this adds unexercised.
+
 ## v2.51 (server, portal) — September 2026 — The Sales Analysis tab arrives with its figures
 
 Opening **Sales Analysis** showed a row of dashes across every year for both

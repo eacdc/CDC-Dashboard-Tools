@@ -3195,6 +3195,38 @@ function SuggestedMerges(pr){
   // must not be swept up by a bulk action the user can no longer see.
   var selected=shown.filter(function(s){return sel[s.key];});
   function toggle(k){setSel(function(m){var n=Object.assign({},m);if(n[k])delete n[k];else n[k]=1;return n;});}
+  // Two hundred suggestions is a review session, not a glance, and it is a session
+  // somebody else often does -- so it has to leave the screen. Every column is what
+  // the row already says; the evidence goes out verbatim rather than re-summarised,
+  // because a reason that reads differently in the sheet than on the screen is worse
+  // than no sheet. The one thing lifted out of it is the WARNING, which is the single
+  // line that should make a reviewer stop: two ledgers billing in the SAME period are
+  // usually two real parties, not one renamed.
+  function exportSuggestions(){
+    if(!window.XLSX){alert('The Excel library did not load, so this cannot be written. Reload the page and try again.');return;}
+    var ov=pr.outstanding||{};
+    var hdr=['Tier','Confidence %','Merge this name','Its outstanding','Into this name','Its outstanding',
+             'Both active at once?','Why it matched'];
+    var rows=shown.map(function(s){
+      var evs=s.evidence||[];
+      var warn=evs.some(function(x){return /^WARNING/.test(x);});
+      return [(TIER[s.tier]||TIER.possible).label,
+              Math.round((s.confidence||0)*100),
+              s.variant,
+              ov[s.variant]==null?'':Math.round(ov[s.variant]),
+              s.canonical,
+              ov[s.canonical]==null?'':Math.round(ov[s.canonical]),
+              warn?'YES - check before merging':'no',
+              evs.join(' · ')];
+    });
+    var ws=XLSX.utils.aoa_to_sheet([hdr].concat(rows));
+    ws['!cols']=[{wch:10},{wch:12},{wch:42},{wch:15},{wch:42},{wch:15},{wch:24},{wch:90}];
+    ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length,c:hdr.length-1}})};
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Suggested merges');
+    XLSX.writeFile(wb,'CDC_SuggestedMerges_'+(filt==='all'?'all':filt)+'_'
+      +new Date().toISOString().slice(0,10).replace(/-/g,'')+'.xlsx');
+  }
   function toggleAll(){
     if(selected.length===shown.length&&shown.length){setSel({});return;}
     var n={};shown.forEach(function(s){n[s.key]=1;});setSel(n);
@@ -3210,6 +3242,7 @@ function SuggestedMerges(pr){
       phase==='done'&&e('span',{style:{fontSize:'10px',color:'#64748b'}},list.length+' to review'),
       stamp&&e('span',{style:{fontSize:'9.5px',color:'#94a3b8',fontFamily:'monospace'}},'scanned '+new Date(stamp).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})+(covered?(' · '+covered.toLocaleString('en-IN')+' vouchers'):'')),
       e('span',{style:{marginLeft:'auto'}}),
+      phase==='done'&&shown.length>0&&e('button',{onClick:exportSuggestions,title:'the suggestions now on screen, with the evidence behind each one, as a spreadsheet',style:{background:'#fff',border:'1px solid #86efac',color:'#15803d',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px',fontWeight:600}},'⬇ Excel'),
       e('button',{disabled:phase==='scanning',onClick:rescan,style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:phase==='scanning'?'progress':'pointer',fontSize:'10px'}},phase==='scanning'?'Scanning…':'↻ Rescan'),
       e('button',{onClick:function(){stopPoll();setOpen(false);},style:{background:'#fff',border:'1px solid #cbd5e1',color:'#475569',padding:'3px 9px',borderRadius:'5px',cursor:'pointer',fontSize:'10px'}},'Hide')),
     phase==='off'&&e('div',{style:{fontSize:'11px',color:'#b45309'}},'Only available when the data came from MongoDB — the scan runs on the server, over every year.'),
