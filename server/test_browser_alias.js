@@ -127,11 +127,14 @@ const V = (date, party, amt, gstin) => ({
   // The CDN is unreachable here; serve React from node_modules instead.
   const reactJs = fsx.readFileSync(path.join(__dirname, 'node_modules/react/umd/react.production.min.js'), 'utf8');
   const reactDom = fsx.readFileSync(path.join(__dirname, 'node_modules/react-dom/umd/react-dom.production.min.js'), 'utf8');
+  const xlsxJs = fsx.readFileSync(path.join(__dirname, '..', 'vendor', 'xlsx.full.min.js'), 'utf8');
   await page.route('**/*', (route) => {
     const u = route.request().url();
     if (u.includes('react-dom')) return route.fulfill({ contentType: 'application/javascript', body: reactDom });
     if (u.includes('libs/react/')) return route.fulfill({ contentType: 'application/javascript', body: reactJs });
-    if (u.includes('xlsx')) return route.fulfill({ contentType: 'application/javascript', body: 'window.XLSX={utils:{}};' });
+    // The REAL SheetJS, not a stub: the Excel export is written in the browser, so a
+    // stubbed library would leave the one thing this checks unexercised.
+    if (u.includes('xlsx')) return route.fulfill({ contentType: 'application/javascript', body: xlsxJs });
     if (u.includes('fonts.g')) return route.fulfill({ contentType: 'text/css', body: '' });
     return route.continue();
   });
@@ -168,6 +171,35 @@ const V = (date, party, amt, gstin) => ({
   assert(/CERTAIN 9[0-9]%/.test(shown), 'the badge carries the actual confidence percentage');
   assert(/LIKELY 8[0-9]%/.test(shown), 'a same-PAN pair shows as LIKELY with its own percentage');
   assert(/CERTAIN 90%\+ · LIKELY 70-89% · POSSIBLE 50-69%/.test(shown), 'the bands are spelled out on screen');
+
+  // Two hundred suggestions is a review session somebody else often does, so the list
+  // has to leave the screen. The sheet is written in the browser by the vendored
+  // SheetJS, so the only way to know it is a real workbook with the real reasons in it
+  // is to catch the download and read it back.
+  // The waiter goes up BEFORE the click, or the download fires into nothing and the
+  // test times out on an export that worked.
+  const [got] = await Promise.all([
+    page.waitForEvent('download', { timeout: 20000 }),
+    page.click('text=Excel'),
+  ]);
+  const xlsPath = '/tmp/cdc_merges_test.xlsx';
+  await got.saveAs(xlsPath);
+  assert(/^CDC_SuggestedMerges_all_\d{8}\.xlsx$/.test(got.suggestedFilename()),
+    'the file says what it is and when it was taken: ' + got.suggestedFilename());
+  const XLSX = require(path.join(__dirname, '..', 'vendor', 'xlsx.full.min.js'));
+  const sh = XLSX.read(fsx.readFileSync(xlsPath), { type: 'buffer' });
+  const aoa = XLSX.utils.sheet_to_json(sh.Sheets[sh.SheetNames[0]], { header: 1, defval: '' });
+  assert(aoa[0].join('|') === 'Tier|Confidence %|Merge this name|Its outstanding|Into this name|Its outstanding|Both active at once?|Why it matched',
+    'the columns are the ones the row already shows: ' + aoa[0].join(' | '));
+  assert(aoa.length - 1 === 3, 'every suggestion on screen is a row in the sheet: ' + (aoa.length - 1));
+  const gst = aoa.find((r) => /19AABCG1234M1Z5/.test(String(r[7] || '')));
+  assert(gst && gst[0] === 'CERTAIN' && typeof gst[1] === 'number',
+    'a row carries its band and its confidence as a NUMBER, so the sheet can be sorted by it: '
+    + JSON.stringify(gst && [gst[0], gst[1]]));
+  assert(gst && /activity does not overlap/.test(gst[7]),
+    'and the reasons go out verbatim, not re-summarised into something that reads differently');
+  assert(aoa.slice(1).every((r) => r[6] === 'no'),
+    'a pair whose activity does not overlap is not flagged for a second look');
   assert(/ALL 3/.test(shown) && /CERTAIN 2/.test(shown) && /LIKELY 1/.test(shown), 'filter chips count each band');
 
   // Filtering narrows the list, and select-all then covers only what is visible.
