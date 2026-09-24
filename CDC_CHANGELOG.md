@@ -1,6 +1,19 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.53 (pipeline) — September 2026 — Every branch syncs before any branch sweeps
+
+The weekly sweep ran inside the branch loop, and did what a long job in a loop always
+does: Kolkata's sweep started at 17:20 and was still grinding through August 2025 two
+hours later, so **Ahmedabad never got its daily sync at all**.
+
+The sweep is now only *noted* during the loop and run after it. Every branch's
+incremental sync finishes first; the sweeps follow, one after another.
+
+The log also says what the sweep is in for — *"it reads every day of the window one at a
+time, so expect hours, not minutes"* — because a run that looks stuck is the same shape
+as a run that is.
+
 ## v2.52 (portal) — September 2026 — The merge suggestions, as a spreadsheet
 
 **⬇ Excel** on the Suggested merges panel writes the list on screen to a workbook, with
