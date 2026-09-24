@@ -200,6 +200,8 @@ foreach ($u in $urls) {
 if ($servedBy.Count -eq 0) { throw ("No Tally answered on {0}. Is Tally open at 'Gateway of Tally', and is its port one of these? (F1 > Settings > Connectivity)" -f ($urls -join ', ')) }
 
 
+# Branches due a weekly sweep. Filled by the loop below, emptied after it.
+$due = @()
 foreach ($b in $syncBranches) {
     Say ("--- branch {0} ({1}) ---" -f $b.Branch, $b.Company)
     # No port is serving this company, so there is nothing to pull. Skipping says so
@@ -248,22 +250,11 @@ foreach ($b in $syncBranches) {
                 Say "WARN: no CDC_INGEST_URL and no Node+MONGODB_URI - JSON written but NOT pushed."
             }
         }
-        # ---- the weekly sweep --------------------------------------------------
-        # The incremental sync asks Tally what changed SINCE THE LAST RUN, and that is
-        # its blind spot: an edit whose ALTERID was already below the mark -- one that
-        # slipped past on a dropped connection, or happened before this branch was ever
-        # synced -- is never looked at again. It cost a 23,423 sale and a 2,428 journal
-        # on ONE ledger, found only because somebody exported that ledger by hand.
-        #
-        # So once a week the whole scan window is re-read in full and every voucher
-        # overwritten with what Tally holds now. ALTERID is not consulted, so there is
-        # nothing for an edit to hide behind.
-        #
-        # It ADDS and OVERWRITES only. A voucher Tally has since DELETED is removed by
-        # the incremental's own reconcile, which runs first, every day.
-        # Only after a sync that worked. If the incremental just failed, Tally or the
-        # server is unreachable and a full re-read of seventeen months will fail too --
-        # slowly, and for the same reason.
+        # ---- is this branch due a sweep? ---------------------------------------
+        # Noted here, RUN LATER. The sweep re-reads seventeen months a day at a time and
+        # takes hours; run in the middle of the branch loop it did exactly what a long
+        # job in a loop always does -- Ahmedabad sat waiting for Kolkata's sweep and got
+        # no daily sync at all. Every branch's sync goes first, then the sweeps.
         if ($Incremental -and $incOk -and $SweepDays -gt 0 -and -not $Rescan) {
             $stamp = Join-Path $logDir ("sweep_{0}.txt" -f $b.Branch)
             $last  = ""
@@ -276,26 +267,46 @@ foreach ($b in $syncBranches) {
                 $age = [int]((Get-Date).Date - $lastDt.Date).TotalDays
             }
             if ($Sweep -or $age -ge $SweepDays) {
-                Say ("  --- weekly sweep: re-reading {0}..{1} in full ({2}) ---" -f $SyncFromDate, $ToDate,
-                     $(if ($Sweep) { "asked for with -Sweep" } elseif ($last) { "$age days since $last" } else { "never swept" }))
-                Say  "  This is the ONLY thing that catches a voucher edited before the sync started watching."
-                & powershell -ExecutionPolicy Bypass -File $extract `
-                    -FromDate $SyncFromDate -ToDate $ToDate -Branch $b.Branch -Company $b.Company `
-                    -TallyUrl $TallyUrl -OutDir $outDir `
-                    -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
-                # The date is recorded ONLY when the pull actually reached Mongo. A sweep
-                # that failed and still ticked itself off is worse than no sweep at all:
-                # it would wait another week before trying again, with the hole intact.
-                if ($LASTEXITCODE -eq 0) {
-                    Set-Content -Path $stamp -Value (Get-Date).ToString('yyyyMMdd') -Encoding ASCII
-                    Say ("  sweep done; next one in {0} days." -f $SweepDays)
-                } else {
-                    Say ("  sweep FAILED (exit {0}) -- not recorded, so the next run tries again." -f $LASTEXITCODE)
-                }
+                $due += ,@{ Branch = $b.Branch; Company = $b.Company; Url = $TallyUrl; Stamp = $stamp
+                            Why = $(if ($Sweep) { "asked for with -Sweep" } elseif ($last) { "$age days since $last" } else { "never swept" }) }
             }
         }
     } catch {
         Say ("ERROR on branch {0}: {1}" -f $b.Branch, $_.Exception.Message)
+    }
+}
+
+# ---- the weekly sweeps, after every branch has had its daily sync -------------
+# The incremental sync asks Tally what changed SINCE THE LAST RUN, and that is its
+# blind spot: an edit whose ALTERID was already below the mark -- one that slipped past
+# on a dropped connection, or happened before this branch was ever synced -- is never
+# looked at again. It cost a 23,423 sale and a 2,428 journal on ONE ledger, found only
+# because somebody exported that ledger by hand.
+#
+# So once a week the whole scan window is re-read in full and every voucher overwritten
+# with what Tally holds now. No ALTERID is consulted, so an edit has nothing to hide
+# behind. It ADDS and OVERWRITES only -- a voucher Tally has since DELETED is removed by
+# the incremental's own reconcile, which ran first, for every branch.
+foreach ($d in $due) {
+    Say ("--- weekly sweep: {0}, re-reading {1}..{2} in full ({3}) ---" -f $d.Branch, $SyncFromDate, $ToDate, $d.Why)
+    Say  "  This is the ONLY thing that catches a voucher edited before the sync started watching."
+    Say  "  It reads every day of the window one at a time, so expect hours, not minutes."
+    try {
+        & powershell -ExecutionPolicy Bypass -File $extract `
+            -FromDate $SyncFromDate -ToDate $ToDate -Branch $d.Branch -Company $d.Company `
+            -TallyUrl $d.Url -OutDir $outDir `
+            -IngestUrl $ingestUrl -IngestToken $ingestToken 2>&1 | ForEach-Object { Say $_ }
+        # The date is recorded ONLY when the pull actually reached Mongo. A sweep that
+        # failed and still ticked itself off is worse than no sweep at all: it would wait
+        # another week before trying again, with the hole intact.
+        if ($LASTEXITCODE -eq 0) {
+            Set-Content -Path $d.Stamp -Value (Get-Date).ToString('yyyyMMdd') -Encoding ASCII
+            Say ("  sweep done ({0}); next one in {1} days." -f $d.Branch, $SweepDays)
+        } else {
+            Say ("  sweep FAILED for {0} (exit {1}) -- not recorded, so the next run tries again." -f $d.Branch, $LASTEXITCODE)
+        }
+    } catch {
+        Say ("ERROR sweeping branch {0}: {1}" -f $d.Branch, $_.Exception.Message)
     }
 }
 Say "run_daily done"

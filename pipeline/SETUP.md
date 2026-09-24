@@ -262,6 +262,9 @@ it for ever**. That cost a ₹23,423 sale and a ₹2,428 journal on one ledger, 
 because somebody exported that ledger by hand. The sweep consults no ALTERID, so an edit
 has nothing to hide behind.
 
+- **Every branch's daily sync runs first; the sweeps run after all of them.** The sweep
+  reads the window a day at a time and takes **hours, not minutes** — run inside the
+  branch loop it left Ahmedabad waiting on Kolkata's sweep with no sync at all.
 - It only **adds and overwrites**. Deletions are the incremental's own reconcile, which
   runs first, every day.
 - Counted in **days elapsed**, not "is it Sunday" — this machine is not always on, and a
