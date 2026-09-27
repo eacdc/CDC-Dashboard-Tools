@@ -240,6 +240,7 @@ drifting the numbers apart. `npm run test:yoy` then runs the same vouchers throu
 | `GET /api/yoy/vouchers?branch=&ledger=&from=&to=` | the vouchers behind one account |
 | `GET /api/yoy/party?branch=&section=&measure=` | the Sales Analysis sections, every year at once |
 | `GET /api/yoy/diag?q=&fy=&branch=` | why one party's figure is what it is (read-only) |
+| `GET /api/clients?branch=&measure=&fromFy=` | every Sundry Debtor, its contacts and its sales per year |
 
 The whole payload, month detail included, is one small request — so opening a year
 costs nothing. Rebuilds run in the background (Render's proxy will not wait for a
@@ -648,6 +649,52 @@ an older year whose February happens to be empty is finished, not unfinished.
 Cells are tinted from white at no change to green or red, deepening with the size of
 the move and capped at 50% so the ranking below that stays visible — green where the
 move helps profit, red where it hurts.
+
+### The client list — `/diag/clients.html`, `GET /api/clients`
+
+Every **Sundry Debtor** as one row, with what Tally knows about it and what it has
+bought, written to a workbook. `?branch=all|kol|ahm&measure=netpl|net|gross&fromFy=2020-21`;
+the office asked for FY 2020-21 onwards, which is why that is the default and not the
+oldest back-filled year.
+
+Columns: ledger name, parent group, GSTIN, PAN, address, state, country, contact person,
+mobile, phone, email, **first and last sale to the day**, the merged spellings behind the
+row, a total, and one column per financial year in the window.
+
+Four decisions in it, each of which was the wrong way round at some point in a page like
+this:
+
+- **One row per client, not per ledger.** Names are canonicalised through the portal's
+  own `__cdcCanon` before anything else, so a customer carrying three spellings is one
+  row under the name the merges point at — the same count the Sales Analysis tab shows.
+  A row names the spellings folded into it, because a salesperson recognising the old
+  one has to be able to see why it is not a row of its own.
+- **Contacts are taken from whichever spelling carries them.** The ledger in use today
+  is often the empty one: the address was typed when the account was opened, under the
+  name that was current then. The row reads across `aliasVariants` and takes the first
+  non-empty value per field.
+- **The figures come from the same fold the dashboard reads** (`yoy_party`), never from
+  a second scan of the vouchers. A client list that disagreed with the dashboard the
+  same salesperson is looking at would be worse than no list.
+- **A client that has bought nothing since the window opened is still a row**, with
+  empty year columns. That is usually the row being looked for.
+
+The first and last sale dates are what `yoy_party`'s `branch|section|seen` key holds:
+`party -> fy -> { first, last }`, written in the **same pass and by the same
+attribution** as the amounts — a "first sale" found by a separate scan could name a
+voucher the figures never counted. Kept **per financial year**, not as one pair, because
+a one-year rebuild splices years: a single pair could only ever be *widened*, so an
+invoice deleted in Tally would go on being that client's first sale for ever. Over a
+window, first is the earliest of the years in it — asked for 2020 onwards, "first sale"
+means the first one *in* the window.
+
+PAN, address, state and country are pulled by a **separate** `LedgerDetail` request in
+`TallyToJson.ps1`, not added to the master fetch: an unrecognised FETCH name in Tally
+fails the whole collection, and that would have taken the daily voucher sync down for
+the sake of two columns on a spreadsheet. The request is wrapped, and a failure warns
+and carries on. Until one sync has run those columns are empty for everybody, so
+`/api/clients` returns a `filled` count per field and the page says *"the sheet is not
+wrong, it is early"* rather than leaving it to look broken.
 
 ## ONE PARTY, TWO NAMES (party merge suggestions)
 

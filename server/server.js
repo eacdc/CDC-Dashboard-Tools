@@ -754,6 +754,101 @@ app.get('/api/yoy/party', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+
+// GET /api/clients?branch=all|kol|ahm&measure=netpl|net|gross&fromFy=2020-21
+// Every Sundry Debtor, with what Tally knows about it and what it has bought.
+//
+// One row per CLIENT, not per ledger: a customer carrying three spellings is one
+// row under the name the merges point at, exactly as every other page counts it.
+// Its contact details are taken from whichever of those spellings actually carries
+// them -- the current ledger is often the empty one, the details having been typed
+// into the spelling that was in use when the account was opened.
+//
+// The sales figures and the first/last invoice dates come from the SAME fold the
+// Sales Analysis tab reads, so a client list handed to a salesperson cannot quietly
+// disagree with the dashboard the same salesperson is looking at.
+app.get('/api/clients', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const measure = yoy.PARTY_MEASURES.includes(String(req.query.measure)) ? String(req.query.measure) : 'gross';
+    const fromFy = /^\d{4}-\d{2}$/.test(String(req.query.fromFy || '')) ? String(req.query.fromFy) : '2020-21';
+    const db = await getDb();
+    const summary = await db.collection('yoy_summary').findOne({ _id: 'summary' }, { projection: { fys: 1, updatedAt: 1 } });
+    const allFys = (summary && summary.fys) || [];
+    const fys = allFys.filter((f) => f >= fromFy);
+
+    const xd = await mergedHierarchy(db);
+    const aliases = await readAliasMap(db);
+    const S = yoy.newSummary(xd, aliases);
+
+    // Contacts live on the branch masters, keyed by the name Tally spells today.
+    const contacts = {};
+    for (const br of (branch === 'all' ? ['kol', 'ahm'] : [branch])) {
+      const m = readMaster(await db.collection('masters').findOne({ branch: br }));
+      for (const [ln, c] of Object.entries((m && m.contacts) || {})) {
+        contacts[ln] = Object.assign({}, contacts[ln], c);
+      }
+    }
+
+    const sales = await readPartyChunks(db, branch + '|sales|' + measure);
+    const seen = await readPartyChunks(db, branch + '|sales|seen');
+
+    // Every Sundry Debtor in the books, whether or not it has traded since fromFy --
+    // a client that has gone quiet is exactly the row a salesperson is looking for.
+    const rows = [];
+    for (const name of Object.keys(xd.ledgers)) {
+      if (S.canon(name) !== name) continue;          // a merged-away spelling is not a row
+      if (yoy.sundryOf(S, name) !== 'debtor') continue;
+      const variants = aliasVariants(aliases, name);
+      const pick = (f) => {
+        for (const v of variants) { const c = contacts[v]; if (c && c[f]) return String(c[f]); }
+        return '';
+      };
+      const byFy = {};
+      let total = 0;
+      const perFy = sales[name] || {};
+      for (const fy of fys) {
+        const a = perFy[fy];
+        const t = a ? Math.round(a.reduce((x, y) => x + (y || 0), 0) * 100) / 100 : 0;
+        byFy[fy] = t;
+        total += t;
+      }
+      // First and last invoice, over the years being reported. Asked for a window
+      // starting in 2020, "first sale" means the first one IN it -- a date from 2016
+      // would answer a question nobody asked and read as a gap in the columns.
+      let first = '', last = '';
+      const sf = seen[name] || {};
+      for (const fy of fys) {
+        const s = sf[fy];
+        if (!s) continue;
+        if (!first || s.first < first) first = s.first;
+        if (!last || s.last > last) last = s.last;
+      }
+      rows.push({
+        ledger: name,
+        group: xd.ledgers[name] || '',
+        chain: yoy.chainOf(S, name).join(' > '),
+        gstin: pick('gstin'), pan: pick('pan'),
+        address: pick('address'), state: pick('state'), country: pick('country'),
+        contact: pick('name'), mobile: pick('mobile'), phone: pick('phone'), email: pick('email'),
+        firstSale: first, lastSale: last,
+        salesByFy: byFy, totalSales: Math.round(total * 100) / 100,
+        mergedFrom: variants.filter((v) => v !== name),
+      });
+    }
+    rows.sort((a, b) => b.totalSales - a.totalSales);
+    // What the master does NOT hold is worth a number: the pipeline only started
+    // pulling PAN and the address block in v2.54, so before a sync has run those
+    // columns are empty for everybody and the sheet looks broken rather than new.
+    const have = (f) => rows.filter((r) => r[f]).length;
+    res.json({ ok: true, branch, measure, fromFy, fys, clients: rows.length,
+      filled: { gstin: have('gstin'), pan: have('pan'), address: have('address'),
+        state: have('state'), country: have('country'), contact: have('contact'),
+        mobile: have('mobile'), phone: have('phone'), email: have('email') },
+      updatedAt: (summary && summary.updatedAt) || null, rows });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // GET /api/bills/coverage
 // Can the outstanding figure be computed from the VOUCHERS alone, and the uploaded
 // Bills CSV retired? The pipeline has captured bill-wise allocations since August

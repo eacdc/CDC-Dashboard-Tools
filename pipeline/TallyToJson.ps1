@@ -798,6 +798,62 @@ foreach ($l in $lx.SelectNodes("//LEDGER")) {
 }
 Write-Host ("  Ledgers : {0}  (contacts: {1})" -f $ledgerToGroup.Count, $ledgerContacts.Count)
 
+# ---- the rest of what Tally knows about a party -----------------------------
+# PAN, the mailing address, state and country, and the landline as its own field.
+# They are for the client list, not for any figure, so this is a SEPARATE request:
+# a FETCH name this Tally does not recognise fails the request it is in, and asking
+# for them alongside the ledger list would mean an unrecognised field took the whole
+# daily sync down with it. Here the worst case is a client list with blank columns.
+#
+# Several names are asked for each thing because Tally moved them between releases,
+# and xfirst takes whichever answered -- the same way the voucher fields are read.
+$detailPayload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
+  <TYPE>Collection</TYPE><ID>LedgerDetail</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="LedgerDetail" ISMODIFY="No">
+        <TYPE>Ledger</TYPE>
+        <FETCH>NAME,INCOMETAXNUMBER,LEDGERPHONE,ADDRESS,LEDSTATENAME,COUNTRYNAME,PINCODE</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+try {
+    [xml]$dx = Post-Tally $detailPayload 1 60
+    $extra = 0
+    foreach ($l in $dx.SelectNodes("//LEDGER")) {
+        $name = xval $l.NAME; if (-not $name) { continue }
+        $pan     = xfirst $l @("INCOMETAXNUMBER")
+        $phone   = xfirst $l @("LEDGERPHONE")
+        $state   = xfirst $l @("LEDSTATENAME","PRIORSTATENAME","STATENAME")
+        $country = xfirst $l @("COUNTRYNAME","LEDGERCOUNTRYNAME")
+        $pin     = xfirst $l @("PINCODE")
+        $addr    = (xaddress $l @("ADDRESS.LIST","LEDMAILINGADDRESS.LIST")) -join ", "
+        if ($pin -and $addr) { $addr = $addr + " - " + $pin } elseif ($pin) { $addr = $pin }
+        if (-not ($pan -or $phone -or $state -or $country -or $addr)) { continue }
+        # These ADD to the contact block; they never clear what the ledger list found.
+        $row = $ledgerContacts[$name]
+        if (-not $row) { $row = [ordered]@{}; $ledgerContacts[$name] = $row }
+        if ($pan)     { $row["pan"]     = $pan }
+        if ($phone)   { $row["phone"]   = $phone }
+        if ($state)   { $row["state"]   = $state }
+        if ($country) { $row["country"] = $country }
+        if ($addr)    { $row["address"] = $addr }
+        $extra++
+    }
+    Write-Host ("  Party details: {0} ledgers carry a PAN, address, state or country" -f $extra)
+} catch {
+    Write-Warning ("  Party details (PAN/address/state/country) not fetched: {0}" -f $_.Exception.Message)
+    Write-Warning "  The sync is unaffected -- only the client list's extra columns are."
+}
+
 [xml]$gx = Post-Tally $groupPayload
 foreach ($g in $gx.SelectNodes("//GROUP")) {
     $name = xval $g.NAME; if (-not $name) { continue }

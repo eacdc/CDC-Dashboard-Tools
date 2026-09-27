@@ -11,7 +11,7 @@ range (default: current financial year to date).
         |
         v
   pipeline/TallyToJson.ps1   -- pulls masters + day book, emits:
-        |                        <branch>_Master.json        (hierarchy: {ledgers, groups})
+        |                        <branch>_Master.json        (hierarchy: {ledgers, groups, contacts})
         |                        <branch>_Transactions.json  (vouchers: [{date,party,no,type,ledgers,party_ledgers,details}])
         |
         |  (a) direct POST  ->  server /ingest  ->  MongoDB Atlas
@@ -23,6 +23,12 @@ range (default: current financial year to date).
         |
   consolidated/  and  projected/  dashboards  ("MongoDB (auto)" mode)
 ```
+
+The master also carries `contacts` per ledger -- name, email, mobile, phone, GSTIN, and
+(since v2.54) PAN, address, state and country. The last four come from a **separate**
+`LedgerDetail` request rather than the main master fetch: an unrecognised field name
+fails a whole Tally collection, and that would take the voucher sync down for the sake
+of a few spreadsheet columns. If that one request fails the script warns and carries on.
 
 ## Why this shape
 

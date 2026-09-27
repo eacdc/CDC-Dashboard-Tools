@@ -75,7 +75,9 @@ const settle = async (base) => {
 (async () => {
   fakeDb.collection('masters').docs.push({ branch: 'kol',
     ledgers: { 'Sales A/c': 'Sales Accounts', 'A Customer': 'Sundry Debtors' },
-    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null } });
+    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null },
+    contacts: { 'A Customer': { gstin: '19AAAAA0000A1Z5', pan: 'AAAAA0000A', email: 'buyer@example.com',
+      mobile: '9800000000', address: '12 Some Road, Kolkata', state: 'West Bengal', country: 'India' } } });
   fakeDb.collection('vouchers').docs.push(
     V('kol', '20230510', 100), V('kol', '20240610', 200), V('kol', '20250710', 300));
 
@@ -135,6 +137,33 @@ const settle = async (base) => {
   assert(wide.status === 200, 'a multi-year push is accepted');
   d = await settle(base);
   assert(d.fys.join(',') === '2023-24,2024-25,2025-26', 'a range spanning years rebuilds all of them, not just the ends');
+
+
+  // ---- the client list -------------------------------------------------------
+  // One row per customer, its contacts off the master and its sales out of the same
+  // fold the Sales Analysis tab reads. A salesperson holding this sheet next to the
+  // dashboard must not be able to find two different answers for one customer.
+  const cl = await get(base, '/api/clients?fromFy=2020-21');
+  assert(cl.ok && cl.clients === 1, 'every Sundry Debtor is a row, and nothing else is: ' + JSON.stringify(cl.rows.map((r) => r.ledger)));
+  const c0 = cl.rows[0];
+  assert(c0.ledger === 'A Customer' && c0.group === 'Sundry Debtors', 'the row names the client and the group it hangs under');
+  assert(c0.gstin === '19AAAAA0000A1Z5' && c0.pan === 'AAAAA0000A' && c0.state === 'West Bengal'
+    && c0.email === 'buyer@example.com', 'what Tally holds about the client travels with it');
+  assert(c0.firstSale === '20230510' && c0.lastSale === '20250710',
+    'the first and last invoice are named to the day, not the month: ' + c0.firstSale + '..' + c0.lastSale);
+  assert(c0.salesByFy['2023-24'] === 140 && c0.salesByFy['2024-25'] === 755 && c0.salesByFy['2025-26'] === 300,
+    'each year carries what that year sold: ' + JSON.stringify(c0.salesByFy));
+  assert(c0.totalSales === 1195, 'and the total is the years added up, not a separate figure');
+  assert(cl.filled.gstin === 1 && cl.filled.phone === 0,
+    'the sheet counts what the master actually filled in, so empty columns read as unsynced rather than broken');
+
+  // Asked for a window, "first sale" means the first one IN it -- a date from an
+  // earlier year would answer a question nobody asked.
+  const recent = await get(base, '/api/clients?fromFy=2025-26');
+  assert(recent.fys.join(',') === '2025-26' && recent.rows[0].totalSales === 300,
+    'the window decides which years are counted: ' + JSON.stringify(recent.fys));
+  assert(recent.rows[0].firstSale === '20250710',
+    'and the first sale is the first one inside the window: ' + recent.rows[0].firstSale);
 
   server.close();
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== year-on-year API passed ==');
