@@ -197,6 +197,24 @@ function leaves(nodes, out) {
   assert(mh('sales|net')[0] === 105000, 'Net + charges adds the shipping income');
   assert(mh('sales|gross')[0] === 123900, 'Gross is the full invoice the customer owes, GST included');
 
+  // ---- when a client first and last bought ----------------------------------
+  // A client list wants the day, and the monthly arrays only give the month. Taken
+  // from the SAME attribution the amounts are, in the same pass: a "first sale" found
+  // by a second scan could name a different voucher than the one the figures counted.
+  const seenAll = party['all|sales|seen'];
+  const mhSeen = seenAll['Modern Herbo'];
+  assert(mhSeen && mhSeen['2024-25'].first === '20240415' && mhSeen['2024-25'].last === '20240910',
+    'a client carries the first and last invoice of the year, to the day: ' + JSON.stringify(mhSeen));
+  assert(!party['kol|sales|seen']['Gleebuds'] || party['kol|sales|seen']['Gleebuds']['2024-25'],
+    'and it is kept per branch as well as consolidated');
+  // Kept PER YEAR, not as one pair: a one-year rebuild splices years, and a single
+  // pair could only be merged -- which widens a range and can never shrink it, so a
+  // first invoice deleted in Tally would stay this party's first sale for ever.
+  assert(Object.keys(mhSeen).every((k) => /^\d{4}-\d{2}$/.test(k)),
+    'the dates are filed by financial year, so a rebuilt year replaces its own: ' + Object.keys(mhSeen).join(','));
+  assert(!seenAll['Export Sales'] && !seenAll['CDC Ahmedabad'],
+    'an income account is not a client, and neither is the inter-branch ledger consolidated drops');
+
   // ---- the section's own total, without fetching the tree -------------------
   // The Sales Analysis tab shows two headline rows. They used to need the whole tree
   // -- two thousand parties over a decade -- fetched first, so the tab arrived showing

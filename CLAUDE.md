@@ -203,6 +203,15 @@ missing bill.
 31 March 2025; nothing computes a figure from it once the vouchers do, and no code
 path may return to it when a number looks wrong. A disagreeing number is a bug.
 
+`/diag/clients.html` writes the client list to a workbook: every Sundry Debtor as ONE row
+(spellings merged), its contacts taken from whichever spelling actually carries them, and
+its sales per financial year from the same `yoy_party` fold the Sales Analysis tab reads —
+never a second scan, or the sheet and the dashboard could disagree about one customer.
+First/last sale dates come from `branch|sales|seen`, written per FY in the fold's own
+pass; PAN/address/state/country come from a separate `LedgerDetail` request in
+`TallyToJson.ps1`, kept separate so an unrecognised field name cannot take the daily
+voucher sync down.
+
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
 is disputed — a total disagreeing says nothing about where, and hunting a decade of

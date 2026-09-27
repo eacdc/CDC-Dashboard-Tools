@@ -41,7 +41,9 @@ function cleanContacts(c) {
     const row = {};
     // gstin is the party's identity, not just a contact detail: it is what lets a
     // renamed ledger be recognised across financial years (see aliasSuggest.js).
-    for (const f of ['name', 'email', 'mobile', 'gstin']) {
+    // The rest are what a client list asks for. A field missing from this list is
+    // silently dropped on the way in, which reads downstream as Tally not holding it.
+    for (const f of ['name', 'email', 'mobile', 'phone', 'gstin', 'pan', 'address', 'state', 'country']) {
       if (v[f] != null && v[f] !== '') row[f] = String(v[f]);
     }
     if (Object.keys(row).length) out[String(ledger)] = row;

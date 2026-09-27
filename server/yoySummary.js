@@ -62,6 +62,11 @@ function newSummary(xd, aliases) {
     // invoice is attributed to. The dashboard makes the same distinction -- its
     // branch filter clears ibLedgers when one branch is shown alone.
     party: { kol: {}, ahm: {}, all: {} },  // branch -> 'section|measure' -> party -> fy -> [12]
+    // When a party's FIRST and LAST invoice fell. The monthly arrays above give the
+    // month; a client list wants the day. Kept beside the amounts rather than found
+    // by a second scan, so "first sale" can never mean a different sale here than it
+    // does on the Sales Analysis tab -- it is the same attribution, at the same moment.
+    partySeen: { kol: {}, ahm: {}, all: {} },  // branch -> section -> party -> {first,last}
     acct: new Map(),                   // ledger -> 'sales' | 'purchase' | null
     sundry: new Map(),                 // party  -> 'debtor' | 'creditor' | null
     vouchers: 0,
@@ -144,9 +149,24 @@ function attribution(S, ledgers, parties, dropIB) {
 // voucher's own branch, and consolidated). Kept deliberately close to the
 // dashboard's __saBuild: the same dominant-party rule, the same three measures, and
 // abs() on the amounts so a party's size reads the same way in both places.
+// Kept per financial year, not as one pair. A one-year rebuild splices years, and a
+// single pair could only be merged -- which can widen a range but never shrink one, so
+// a first invoice deleted in Tally would go on being this party's first sale for ever.
+function seenParty(S, scope, section, name, fy, date) {
+  if (!name || !date) return;
+  const b = S.partySeen[scope];
+  if (!b) return;
+  const sec = b[section] || (b[section] = {});
+  const led = sec[name] || (sec[name] = {});
+  const cur = led[fy];
+  if (!cur) { led[fy] = { first: date, last: date }; return; }
+  if (date < cur.first) cur.first = date;
+  if (date > cur.last) cur.last = date;
+}
 function addPartyVoucher(S, v, branch, fy, mi) {
   const ledgers = v.ledgers || {};
   const parties = v.party_ledgers || {};
+  const date = String(v.date || '');
   for (const scope of [branch, 'all']) {
     const dropIB = scope === 'all';
     const a = attribution(S, ledgers, parties, dropIB);
@@ -155,11 +175,13 @@ function addPartyVoucher(S, v, branch, fy, mi) {
       addParty(S, scope, 'sales|net', dd, fy, mi, Math.abs(nr));
       addParty(S, scope, 'sales|gross', dd, fy, mi, dg);
       if (nrPL !== 0) addParty(S, scope, 'sales|netpl', dd, fy, mi, Math.abs(nrPL));
+      seenParty(S, scope, 'sales', dd, fy, date);
     }
     if (np !== 0 && dc) {
       addParty(S, scope, 'purchase|net', dc, fy, mi, Math.abs(np));
       addParty(S, scope, 'purchase|gross', dc, fy, mi, cg);
       if (npPL !== 0) addParty(S, scope, 'purchase|netpl', dc, fy, mi, Math.abs(npPL));
+      seenParty(S, scope, 'purchase', dc, fy, date);
     }
   }
 }
@@ -226,7 +248,7 @@ function addVoucher(S, v) {
 
   const ledgers = canonKeys(S, v.ledgers);
   const parties = canonKeys(S, v.party_ledgers);
-  addPartyVoucher(S, { ledgers, party_ledgers: parties }, branch, fy, mi);
+  addPartyVoucher(S, { date: v.date, ledgers, party_ledgers: parties }, branch, fy, mi);
   // An inter-branch invoice is neither a sale nor a purchase for the group: one unit
   // sells, the sibling unit buys, and consolidated that is the company trading with
   // itself. Dropping only the branch LEDGER leaves the revenue leg standing, which put
@@ -450,7 +472,10 @@ const PARTY_SECTIONS = { sales: 'Sundry Debtors', purchase: 'Sundry Creditors' }
 const PARTY_MEASURES = ['netpl', 'net', 'gross'];
 const PARTY_KEYS = [];
 for (const b of ['kol', 'ahm', 'all']) {
-  for (const s of Object.keys(PARTY_SECTIONS)) for (const m of PARTY_MEASURES) PARTY_KEYS.push(b + '|' + s + '|' + m);
+  for (const s of Object.keys(PARTY_SECTIONS)) {
+    for (const m of PARTY_MEASURES) PARTY_KEYS.push(b + '|' + s + '|' + m);
+    PARTY_KEYS.push(b + '|' + s + '|seen');
+  }
 }
 
 function partyDetailOf(S) {
@@ -469,6 +494,14 @@ function partyDetailOf(S) {
         if (Object.keys(years).length) led[name] = years;
       }
       out[branch + '|' + key] = led;
+    }
+  }
+  // When each party's first and last invoice fell, keyed `branch|section|seen` and
+  // stored in the same documents as the amounts -- same shape (party -> fy -> value),
+  // so the same splice keeps it right through a one-year rebuild.
+  for (const branch of Object.keys(S.partySeen || {})) {
+    for (const section of Object.keys(S.partySeen[branch])) {
+      out[branch + '|' + section + '|seen'] = S.partySeen[branch][section];
     }
   }
   // A branch/section/measure with no activity at all still gets an entry, so a

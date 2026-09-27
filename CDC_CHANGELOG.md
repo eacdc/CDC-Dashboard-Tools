@@ -1,6 +1,40 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.54 (server, pipeline, new page) — September 2026 — Every client, as a spreadsheet
+
+**`/diag/clients.html`** writes one row per customer: ledger name, parent group, GSTIN,
+PAN, full address, state, country, contact person, mobile, phone, email, the **first and
+last sale to the day**, a total, and one column per financial year — FY 2020-21 onwards
+by default.
+
+One row per **client**, not per ledger: a customer carrying three spellings is one row
+under the name the merges point at, and the row says how many spellings are behind it.
+Its contact details are read across all of them, because the ledger in use today is
+often the empty one — the address was typed when the account was opened, under whatever
+name was current then.
+
+The figures and the dates come out of the same `yoy_party` fold the Sales Analysis tab
+reads, never from a second scan. A client list that disagreed with the dashboard the
+same salesperson is looking at would be worse than no list.
+
+A client that has bought nothing since the window opened is still a row, with empty year
+columns. That is usually the row being looked for.
+
+Two new things had to be stored for it:
+
+- **When each client first and last bought**, per financial year, in the same pass and
+  by the same attribution as the amounts. Per year rather than as one pair, because a
+  one-year rebuild splices years: a single pair could only ever be widened, so an
+  invoice deleted in Tally would go on being that client's first sale for ever. Needs
+  one **↻ Rebuild** to appear.
+- **PAN, address, state and country** from Tally, by a *separate* request in
+  `TallyToJson.ps1`. Not added to the master fetch on purpose: an unrecognised field
+  name fails the whole collection, and that would have taken the daily voucher sync
+  down for the sake of two spreadsheet columns. Empty for everybody until one sync of
+  each branch has run — so `/api/clients` counts what is filled per column and the page
+  says *"the sheet is not wrong, it is early"* instead of looking broken.
+
 ## v2.53 (pipeline) — September 2026 — Every branch syncs before any branch sweeps
 
 The weekly sweep ran inside the branch loop, and did what a long job in a loop always

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDC &middot; Every client, with what Tally knows about it</title>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--ink:#0f172a;--dim:#64748b;--teal:#0f766e;--red:#dc2626;--amber:#b45309;--green:#15803d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{margin:0;font-size:16px}
+  .sub{font-size:12px;color:var(--dim);margin-top:3px}
+  main{padding:18px 20px;max-width:1300px}
+  button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--teal);
+         background:var(--teal);color:#fff;cursor:pointer;font-weight:600}
+  button.ghost{background:#fff;color:var(--teal)}
+  button:disabled{opacity:.55;cursor:progress}
+  input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:16px;overflow:hidden}
+  h2{margin:0;padding:10px 14px;font-size:12.5px;background:#f1f5f9;border-bottom:1px solid var(--line);
+     font-family:ui-monospace,monospace;letter-spacing:.03em;color:#334155}
+  .body{padding:12px 14px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--dim);
+     font-family:ui-monospace,monospace;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  td.num{text-align:right;font-family:ui-monospace,monospace;white-space:nowrap}
+  .mono{font-family:ui-monospace,monospace}
+  .muted{color:var(--dim)}
+  .note{font-size:12px;color:var(--dim)}
+  .err{color:var(--red);font-family:ui-monospace,monospace;font-size:12.5px}
+  .verdict{padding:14px;border-radius:10px;font-size:14px;line-height:1.55}
+  .verdict.yes{background:#dcfce7;border:1px solid #86efac;color:#14532d}
+  .verdict.no{background:#fef3c7;border:1px solid #fcd34d;color:#78350f}
+  .verdict.info{background:#e0f2fe;border:1px solid #7dd3fc;color:#075985}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .pill{display:inline-block;font-size:10.5px;font-family:ui-monospace,monospace;padding:1px 6px;
+        border-radius:999px;background:#f1f5f9;color:#475569;margin-left:5px}
+  a{color:var(--teal)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Every client, with what Tally knows about it</h1>
+  <div class="sub">One row per customer &mdash; not per ledger: a customer carrying three spellings is one row, under
+    the name the merges point at, exactly as every other page counts it. Its contact details are taken from whichever
+    of those spellings actually carries them, because the current ledger is often the empty one. The sales figures and
+    the first and last invoice dates come from the same fold the dashboard&rsquo;s Sales Analysis tab reads, so a list
+    handed to a salesperson cannot quietly disagree with the dashboard the same salesperson is looking at
+    &middot; <a href="./">the party explainer</a> &middot; <a href="./outstanding.html">every party at once</a></div>
+</header>
+<main>
+  <section><h2>WHICH CLIENTS, AND WHOSE SALES</h2><div class="body">
+    <div class="row">
+      <label>branch
+        <select id="branch">
+          <option value="all">Consolidated</option>
+          <option value="kol">Kolkata</option>
+          <option value="ahm">Ahmedabad</option>
+        </select>
+      </label>
+      <label>sales measured as
+        <select id="measure">
+          <option value="gross">Gross &mdash; the invoice the customer owes, GST included</option>
+          <option value="net">Net + charges &mdash; without GST</option>
+          <option value="netpl">Net (P&amp;L) &mdash; the income accounts only</option>
+        </select>
+      </label>
+      <label>from <select id="fromFy"></select></label>
+      <button id="go">Load</button>
+      <button id="xl" class="ghost" disabled>&#11015; Excel</button>
+    </div>
+    <div class="note">Consolidated drops the two branches&rsquo; invoices on each other, so a client that buys from
+      both appears once with both branches&rsquo; sales behind it. Gross is what a salesperson means by
+      &ldquo;what this customer bought&rdquo;; the other two measures are there because the dashboard shows all three.</div>
+    <div id="err" class="err" style="margin-top:8px"></div>
+  </div></section>
+  <div id="out"></div>
+</main>
+<script src="../vendor/xlsx.full.min.js"></script>
+<script>
+(function(){
+  // The library is vendored and served from this origin -- the office network cannot
+  // reach a CDN, and a page that silently does nothing is worse than one that says why.
+  if(!window.XLSX){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    document.head.appendChild(s);
+  }
+  var $=function(id){return document.getElementById(id);};
+  var out=$('out'), err=$('err');
+  var loaded=null;
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function rupees(n){
+    var v=Math.round((n||0)*100)/100, neg=v<0, a=Math.abs(v);
+    a=(Math.round(a*100)%100)?a.toFixed(2):String(Math.round(a));
+    var p=a.split('.'), i=p[0];
+    var last3=i.slice(-3), rest=i.slice(0,-3);
+    if(rest) last3=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+','+last3;
+    return (neg?'-':'')+'₹'+last3+(p[1]?'.'+p[1]:'');
+  }
+  function fmt8(d){if(!d||d.length<8)return d||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+
+  // The year list. Built here from the calendar -- the fold's own list needs the whole
+  // summary document fetched, and this dropdown only has to name a starting year. What
+  // the database really holds comes back with the load, and the panel says how many
+  // years the figures cover.
+  var FYS=[];
+  function calendarFys(){
+    var d=new Date(), y=d.getFullYear();
+    if(d.getMonth()<3) y-=1;                       // April starts the year
+    var a=[];
+    for(var f=2015;f<=y;f++) a.push(String(f)+'-'+('0'+((f+1)%100)).slice(-2));
+    return a;
+  }
+  function fillYears(fys){
+    var sel=$('fromFy'), keep=sel.value;
+    FYS=(fys&&fys.length)?fys:calendarFys();
+    var want=(keep&&FYS.indexOf(keep)>=0)?keep:(FYS.indexOf('2020-21')>=0?'2020-21':FYS[0]);
+    sel.innerHTML='';
+    for(var i=0;i<FYS.length;i++){
+      var o=document.createElement('option');
+      o.value=FYS[i]; o.textContent='FY '+FYS[i];
+      if(FYS[i]===want) o.selected=true;
+      sel.appendChild(o);
+    }
+  }
+  fillYears(null);
+
+  // ---- the columns, in one place so the table and the sheet cannot drift apart ----
+  var COLS=[
+    {k:'ledger',   h:'Client (ledger name)'},
+    {k:'group',    h:'Parent group'},
+    {k:'gstin',    h:'GSTIN'},
+    {k:'pan',      h:'PAN'},
+    {k:'address',  h:'Address'},
+    {k:'state',    h:'State'},
+    {k:'country',  h:'Country'},
+    {k:'contact',  h:'Contact person'},
+    {k:'mobile',   h:'Mobile'},
+    {k:'phone',    h:'Phone'},
+    {k:'email',    h:'Email'},
+    {k:'firstSale',h:'First sale', date:true},
+    {k:'lastSale', h:'Last sale',  date:true}
+  ];
+
+  function load(){
+    err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
+    $('go').disabled=true; $('xl').disabled=true;
+    var q='/api/clients?branch='+encodeURIComponent($('branch').value)
+         +'&measure='+encodeURIComponent($('measure').value)
+         +'&fromFy='+encodeURIComponent($('fromFy').value);
+    fetch(q).then(function(r){return r.json();}).then(function(j){
+      $('go').disabled=false;
+      if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
+      loaded=j; $('xl').disabled=false;
+      render(j);
+    }).catch(function(e){
+      $('go').disabled=false; out.innerHTML='';
+      err.textContent=e.message;
+    });
+  }
+
+  function render(j){
+    var h='';
+    // What is missing is worth saying out loud. The pipeline only started pulling PAN
+    // and the address block in v2.54, so before one sync has run those columns are
+    // empty for everybody -- which reads as a broken sheet rather than a new one.
+    var thin=[];
+    var LABEL={gstin:'GSTIN',pan:'PAN',address:'address',state:'state',country:'country',
+               contact:'contact person',mobile:'mobile',phone:'phone',email:'email'};
+    for(var f in LABEL){ if((j.filled[f]||0)===0) thin.push(LABEL[f]); }
+    var dated=0;
+    for(var i=0;i<j.rows.length;i++) if(j.rows[i].firstSale) dated++;
+
+    h+='<section><h2>WHAT THIS SHEET WILL CARRY</h2><div class="body">';
+    h+='<div class="verdict '+(thin.length?'no':'yes')+'">';
+    h+='<b>'+j.clients+'</b> clients, sales from FY '+esc(j.fromFy)+' onwards ('+j.fys.length+' years, '
+      +esc(j.measure)+').';
+    if(thin.length){
+      h+='<br>Not one client carries '+esc(thin.join(', '))+' yet. Tally holds these, but the pipeline only began '
+        +'asking for them in v2.54 &mdash; they fill in after the next sync of each branch. The sheet is not wrong, '
+        +'it is early.';
+    }
+    if(!dated){
+      h+='<br>No first or last sale date yet either: those are written by the year-on-year fold, so they appear '
+        +'after one <b>&#8635; Rebuild</b> on the dashboard.';
+    }else if(dated<j.clients){
+      h+='<br>'+dated+' of '+j.clients+' clients have a sale in this window; the rest have bought nothing since '
+        +'FY '+esc(j.fromFy)+' &mdash; which is usually the row a salesperson is looking for.';
+    }
+    h+='</div>';
+    h+='<div class="note" style="margin-top:10px">Counted per column: ';
+    var parts=[];
+    for(var g in LABEL) parts.push(esc(LABEL[g])+' <b>'+(j.filled[g]||0)+'</b>');
+    h+=parts.join(' &middot; ')+'</div>';
+    h+='</div></section>';
+
+    // The table is a look, not the deliverable -- two thousand rows in the DOM is a
+    // slow page and nobody reads a client list in a browser. The sheet is the answer.
+    var show=j.rows.slice(0,200);
+    h+='<section><h2>THE FIRST '+show.length+' OF '+j.rows.length+', BIGGEST FIRST</h2><div class="body scroll">';
+    h+='<table><thead><tr><th>#</th>';
+    for(var c=0;c<COLS.length;c++) h+='<th>'+COLS[c].h+'</th>';
+    h+='<th>Total sales</th>';
+    for(var y=0;y<j.fys.length;y++) h+='<th>'+esc(j.fys[y])+'</th>';
+    h+='</tr></thead><tbody>';
+    for(var r=0;r<show.length;r++){
+      var row=show[r];
+      h+='<tr><td class="num muted">'+(r+1)+'</td>';
+      for(var c2=0;c2<COLS.length;c2++){
+        var col=COLS[c2], v=row[col.k]||'';
+        var cell=col.date?fmt8(v):esc(v);
+        if(col.k==='ledger' && row.mergedFrom && row.mergedFrom.length){
+          cell+='<span class="pill" title="'+esc(row.mergedFrom.join(' | '))+'">+'+row.mergedFrom.length+' merged</span>';
+        }
+        h+='<td'+(col.date?' class="mono"':'')+'>'+(cell||'<span class="muted">&mdash;</span>')+'</td>';
+      }
+      h+='<td class="num">'+rupees(row.totalSales)+'</td>';
+      for(var y2=0;y2<j.fys.length;y2++){
+        var t=(row.salesByFy||{})[j.fys[y2]]||0;
+        h+='<td class="num">'+(t?rupees(t):'<span class="muted">&mdash;</span>')+'</td>';
+      }
+      h+='</tr>';
+    }
+    h+='</tbody></table></div></section>';
+    out.innerHTML=h;
+  }
+
+  // ---- the sheet ---------------------------------------------------------------
+  // Dates go in as text in Tally's own reading order (dd-Mon-yyyy), not as Excel
+  // dates: a sheet opened on a machine set to US order silently reads 04-09 as
+  // 4 September in one column and 9 April in the next, and nobody notices.
+  function toExcel(){
+    if(!loaded) return;
+    if(!window.XLSX){ err.textContent='The spreadsheet writer has not loaded. Reload the page; if it keeps happening, the vendored copy is missing.'; return; }
+    var j=loaded;
+    var head=[];
+    for(var c=0;c<COLS.length;c++) head.push(COLS[c].h);
+    head.push('Merged spellings','Total sales '+j.fromFy+' onwards');
+    for(var y=0;y<j.fys.length;y++) head.push('FY '+j.fys[y]);
+    var aoa=[head];
+    for(var r=0;r<j.rows.length;r++){
+      var row=j.rows[r], line=[];
+      for(var c2=0;c2<COLS.length;c2++){
+        var col=COLS[c2], v=row[col.k]||'';
+        line.push(col.date?fmt8(v):v);
+      }
+      line.push((row.mergedFrom||[]).join(' | '));
+      line.push(row.totalSales||0);
+      for(var y2=0;y2<j.fys.length;y2++) line.push((row.salesByFy||{})[j.fys[y2]]||0);
+      aoa.push(line);
+    }
+    var ws=XLSX.utils.aoa_to_sheet(aoa);
+    var w=[{wch:38},{wch:22},{wch:18},{wch:13},{wch:46},{wch:16},{wch:12},{wch:22},{wch:16},{wch:16},{wch:28},
+           {wch:13},{wch:13},{wch:30},{wch:16}];
+    for(var y3=0;y3<j.fys.length;y3++) w.push({wch:14});
+    ws['!cols']=w;
+    ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:aoa.length-1,c:head.length-1}})};
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Clients');
+    var d=new Date(), stamp=String(d.getFullYear())+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);
+    XLSX.writeFile(wb,'CDC_Clients_'+j.branch+'_'+j.measure+'_'+j.fromFy.replace('-','')+'_'+stamp+'.xlsx');
+  }
+
+  $('go').addEventListener('click',load);
+  $('xl').addEventListener('click',toExcel);
+})();
+</script>
+</body>
+</html>
