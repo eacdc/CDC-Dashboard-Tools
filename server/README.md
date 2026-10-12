@@ -13,7 +13,7 @@ one service.
 | GET | `/api/dataset?from=YYYYMMDD&to=YYYYMMDD&branch=all\|kol\|ahm` | Per-branch `{hierarchy, vouchers}` for the range. Defaults: `from`=1-Apr of current FY, `to`=today, `branch`=all. Excludes `details` (kept lean for the dashboards). |
 | GET | `/api/voucher?branch=kol\|ahm&id=<guid>` (or `&no=<vchNo>[&type=&date=]`) | One voucher with **full `details`** (party GSTIN/address, invoice metadata, e-way bill, narration, HSN/qty/rate line items). Backs the printable invoice/journal view at `/voucher/`. |
 | GET | `/api/meta` | Per-branch voucher count + date coverage + master timestamp. |
-| GET | `/api/clients?branch=all\|kol\|ahm&measure=gross\|net\|netpl&fromFy=2020-21` | Every Sundry Debtor as one row: contacts off the master, sales per financial year and the first/last invoice date out of the `yoy_party` fold. One row per **client** (spellings merged), plus a `filled` count per column so an unsynced sheet reads as early rather than broken. Backs `/diag/clients.html`. |
+| GET | `/api/clients?branch=all\|kol\|ahm&measure=gross\|net\|netpl&fromFy=2020-21` | Every Sundry Debtor as one row: contacts off the master, sales per financial year and the first/last invoice date out of the `yoy_party` fold. One row per **client** (spellings merged), plus `filled` (a count per column), `traded` (rows with sales in the window) and `datesComplete` (`filled.lastSale >= traded`) so an unbuilt fold reads as early rather than broken. Backs `/diag/clients.html`. |
 | GET | `/health` | Liveness (checks Mongo connection). |
 | GET | `/consolidated/`, `/projected/`, `/dashboard/` | The static dashboards. |
 

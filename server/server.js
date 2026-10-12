@@ -841,10 +841,19 @@ app.get('/api/clients', async (req, res) => {
     // pulling PAN and the address block in v2.54, so before a sync has run those
     // columns are empty for everybody and the sheet looks broken rather than new.
     const have = (f) => rows.filter((r) => r[f]).length;
+    // The dates are counted against the rows that could HAVE one -- a client with no
+    // sale in the window has no first sale, and counting it as missing would read as
+    // a broken fold for ever. Short of `traded`, and the fold has not covered every
+    // year since the dates were added: one full rebuild (POST /api/yoy/scan, no fy)
+    // writes them, after which the 30-minute sync keeps them current year by year.
+    const traded = rows.filter((r) => r.totalSales).length;
     res.json({ ok: true, branch, measure, fromFy, fys, clients: rows.length,
       filled: { gstin: have('gstin'), pan: have('pan'), address: have('address'),
         state: have('state'), country: have('country'), contact: have('contact'),
-        mobile: have('mobile'), phone: have('phone'), email: have('email') },
+        mobile: have('mobile'), phone: have('phone'), email: have('email'),
+        firstSale: have('firstSale'), lastSale: have('lastSale') },
+      traded,
+      datesComplete: have('lastSale') >= traded,
       updatedAt: (summary && summary.updatedAt) || null, rows });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });

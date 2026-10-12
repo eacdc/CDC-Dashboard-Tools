@@ -696,6 +696,16 @@ and carries on. Until one sync has run those columns are empty for everybody, so
 `/api/clients` returns a `filled` count per field and the page says *"the sheet is not
 wrong, it is early"* rather than leaving it to look broken.
 
+The dates have the same shape of early state, for a different reason: they are written
+per financial year, and the 30-minute sync only refolds the years its payload touches,
+so until **one full rebuild** (`POST /api/yoy/scan` with no `fy`) has run since they
+were added, only the clients who traded in a refolded year carry one. `filled.lastSale`
+is therefore reported against `traded` (rows with sales in the window, not every row --
+a quiet client has no first sale and counting it as missing would read as broken for
+ever), and `datesComplete` says whether a caller is looking at a finished fold. After
+that one rebuild the sync maintains them: a refolded year replaces its own dates and
+leaves every other year of that client standing, which `test_yoy_api_fake.js` pins.
+
 ## ONE PARTY, TWO NAMES (party merge suggestions)
 
 CDC keeps one Tally company per financial year, so a party renamed between years

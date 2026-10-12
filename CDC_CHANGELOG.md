@@ -1,6 +1,24 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.55 (server, page) — October 2026 — The client list says whether its dates are built
+
+The first/last sale dates are folded **per financial year**, and the 30-minute sync
+refolds only the years it touches. So between adding the dates and the next *full*
+rebuild, only the clients who bought something in a refolded year carried one — and the
+page called the rest *"bought nothing since FY 2020-21"*, which is a different statement
+about the business and the wrong one. One full rebuild fixes the data; this fixes the
+reading of it.
+
+`/api/clients` now returns **`traded`** (rows with sales in the window) and
+**`datesComplete`**, and counts `filled.lastSale` against `traded` rather than against
+every row — a client that has gone quiet has no first sale, and counting it as missing
+would read as broken for ever. The page names the shortfall and says what to press.
+
+Pinned by a test that proves what happens after the rebuild: a sync of one year moves
+that client's last sale forward and leaves its first sale, which lives in a year the
+sync never touched, exactly where it was.
+
 ## v2.54 (server, pipeline, new page) — September 2026 — Every client, as a spreadsheet
 
 **`/diag/clients.html`** writes one row per customer: ledger name, parent group, GSTIN,

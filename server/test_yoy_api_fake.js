@@ -165,6 +165,37 @@ const settle = async (base) => {
   assert(recent.rows[0].firstSale === '20250710',
     'and the first sale is the first one inside the window: ' + recent.rows[0].firstSale);
 
+
+  // ---- the dates survive the 30-minute sync ----------------------------------
+  // A partial rebuild folds only the years its payload touched. The first/last sale
+  // dates are filed per year for exactly that reason: the touched year is replaced
+  // and every other year of that client is left standing. If they were one pair,
+  // a sync of the current year would blank the date of every client who last bought
+  // in an earlier one -- which is what an unrebuilt fold looks like, and why the
+  // readiness is reported rather than left to be guessed at.
+  const seenOf = async () => {
+    const d = await get(base, '/api/clients?fromFy=2020-21');
+    return d.rows.find((r) => r.ledger === 'A Customer') || {};
+  };
+  const beforeSync = await seenOf();
+  assert(beforeSync.firstSale === '20230510' && beforeSync.lastSale === '20250710',
+    'the client carries its first and last sale after a full rebuild');
+
+  await post(port, '/ingest', { branch: 'kol', from: '20260401', to: '20270331',
+    vouchers: [{ guid: 'y1', date: '20261020', type: 'Sales', no: 'S11',
+      ledgers: { 'Sales A/c': 90 }, party_ledgers: { 'A Customer': -90 } }] }, 'tok');
+  await settle(base);
+  const afterSync = await seenOf();
+  assert(afterSync.lastSale === '20261020',
+    'a sync of one year moves the last sale forward: ' + afterSync.lastSale);
+  assert(afterSync.firstSale === '20230510',
+    'and leaves the first sale, which lives in a year the sync never touched: ' + afterSync.firstSale);
+
+  const ready = await get(base, '/api/clients?fromFy=2020-21');
+  assert(ready.traded === 1 && ready.filled.lastSale === 1 && ready.datesComplete === true,
+    'the endpoint says the dates are complete, so a caller need not count the blanks itself: '
+    + JSON.stringify({ traded: ready.traded, lastSale: ready.filled.lastSale, datesComplete: ready.datesComplete }));
+
   server.close();
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== year-on-year API passed ==');
   process.exit(fails ? 1 : 0);

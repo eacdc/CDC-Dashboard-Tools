@@ -175,24 +175,30 @@
     var LABEL={gstin:'GSTIN',pan:'PAN',address:'address',state:'state',country:'country',
                contact:'contact person',mobile:'mobile',phone:'phone',email:'email'};
     for(var f in LABEL){ if((j.filled[f]||0)===0) thin.push(LABEL[f]); }
-    var dated=0;
-    for(var i=0;i<j.rows.length;i++) if(j.rows[i].firstSale) dated++;
+    // A client that bought nothing in the window HAS no first sale, so the dates are
+    // counted against the ones that traded -- never against every row, which read as
+    // "the rest have bought nothing" when the truth was "the fold has not written
+    // their dates yet", and sent somebody hunting a decade of vouchers for an answer
+    // a rebuild would have given.
+    var dated=j.filled.lastSale||0, traded=j.traded||0;
+    var datesOk=(j.datesComplete!==false);
 
     h+='<section><h2>WHAT THIS SHEET WILL CARRY</h2><div class="body">';
-    h+='<div class="verdict '+(thin.length?'no':'yes')+'">';
-    h+='<b>'+j.clients+'</b> clients, sales from FY '+esc(j.fromFy)+' onwards ('+j.fys.length+' years, '
-      +esc(j.measure)+').';
+    h+='<div class="verdict '+((thin.length||!datesOk)?'no':'yes')+'">';
+    h+='<b>'+j.clients+'</b> clients, of which <b>'+traded+'</b> bought something from FY '+esc(j.fromFy)
+      +' onwards ('+j.fys.length+' years, '+esc(j.measure)+'). A client that has gone quiet is still a row, '
+      +'with empty year columns.';
     if(thin.length){
       h+='<br>Not one client carries '+esc(thin.join(', '))+' yet. Tally holds these, but the pipeline only began '
         +'asking for them in v2.54 &mdash; they fill in after the next sync of each branch. The sheet is not wrong, '
         +'it is early.';
     }
-    if(!dated){
-      h+='<br>No first or last sale date yet either: those are written by the year-on-year fold, so they appear '
-        +'after one <b>&#8635; Rebuild</b> on the dashboard.';
-    }else if(dated<j.clients){
-      h+='<br>'+dated+' of '+j.clients+' clients have a sale in this window; the rest have bought nothing since '
-        +'FY '+esc(j.fromFy)+' &mdash; which is usually the row a salesperson is looking for.';
+    if(!datesOk){
+      h+='<br><b>'+(traded-dated)+' of those '+traded+' carry no sale date.</b> The dates are written by the '
+        +'year-on-year fold, one financial year at a time, and the fold has not covered every year since they were '
+        +'added &mdash; the 30-minute sync only refolds the years it touches. Press <b>&#8635; Rebuild</b> on the '
+        +'dashboard once (a full rebuild, no year chosen), wait for it to finish, and load this again. After that '
+        +'the sync keeps them current.';
     }
     h+='</div>';
     h+='<div class="note" style="margin-top:10px">Counted per column: ';
