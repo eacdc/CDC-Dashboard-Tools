@@ -578,5 +578,9 @@ module.exports = {
   detailOf, spliceDetail, treeFrom,
   partyDetailOf, partyTreeFrom, PARTY_SECTIONS, PARTY_MEASURES, PARTY_KEYS,
   explainVoucher, chainOf, sundryOf, acctOf, catOf,
+  // Exported so an endpoint can ask "whose invoice is this?" with the fold's own
+  // answer rather than a second implementation of the dominant-party rule. Names
+  // must go through canonKeys first, exactly as addVoucher does it.
+  canonKeys, attribution,
   fyOf, fyLabel, monthOf, LINES, TREE_LINES,
 };
