@@ -193,6 +193,42 @@ applies. `processData` reports what it dropped as `stats.ibInvoices` /
 | Credit Note, party_ledgers | Debtor (cancellation) | — |
 | Debit Note, party_ledgers | — | Creditor (cancellation) |
 
+## CANCELLED AND OPTIONAL VOUCHERS
+
+Tally's own two marks for "this is not a transaction", fetched as `ISCANCELLED` and
+`ISOPTIONAL` and stored as `cancelled` / `optional` on the voucher.
+
+A **cancelled** voucher carries no postings, so it was already harmless. An **optional**
+one is the dangerous half: it is a draft Tally leaves out of every one of its own
+reports, and it reaches the Day Book looking exactly like a real sale. Counting it
+inflates revenue *here and nowhere else*, which is the hardest kind of disagreement to
+find -- the dashboard and Tally differ, and every voucher in the list looks real.
+
+Three decisions in how they are handled:
+
+- **Stored, not dropped at the extractor.** A voucher cancelled AFTER we stored it has
+  to be able to arrive and turn its stored copy off; a payload that simply omitted it
+  would leave the live copy standing for ever.
+- **The flag comes off again.** `cleanVoucher` writes each flag only when Tally says
+  yes, so the upsert `$unset`s it when Tally says no -- an optional voucher confirmed
+  later is an ordinary sale, and a flag that stuck would exclude it permanently.
+  `voucherOp()` in `ingest.js` is the one place that builds that update.
+- **Excluded once, where everything is folded.** `addVoucher` returns early on either
+  flag, so every line, party, tree, date and total behind `/api/yoy/*`, `/api/clients`
+  and `/api/sales/monthly` drops it without any reader remembering to. The queries that
+  read vouchers directly spread `LIVE_ONLY` into their `$match`: `/api/dataset`,
+  `/api/products`, the bill netting and ledger movement behind outstanding, and the
+  voucher list behind a year-on-year figure.
+
+Two places deliberately do **not** filter. The coverage counts (`/api/meta`, the bills
+coverage, a branch's first and last stored date) answer *"what do we hold"*, and a
+stored draft is held. And `/diag/?` shows every voucher it saw with what it did with
+it -- hiding a draft there would hide the reason a figure moved.
+
+Flags only exist on vouchers synced since the pipeline began fetching them (v2.57). An
+older draft already in the store counts until a re-pull covers its date; the weekly
+sweep reads the whole range, so one sweep per branch clears the backlog.
+
 ## WHAT CAN DELETE A VOUCHER
 
 Exactly three code paths remove vouchers. Worth knowing, because a week of May 2026

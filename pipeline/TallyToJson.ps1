@@ -271,6 +271,13 @@ function Collect-BillAllocs($node, $list) {
 # anywhere in the voucher subtree. Many header fields (e-way bill, buyer's order,
 # delivery note) live nested inside *.LIST wrappers, so a direct-child-only lookup
 # silently returned "" for them -- that's why they were blank on the printed invoice.
+# Tally writes a boolean as "Yes"/"No", and older builds as "1"/"0". Anything else --
+# an empty string, a missing tag -- is NOT a yes: a flag we failed to read must never
+# read as "this voucher is cancelled" and delete a real sale from every total.
+function IsYes($s) {
+    $t = "$s".Trim().ToLower()
+    return ($t -eq "yes" -or $t -eq "true" -or $t -eq "1")
+}
 function xfirst($node, [string[]]$names) {
     foreach ($n in $names) {
         $c = $node.SelectSingleNode($n)
@@ -453,6 +460,14 @@ function ConvertTo-VoucherObject($v) {
     Collect-BillAllocs $v $billAllocs
     $out = [ordered]@{ date=$date; party=$party; no=$vnum; type=$vtype; ledgers=$ledObj; party_ledgers=$partyObj; details=$details; guid=$guid }
     if ($billAllocs.Count -gt 0) { $out.bills = $billAllocs.ToArray() }
+    # A cancelled voucher is not a transaction, and an OPTIONAL one is a draft Tally
+    # itself leaves out of every report -- but it reaches the Day Book looking exactly
+    # like a real sale, so counting it would quietly inflate revenue. Carried as flags
+    # rather than dropped here: a voucher CANCELLED after we stored it must be able to
+    # arrive and turn its stored copy off, which a payload that omits it cannot do.
+    # Only set when true, so nothing is added to the 99.9% of vouchers that are real.
+    if (IsYes (xfirst $v @("ISCANCELLED"))) { $out.cancelled = $true }
+    if (IsYes (xfirst $v @("ISOPTIONAL")))  { $out.optional  = $true }
     return $out
 }
 # Pull one day's Day Book, return an ArrayList of voucher objects.
