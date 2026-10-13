@@ -706,6 +706,60 @@ ever), and `datesComplete` says whether a caller is looking at a finished fold. 
 that one rebuild the sync maintains them: a refolded year replaces its own dates and
 leaves every other year of that client standing, which `test_yoy_api_fake.js` pins.
 
+### Reading this data from another application (the CRM)
+
+A second app wanting "who bought what, when" has three endpoints and one rule.
+
+| It wants | It reads |
+|---|---|
+| every customer, contacts, sales per FY, first/last sale | `GET /api/clients` |
+| a customer's sales month by month; who bought last month and not this one | `GET /api/sales/monthly` |
+| which stock items were sold, overall or to one customer | `GET /api/products` |
+
+**The rule: resolve a party's name before grouping on it.** The vouchers keep whatever
+was typed at the time, so one customer under two spellings is two rows to anyone who
+groups on the raw name — the same defect that once put a customer whole on the P&L tab
+and split in two in the year-on-year panel. `/api/clients` returns the canonical name
+plus `mergedFrom`, which is enough to build the map; `aliases.map` is the same thing at
+source. Nothing else is a safe key: GSTIN is blank for many parties and shared across
+sister concerns, and the ledger GUID (`masters.ids`) is keyed by the CURRENT name and
+never stored on a voucher.
+
+`/api/sales/monthly` exists because `/api/yoy/party` answers with the drill-down tree
+the panel draws — salesperson > group > party, figures sparse-keyed by a slot index
+into a decade laid end to end, month 0 of each year being April. That is right for a
+panel and wrong for a caller that wants "who bought in September", and re-deriving
+which slot was which month is exactly where an integration invents an off-by-one. So
+`slotMonth()` names them, once, and the flat rows carry `YYYYMM` keys that join
+directly against a voucher's own `date.slice(0,6)`. A month with no invoice is
+**absent**, not zero — that absence is the question behind "bought last month but not
+this month".
+
+`/api/products` is the one endpoint that reads raw vouchers, because line items are
+folded nowhere: they live in `details.items`, which `/api/dataset` projects away to
+stay lean. Its window is therefore bounded (one financial year by default) and the
+scan is reported. It absorbs three things rather than leaving them to the caller, each
+a wrong number waiting to happen:
+
+- **Whose invoice it was.** The dominant party comes from the fold's own
+  `attribution()` (exported for this, not reimplemented). A caller unwinding
+  `party_ledgers` books sales against banks and against the other branch — on a cash
+  sale the bank leg is often the bigger one.
+- **Which product.** Tally's description block is the stock item, then the user's
+  description lines, then the batch, joined by newlines. The product is its FIRST
+  line; grouping on the whole string scatters one item over dozens of rows.
+- **The quantity's unit.** `qty` is a string, `unit` is separate, and one item can be
+  billed in Nos on one invoice and Kgs on the next. Quantities are summed per unit and
+  never added across units.
+
+What it cannot give is a **product category**: no stock-item master is pulled, so the
+only grouping axes are the item name and the HSN.
+
+**These endpoints are unauthenticated**, like every other `GET` here, and `cors()` is
+open. That was defensible while they served month totals to our own browser; a
+customer list with GSTINs and a decade of buying history is a different exposure, and
+the read side needs a token before the address is handed to anything outside.
+
 ## ONE PARTY, TWO NAMES (party merge suggestions)
 
 CDC keeps one Tally company per financial year, so a party renamed between years

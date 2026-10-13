@@ -74,8 +74,8 @@ const settle = async (base) => {
 
 (async () => {
   fakeDb.collection('masters').docs.push({ branch: 'kol',
-    ledgers: { 'Sales A/c': 'Sales Accounts', 'A Customer': 'Sundry Debtors' },
-    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null },
+    ledgers: { 'Sales A/c': 'Sales Accounts', 'A Customer': 'Sundry Debtors', 'HDFC Bank': 'Bank Accounts' },
+    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null },
     contacts: { 'A Customer': { gstin: '19AAAAA0000A1Z5', pan: 'AAAAA0000A', email: 'buyer@example.com',
       mobile: '9800000000', address: '12 Some Road, Kolkata', state: 'West Bengal', country: 'India' } } });
   fakeDb.collection('vouchers').docs.push(
@@ -195,6 +195,54 @@ const settle = async (base) => {
   assert(ready.traded === 1 && ready.filled.lastSale === 1 && ready.datesComplete === true,
     'the endpoint says the dates are complete, so a caller need not count the blanks itself: '
     + JSON.stringify({ traded: ready.traded, lastSale: ready.filled.lastSale, datesComplete: ready.datesComplete }));
+
+
+  // ---- the CRM's two shapes --------------------------------------------------
+  // A customer by calendar month, flat. The fold stores a decade laid end to end and
+  // month 0 of a year is APRIL, so the months are named by the endpoint -- re-deriving
+  // which slot was which month is exactly where an integration invents an off-by-one.
+  const mon = await get(base, '/api/sales/monthly?fromFy=2020-21');
+  assert(mon.ok && mon.months[0] === '202304' && mon.months[11] === '202403',
+    'the months are named in calendar terms and the year starts in April: '
+    + mon.months.slice(0, 12).join(','));
+  const mc = mon.rows.find((r) => r.ledger === 'A Customer') || {};
+  assert(mc.byMonth && mc.byMonth['202305'] === 100 && mc.byMonth['202610'] === 90,
+    'each invoice lands in the calendar month it was raised in: ' + JSON.stringify(mc.byMonth));
+  assert(mc.byMonth['202304'] === undefined,
+    'a month with no invoice is ABSENT, which is the whole question behind "bought last month but not this"');
+  assert(mc.lastSale === '20261020', 'and the row carries the last sale to the day');
+
+  // Line items, with the three traps the endpoint is there to absorb.
+  await post(port, '/ingest', { branch: 'kol', from: '20260401', to: '20270331',
+    vouchers: [{ guid: 'p1', date: '20261105', type: 'Sales', no: 'S12',
+      ledgers: { 'Sales A/c': 1000 },
+      // The bank leg is the BIGGER one. A caller unwinding party_ledgers would book
+      // this sale against the bank; the fold gives it to the largest Sundry Debtor.
+      party_ledgers: { 'A Customer': -1000, 'HDFC Bank': -9000 },
+      details: { items: [{ slNo: '1', hsn: '48191000', qty: '1,200', unit: 'Nos',
+        rate: '10.00/Nos', amount: 1000,
+        description: 'Mono Carton 250gsm\nPrinted 4+0\nBatch : B-12' }] } }] }, 'tok');
+  await settle(base);
+
+  const pr = await get(base, '/api/products?from=20260401&to=20270331');
+  assert(pr.ok && pr.rows.length === 1 && pr.rows[0].name === 'Mono Carton 250gsm',
+    'the product is the FIRST line of Tally’s description block, not the batch and the artwork note too: '
+    + JSON.stringify(pr.rows.map((r) => r.name)));
+  assert(pr.rows[0].qtyByUnit.Nos === 1200,
+    'the quantity is summed per unit, with the thousands comma read: ' + JSON.stringify(pr.rows[0].qtyByUnit));
+  assert(pr.rows[0].customers === 1 && pr.counted === 1 && pr.unattributed === 0,
+    'the sale is attributed to the debtor, never to the bank leg that was bigger: ' + JSON.stringify(
+      { customers: pr.rows[0].customers, counted: pr.counted, unattributed: pr.unattributed }));
+  assert(pr.rows[0].hsn === '48191000', 'and the HSN travels with it');
+
+  const byHsn = await get(base, '/api/products?from=20260401&to=20270331&by=hsn');
+  assert(byHsn.rows[0].name === '48191000', 'the same window groups by HSN on request');
+
+  const mine = await get(base, '/api/products?from=20260401&to=20270331&party=A Customer');
+  assert(mine.counted === 1 && mine.rows.length === 1, 'one customer’s own items can be asked for');
+  const nobody = await get(base, '/api/products?from=20260401&to=20270331&party=Someone Else');
+  assert(nobody.counted === 0 && nobody.rows.length === 0,
+    'and a customer who bought nothing in the window answers empty rather than everything');
 
   server.close();
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== year-on-year API passed ==');

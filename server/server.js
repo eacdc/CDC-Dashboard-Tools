@@ -858,6 +858,183 @@ app.get('/api/clients', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// The calendar month a slot of the year-on-year arrays stands for. Month 0 is APRIL
+// -- the books' first month, not January -- so slots 9..11 fall in the next calendar
+// year. Returned as "YYYYMM" because that is what `date.slice(0,6)` on a voucher
+// gives, and a caller joining the two should not have to know this rule at all.
+function slotMonth(fy, i) {
+  const y = parseInt(String(fy).slice(0, 4), 10);
+  const m = i + 4;
+  return m <= 12 ? String(y) + ('0' + m).slice(-2) : String(y + 1) + ('0' + (m - 12)).slice(-2);
+}
+
+// GET /api/sales/monthly?branch=all|kol|ahm&measure=netpl|net|gross&fromFy=2020-21
+//                       &section=sales|purchase&min=0
+// One row per customer, one column per CALENDAR MONTH, flat.
+//
+// The same numbers `/api/yoy/party` serves, and the same fold behind them -- but that
+// one answers with the drill-down tree the dashboard draws (salesperson > group >
+// party, monthly figures sparse-keyed by a slot index into a decade laid end to end).
+// That is the right shape for a panel that opens one branch at a time and the wrong
+// one for a caller that wants "who bought in September". Walking someone else's tree
+// and re-deriving which slot was which month is where an integration invents its own
+// off-by-one, so the months are named here, once, by `slotMonth`.
+//
+// Reads the stored fold, never the vouchers: a month-by-month answer for every
+// customer over a decade is two scans of the whole collection if computed live, and
+// it would also be free to disagree with the dashboard. Costs one query per key.
+app.get('/api/sales/monthly', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const measure = yoy.PARTY_MEASURES.includes(String(req.query.measure)) ? String(req.query.measure) : 'gross';
+    const section = yoy.PARTY_SECTIONS[String(req.query.section)] ? String(req.query.section) : 'sales';
+    const fromFy = /^\d{4}-\d{2}$/.test(String(req.query.fromFy || '')) ? String(req.query.fromFy) : '2020-21';
+    const min = Number(req.query.min) > 0 ? Number(req.query.min) : 0;
+
+    const db = await getDb();
+    const summary = await db.collection('yoy_summary').findOne({ _id: 'summary' }, { projection: { fys: 1, updatedAt: 1 } });
+    const fys = (((summary && summary.fys) || []).filter((f) => f >= fromFy));
+    const months = [];
+    for (const fy of fys) for (let i = 0; i < 12; i++) months.push(slotMonth(fy, i));
+
+    const party = await readPartyChunks(db, branch + '|' + section + '|' + measure);
+    const seen = await readPartyChunks(db, branch + '|' + section + '|seen');
+
+    const rows = [];
+    for (const name of Object.keys(party)) {
+      const byMonth = {};
+      let total = 0;
+      for (const fy of fys) {
+        const a = party[name][fy];
+        if (!a) continue;
+        for (let i = 0; i < 12; i++) {
+          const v = Math.round((a[i] || 0) * 100) / 100;
+          if (v) { byMonth[slotMonth(fy, i)] = v; total += v; }
+        }
+      }
+      total = Math.round(total * 100) / 100;
+      if (!total || total < min) continue;
+      let first = '', last = '';
+      const sf = seen[name] || {};
+      for (const fy of fys) {
+        const s = sf[fy];
+        if (!s) continue;
+        if (!first || s.first < first) first = s.first;
+        if (!last || s.last > last) last = s.last;
+      }
+      // Sparse on purpose: a decade is 120 columns and a customer trades in a handful
+      // of them. A month absent from byMonth is a month with no invoice, which is the
+      // whole question behind "bought last month but not this".
+      rows.push({ ledger: name, total, firstSale: first, lastSale: last, byMonth });
+    }
+    rows.sort((a, b) => b.total - a.total);
+    const dated = rows.filter((r) => r.lastSale).length;
+    res.json({ ok: true, branch, measure, section, fromFy, fys, months,
+      parties: rows.length, traded: rows.length,
+      filled: { lastSale: dated }, datesComplete: dated >= rows.length,
+      updatedAt: (summary && summary.updatedAt) || null, rows });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/products?branch=all|kol|ahm&from=YYYYMMDD&to=YYYYMMDD&by=product|hsn
+//                  &party=<canonical name>&limit=500
+// What was actually sold, by stock item, over a date window -- and for one customer
+// when `party` is given.
+//
+// This one DOES read the vouchers, because line items are not folded anywhere: they
+// live in `details.items`, which `/api/dataset` deliberately projects away. So it is
+// the one endpoint here with a cost proportional to the window, and the window is
+// therefore bounded (one financial year by default) and the scan is reported.
+//
+// Three things it does NOT leave to the caller, each of which is a wrong number
+// waiting to happen:
+//
+//   * WHOSE invoice it was. The fold gives the whole invoice to the largest Sundry
+//     Debtor on it; a caller unwinding `party_ledgers` instead would book sales
+//     against banks and against the other branch. The dominant party comes from
+//     `attribution()` itself, so this endpoint and the dashboard cannot disagree.
+//   * WHICH product. Tally's description block is the stock item, then the user's
+//     own description lines, then the batch, joined by newlines -- so the product is
+//     its FIRST LINE and grouping on the whole string scatters one item over dozens
+//     of rows.
+//   * The QUANTITY's unit. `qty` is a string and `unit` is separate, and one item can
+//     be billed in Nos on one invoice and Kgs on the next. Quantities are therefore
+//     summed PER UNIT and never added across units.
+app.get('/api/products', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const by = String(req.query.by) === 'hsn' ? 'hsn' : 'product';
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 5000);
+    // Default window: the financial year in progress, in the books' own timezone.
+    const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const fyStart = (nowIst.getUTCMonth() + 1 >= 4 ? nowIst.getUTCFullYear() : nowIst.getUTCFullYear() - 1);
+    const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : String(fyStart) + '0401';
+    const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : String(fyStart + 1) + '0331';
+
+    const db = await getDb();
+    const xd = await mergedHierarchy(db);
+    const aliases = await readAliasMap(db);
+    const S = yoy.newSummary(xd, aliases);
+    // One customer asked for: match every spelling merged into that name, because the
+    // vouchers keep whatever was typed at the time.
+    const wanted = req.query.party ? new Set(aliasVariants(aliases, S.canon(String(req.query.party)))) : null;
+
+    const q = { date: { $gte: from, $lte: to }, 'details.items.0': { $exists: true } };
+    if (branch !== 'all') q.branch = branch;
+    const cursor = db.collection('vouchers')
+      .find(q, { projection: { _id: 0, branch: 1, date: 1, no: 1, type: 1,
+        ledgers: 1, party_ledgers: 1, 'details.items': 1 } })
+      .batchSize(500);
+
+    const acc = new Map();
+    let scanned = 0, counted = 0, unattributed = 0;
+    for await (const v of cursor) {
+      scanned++;
+      // The query asks Mongo for vouchers that carry items, but a voucher without
+      // them must cost nothing here rather than throw: this endpoint is the one that
+      // reads raw vouchers, and the shape of `details` is optional by design.
+      const items = (v.details && Array.isArray(v.details.items)) ? v.details.items : [];
+      if (!items.length) continue;
+      const ledgers = yoy.canonKeys(S, v.ledgers);
+      const parties = yoy.canonKeys(S, v.party_ledgers);
+      const a = yoy.attribution(S, ledgers, parties, branch === 'all');
+      const buyer = a.dd;                      // the dominant Sundry Debtor
+      if (!buyer) { unattributed++; continue; }
+      if (wanted && !wanted.has(buyer)) continue;
+      counted++;
+      for (const it of items) {
+        const product = String(it.description || '').split('\n')[0].trim();
+        const key = by === 'hsn' ? (String(it.hsn || '') || '(no HSN)') : (product || '(unnamed item)');
+        let row = acc.get(key);
+        if (!row) {
+          row = { key, value: 0, vouchers: 0, qtyByUnit: {}, customers: new Set(),
+            firstSale: v.date, lastSale: v.date, hsn: by === 'hsn' ? key : String(it.hsn || '') };
+          acc.set(key, row);
+        }
+        row.value += Number(it.amount) || 0;
+        row.vouchers++;
+        row.customers.add(buyer);
+        if (v.date < row.firstSale) row.firstSale = v.date;
+        if (v.date > row.lastSale) row.lastSale = v.date;
+        const qn = parseFloat(String(it.qty || '').replace(/,/g, ''));
+        if (isFinite(qn) && qn) {
+          const u = String(it.unit || '').trim() || '(no unit)';
+          row.qtyByUnit[u] = Math.round(((row.qtyByUnit[u] || 0) + qn) * 1000) / 1000;
+        }
+      }
+    }
+    const rows = [...acc.values()]
+      .map((r) => ({ name: r.key, hsn: r.hsn, value: Math.round(r.value * 100) / 100,
+        vouchers: r.vouchers, customers: r.customers.size, qtyByUnit: r.qtyByUnit,
+        firstSale: r.firstSale, lastSale: r.lastSale }))
+      .sort((x, y) => Math.abs(y.value) - Math.abs(x.value));
+    res.json({ ok: true, branch, by, from, to,
+      party: req.query.party ? S.canon(String(req.query.party)) : null,
+      products: rows.length, scanned, counted, unattributed,
+      truncated: rows.length > limit, rows: rows.slice(0, limit) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // GET /api/bills/coverage
 // Can the outstanding figure be computed from the VOUCHERS alone, and the uploaded
 // Bills CSV retired? The pipeline has captured bill-wise allocations since August

@@ -1,6 +1,36 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.56 (server) — October 2026 — Two endpoints the CRM needs, so it cannot invent its own numbers
+
+A second application now reads this data to filter customers by what they bought. Two
+of its four questions had no endpoint, and both would have been answered by a
+re-implementation of rules that already live here.
+
+**`GET /api/sales/monthly`** — one row per customer, one column per calendar month,
+flat and sparse. The same fold `/api/yoy/party` serves, but that one answers with the
+drill-down tree the panel draws, figures keyed by a slot index into a decade laid end
+to end with April as month 0. Re-deriving which slot was which month is where an
+integration invents an off-by-one, so the months are named here, once, as `YYYYMM` —
+which joins straight onto a voucher's own `date`. A month with no invoice is **absent**
+rather than zero, because that absence is the question behind *"bought last month but
+not this month"*.
+
+**`GET /api/products`** — what was sold, by stock item or HSN, over a date window and
+optionally for one customer. The only endpoint that reads raw vouchers: line items live
+in `details.items`, which `/api/dataset` projects away. It absorbs the three things a
+caller would otherwise get wrong — **whose** invoice it was (the fold's own
+`attribution()`, exported rather than copied, because on a cash sale the bank leg is
+often bigger than the customer's and a naive unwind books the sale to the bank),
+**which** product (Tally's description block is item + description lines + batch joined
+by newlines, so the product is its first line), and the quantity's **unit** (summed per
+unit, never added across them).
+
+Both are pinned by tests that state the trap: the bank leg on the fixture voucher is
+deliberately the larger one, and the months are asserted to start in April.
+
+Still open, deliberately: the read endpoints remain unauthenticated.
+
 ## v2.55 (server, page) — October 2026 — The client list says whether its dates are built
 
 The first/last sale dates are folded **per financial year**, and the 30-minute sync
