@@ -94,6 +94,13 @@ function cleanVoucher(v) {
     ledgers: v.ledgers && typeof v.ledgers === 'object' ? v.ledgers : {},
     party_ledgers: v.party_ledgers && typeof v.party_ledgers === 'object' ? v.party_ledgers : {},
   };
+  // Tally's own two "this is not a transaction" marks. Stored rather than dropped, so
+  // a voucher cancelled AFTER we stored it can arrive and turn its stored copy off --
+  // a payload that simply omitted it would leave the live copy standing. Only ever
+  // written when true, and read as `{$ne: true}` so the millions of vouchers stored
+  // before the pipeline fetched these fields need no migration.
+  if (v.cancelled === true || v.cancelled === 'true') out.cancelled = true;
+  if (v.optional === true || v.optional === 'true') out.optional = true;
   const details = cleanDetails(v.details);
   if (details) out.details = details;
   // Bill-wise allocations (bill reference each posting is booked against). Optional;
@@ -111,6 +118,21 @@ function cleanVoucher(v) {
     if (bills.length) out.bills = bills;
   }
   return out;
+}
+
+// The upsert for one voucher. `cleanVoucher` writes `cancelled`/`optional` only when
+// Tally says yes, so the flags have to be UNSET when it says no: an optional voucher
+// confirmed later is an ordinary sale, and a flag that stuck would leave it out of
+// every total for ever. $set and $unset in one update, so one voucher is one op.
+function voucherOp(branch, raw) {
+  const v = cleanVoucher(raw);
+  const _id = voucherKey(branch, raw);
+  const update = { $set: { _id, branch, guid: raw.guid || _id, ...v, updatedAt: new Date() } };
+  const off = {};
+  if (!v.cancelled) off.cancelled = '';
+  if (!v.optional) off.optional = '';
+  if (Object.keys(off).length) update.$unset = off;
+  return { updateOne: { filter: { _id }, update, upsert: true } };
 }
 
 function voucherKey(branch, v) {
@@ -234,17 +256,7 @@ async function ingest(payload) {
   // 2) Vouchers (idempotent upsert on branch+guid, so re-running a day is safe).
   const vouchers = Array.isArray(payload.vouchers) ? payload.vouchers : [];
   if (vouchers.length) {
-    const ops = vouchers.map((raw) => {
-      const v = cleanVoucher(raw);
-      const _id = voucherKey(branch, raw);
-      return {
-        updateOne: {
-          filter: { _id },
-          update: { $set: { _id, branch, guid: raw.guid || _id, ...v, updatedAt: new Date() } },
-          upsert: true,
-        },
-      };
-    });
+    const ops = vouchers.map((raw) => voucherOp(branch, raw));
     // Chunk to keep bulk payloads reasonable.
     const CHUNK = 1000;
     for (let i = 0; i < ops.length; i += CHUNK) {
@@ -392,11 +404,7 @@ async function syncIncremental(payload) {
     }
   }
   if (vouchers.length) {
-    const ops = vouchers.map((raw) => {
-      const v = cleanVoucher(raw);
-      const _id = voucherKey(branch, raw);
-      return { updateOne: { filter: { _id }, update: { $set: { _id, branch, guid: raw.guid || _id, ...v, updatedAt: new Date() } }, upsert: true } };
-    });
+    const ops = vouchers.map((raw) => voucherOp(branch, raw));
     const CHUNK = 1000;
     for (let i = 0; i < ops.length; i += CHUNK) {
       const r = await db.collection('vouchers').bulkWrite(ops.slice(i, i + CHUNK), { ordered: false });

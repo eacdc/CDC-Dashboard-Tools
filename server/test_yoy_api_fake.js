@@ -2,13 +2,28 @@
 // the cached read, the partial (one-year) rebuild, and the automatic refresh that
 // follows an ingest. No DB, no browser -- the figures themselves are checked against
 // the real dashboard in test_yoy_fake.js.
+// A dotted path, array indices included -- `details.items.0` is how Mongo is asked
+// whether a voucher carries any line items, and a stub that answered that by looking
+// up a key literally named "details.items.0" would quietly match every voucher.
+function valueAt(doc, path) {
+  let cur = doc;
+  for (const seg of String(path).split('.')) {
+    if (cur == null) return undefined;
+    cur = Array.isArray(cur) && /^\d+$/.test(seg) ? cur[Number(seg)] : cur[seg];
+  }
+  return cur;
+}
 function matches(doc, filter) {
   for (const [k, cond] of Object.entries(filter)) {
-    const val = doc[k];
+    const val = valueAt(doc, k);
     if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
       if ('$in' in cond && !cond.$in.includes(val)) return false;
+      // $ne and $exists are what the cancelled/optional filters are written with, so
+      // a stub that skipped them would pass a test the real database fails.
+      if ('$ne' in cond && val === cond.$ne) return false;
+      if ('$exists' in cond && (val !== undefined) !== !!cond.$exists) return false;
     } else if (val !== cond) return false;
   }
   return true;
@@ -18,8 +33,15 @@ class Col {
   async createIndex() {}
   async updateOne(filter, update, opts = {}) {
     const set = update.$set || {};
+    const unset = update.$unset || {};
     const f = this.docs.find((d) => matches(d, filter));
-    if (f) { Object.assign(f, set); return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 }; }
+    if (f) {
+      Object.assign(f, set);
+      // $unset is how a flag comes OFF -- an optional voucher confirmed in Tally. A
+      // stub that ignored it would leave the draft excluded for ever and say nothing.
+      for (const k of Object.keys(unset)) delete f[k];
+      return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 };
+    }
     if (opts.upsert) { this.docs.push({ ...filter, ...set }); return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 }; }
     return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
   }
@@ -74,8 +96,9 @@ const settle = async (base) => {
 
 (async () => {
   fakeDb.collection('masters').docs.push({ branch: 'kol',
-    ledgers: { 'Sales A/c': 'Sales Accounts', 'A Customer': 'Sundry Debtors', 'HDFC Bank': 'Bank Accounts' },
-    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null },
+    ledgers: { 'Sales A/c': 'Sales Accounts', 'A Customer': 'Sundry Debtors', 'HDFC Bank': 'Bank Accounts',
+      'B Customer': 'Sundry Debtors', 'Paper Purchase': 'Purchase Accounts', 'Paper Supplier': 'Sundry Creditors' },
+    groups: { 'Sales Accounts': 'Revenue Account', 'Sundry Debtors': 'Current Assets', 'Bank Accounts': 'Current Assets', 'Purchase Accounts': 'Revenue Account', 'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account', 'Current Assets': 'Capital Account', 'Revenue Account': null, 'Capital Account': null },
     contacts: { 'A Customer': { gstin: '19AAAAA0000A1Z5', pan: 'AAAAA0000A', email: 'buyer@example.com',
       mobile: '9800000000', address: '12 Some Road, Kolkata', state: 'West Bengal', country: 'India' } } });
   fakeDb.collection('vouchers').docs.push(
@@ -144,8 +167,10 @@ const settle = async (base) => {
   // fold the Sales Analysis tab reads. A salesperson holding this sheet next to the
   // dashboard must not be able to find two different answers for one customer.
   const cl = await get(base, '/api/clients?fromFy=2020-21');
-  assert(cl.ok && cl.clients === 1, 'every Sundry Debtor is a row, and nothing else is: ' + JSON.stringify(cl.rows.map((r) => r.ledger)));
-  const c0 = cl.rows[0];
+  assert(cl.ok && cl.rows.map((r) => r.ledger).sort().join(',') === 'A Customer,B Customer',
+    'every Sundry Debtor is a row, and nothing else is -- not the income account, not the bank, not the supplier: '
+    + JSON.stringify(cl.rows.map((r) => r.ledger)));
+  const c0 = cl.rows.find((r) => r.ledger === 'A Customer');
   assert(c0.ledger === 'A Customer' && c0.group === 'Sundry Debtors', 'the row names the client and the group it hangs under');
   assert(c0.gstin === '19AAAAA0000A1Z5' && c0.pan === 'AAAAA0000A' && c0.state === 'West Bengal'
     && c0.email === 'buyer@example.com', 'what Tally holds about the client travels with it');
@@ -243,6 +268,112 @@ const settle = async (base) => {
   const nobody = await get(base, '/api/products?from=20260401&to=20270331&party=Someone Else');
   assert(nobody.counted === 0 && nobody.rows.length === 0,
     'and a customer who bought nothing in the window answers empty rather than everything');
+
+
+  // ---- one row per customer and product, paged ------------------------------
+  const item = (desc, hsn, qty, amount) => ({ slNo: '1', description: desc, hsn,
+    qty: String(qty), unit: 'Nos', rate: '10.00/Nos', amount });
+  await post(port, '/ingest', { branch: 'kol', from: '20260401', to: '20270331', vouchers: [
+    // A second customer, two items, so the per-customer list has something to page.
+    { guid: 'p2', date: '20261110', type: 'Sales', no: 'S13',
+      ledgers: { 'Sales A/c': 7000 }, party_ledgers: { 'B Customer': -7000 },
+      details: { items: [item('Duplex Box 300gsm', '48191000', 500, 5000),
+        item('Mono Carton 250gsm', '48191000', 200, 2000)] } },
+    // A PURCHASE that carries stock items. Not a sale, and the endpoint has to say so
+    // rather than call it "unattributed" and leave the reader to wonder.
+    { guid: 'p3', date: '20261112', type: 'Purchase', no: 'B9',
+      ledgers: { 'Paper Purchase': -4000 }, party_ledgers: { 'Paper Supplier': 4000 },
+      details: { items: [item('Art Paper 130gsm', '48102900', 900, -4000)] } },
+    // A sale whose only party is a bank: revenue with nobody on the hook for it.
+    { guid: 'p4', date: '20261113', type: 'Sales', no: 'S14',
+      ledgers: { 'Sales A/c': 1500 }, party_ledgers: { 'HDFC Bank': -1500 },
+      details: { items: [item('Mono Carton 250gsm', '48191000', 150, 1500)] } },
+  ] }, 'tok');
+  await settle(base);
+
+  const perParty = await get(base, '/api/products?from=20260401&to=20270331&by=party');
+  const key = (r) => r.ledger + ' / ' + r.name;
+  assert(perParty.rows.every((r) => r.ledger),
+    'by=party names the customer on every row: ' + JSON.stringify(perParty.rows.map(key)));
+  const bDuplex = perParty.rows.find((r) => r.ledger === 'B Customer' && r.name === 'Duplex Box 300gsm');
+  assert(bDuplex && bDuplex.value === 5000 && bDuplex.qtyByUnit.Nos === 500,
+    'one customer and one item is one row: ' + JSON.stringify(bDuplex));
+  assert(perParty.rows.filter((r) => r.name === 'Mono Carton 250gsm').length === 2,
+    'the same item bought by two customers is two rows, not one: ' + JSON.stringify(
+      perParty.rows.filter((r) => r.name === 'Mono Carton 250gsm').map(key)));
+  assert(perParty.rows_total === 3 && perParty.truncated === false && perParty.nextOffset === null,
+    'a list that fits says so: ' + JSON.stringify({ t: perParty.rows_total, tr: perParty.truncated }));
+
+  // Paging has to cover the list exactly once -- no row repeated, none dropped.
+  const seenKeys = [];
+  let off = 0, guard = 0;
+  while (guard++ < 10) {
+    const pg = await get(base, '/api/products?from=20260401&to=20270331&by=party&limit=1&offset=' + off);
+    for (const r of pg.rows) seenKeys.push(key(r));
+    if (!pg.truncated) break;
+    off = pg.nextOffset;
+  }
+  assert(seenKeys.length === 3 && new Set(seenKeys).size === 3,
+    'paging one row at a time walks the whole list exactly once: ' + seenKeys.join(' | '));
+
+  // Why the rest did not count, separated -- a purchase is not a hole in the revenue,
+  // a sale without a debtor might be.
+  const prod = await get(base, '/api/products?from=20260401&to=20270331');
+  assert(prod.skipped.notASale === 1 && prod.byTypeNotCounted.Purchase === 1,
+    'a purchase with stock items is reported as not a sale, by its voucher type: '
+    + JSON.stringify({ skipped: prod.skipped, byType: prod.byTypeNotCounted }));
+  assert(prod.skipped.saleWithoutDebtor === 1 && prod.saleWithoutDebtorSample.length === 1,
+    'and a sale with no debtor is counted apart: ' + JSON.stringify(prod.skipped));
+  assert(prod.saleWithoutDebtorSample[0].no === 'S14' && prod.saleWithoutDebtorSample[0].type === 'Sales'
+    && prod.saleWithoutDebtorSample[0].revenue === 1500,
+    'named by voucher number, type and the revenue at stake, so it can be looked up: '
+    + JSON.stringify(prod.saleWithoutDebtorSample[0]));
+
+  const tooWide = await get(base, '/api/products?from=20200401&to=20270331');
+  assert(tooWide.ok === false && /400/.test(tooWide.error),
+    'a window wider than a financial year is refused with the limit named: ' + tooWide.error);
+
+  // ---- cancelled and optional vouchers count nowhere -------------------------
+  // Tally's own two marks. A cancelled voucher carries no postings, but an OPTIONAL
+  // one is a draft that looks exactly like a sale in the Day Book -- counting it would
+  // inflate revenue here and nowhere else, which is the hardest disagreement to find.
+  const totalOf = async (who) => {
+    const d = await get(base, '/api/clients?fromFy=2020-21&measure=gross');
+    return ((d.rows.find((r) => r.ledger === who) || {}).totalSales) || 0;
+  };
+  const beforeDrafts = await totalOf('B Customer');
+  await post(port, '/ingest', { branch: 'kol', from: '20260401', to: '20270331', vouchers: [
+    { guid: 'p5', date: '20261120', type: 'Sales', no: 'S15', cancelled: true,
+      ledgers: { 'Sales A/c': 50000 }, party_ledgers: { 'B Customer': -50000 },
+      details: { items: [item('Duplex Box 300gsm', '48191000', 5000, 50000)] } },
+    { guid: 'p6', date: '20261121', type: 'Sales', no: 'S16', optional: true,
+      ledgers: { 'Sales A/c': 60000 }, party_ledgers: { 'B Customer': -60000 },
+      details: { items: [item('Duplex Box 300gsm', '48191000', 6000, 60000)] } },
+  ] }, 'tok');
+  await settle(base);
+
+  assert((await totalOf('B Customer')) === beforeDrafts,
+    'a cancelled and an optional invoice change no customer total: ' + beforeDrafts);
+  const afterDrafts = await get(base, '/api/products?from=20260401&to=20270331&by=party');
+  const bDuplex2 = afterDrafts.rows.find((r) => r.ledger === 'B Customer' && r.name === 'Duplex Box 300gsm');
+  assert(bDuplex2.value === 5000 && bDuplex2.qtyByUnit.Nos === 500,
+    'nor any product figure: ' + JSON.stringify(bDuplex2));
+  const ds = await get(base, '/api/dataset?from=20260401&to=20270331&branch=kol');
+  const dsNos = (ds.branches ? ds.branches.kol.vouchers : ds.vouchers).map((v) => v.no);
+  assert(!dsNos.includes('S15') && !dsNos.includes('S16') && dsNos.includes('S13'),
+    'and neither reaches the dashboards: ' + dsNos.join(','));
+
+  // The one direction that must NOT happen: an optional voucher confirmed later is an
+  // ordinary sale, so the flag has to come OFF when Tally stops reporting it.
+  await post(port, '/ingest', { branch: 'kol', from: '20260401', to: '20270331', vouchers: [
+    { guid: 'p6', date: '20261121', type: 'Sales', no: 'S16',
+      ledgers: { 'Sales A/c': 60000 }, party_ledgers: { 'B Customer': -60000 },
+      details: { items: [item('Duplex Box 300gsm', '48191000', 6000, 60000)] } },
+  ] }, 'tok');
+  await settle(base);
+  assert((await totalOf('B Customer')) === beforeDrafts + 60000,
+    'a draft confirmed in Tally counts from then on, rather than staying excluded for ever: '
+    + (await totalOf('B Customer')));
 
   server.close();
   console.log(fails ? `\n== ${fails} FAILURES ==` : '\n== year-on-year API passed ==');

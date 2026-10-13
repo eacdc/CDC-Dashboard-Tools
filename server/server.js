@@ -145,7 +145,10 @@ app.get('/api/dataset', async (req, res) => {
         .filter(Boolean).map((d) => new Date(d).getTime());
       const lastUpdatedAt = stamps.length ? new Date(Math.max.apply(null, stamps)).toISOString() : null;
       const vouchers = await db.collection('vouchers')
-        .find({ branch, date: { $gte: from, $lte: to } },
+        // Cancelled and optional vouchers are left out, as they are everywhere: the
+        // dashboards fold these rows into the P&L themselves, so a draft reaching the
+        // browser would show a revenue the server's own year-on-year panel does not.
+        .find({ branch, date: { $gte: from, $lte: to }, cancelled: { $ne: true }, optional: { $ne: true } },
               // `details` is excluded here to keep the dashboard payload small — the
               // dashboards only need the ledger amounts. Fetch the full voucher
               // (with details) on demand via /api/voucher for the printable view.
@@ -223,6 +226,13 @@ app.get('/api/voucher', async (req, res) => {
 // The window is what tells you whether a pull actually landed: a month or a day
 // that reads 0 (or far below its neighbours) is a gap to re-pull, not a quiet month.
 const DATE8 = /^\d{8}$/;
+// Cancelled and optional vouchers are not transactions, and no FIGURE may include
+// one. Spread into the $match of every query that totals money or lists the vouchers
+// behind a total. Deliberately NOT applied to the coverage counts (/api/meta, bills
+// coverage, the first/last stored date), which answer "what do we hold" -- a stored
+// draft is held -- nor to /diag's party explainer, whose job is to show every voucher
+// it saw and say what it did with it, a draft included.
+const LIVE_ONLY = { cancelled: { $ne: true }, optional: { $ne: true } };
 app.get('/api/meta', async (req, res) => {
   try {
     const q = req.query || {};
@@ -564,7 +574,8 @@ async function runYoySummary(fys) {
   const S = yoy.newSummary(xd, aliases);
   let n = 0;
   const cursor = db.collection('vouchers')
-    .find(q, { projection: { _id: 0, branch: 1, date: 1, type: 1, ledgers: 1, party_ledgers: 1 } })
+    .find(q, { projection: { _id: 0, branch: 1, date: 1, type: 1, ledgers: 1, party_ledgers: 1,
+      cancelled: 1, optional: 1 } })
     .batchSize(1000);
   for await (const v of cursor) {
     yoy.addVoucher(S, v);
@@ -608,7 +619,8 @@ async function runYoySummary(fys) {
   }
   const updatedAt = new Date();
   await db.collection('yoy_summary').updateOne({ _id: 'summary' }, { $set: {
-    fys: allFys, branches, partyTotals, scannedVouchers: n, scope: (fys && fys.length) ? fys : 'all', updatedAt,
+    fys: allFys, branches, partyTotals, scannedVouchers: n, skippedVouchers: S.skipped || 0,
+    scope: (fys && fys.length) ? fys : 'all', updatedAt,
   } }, { upsert: true });
 
   // The per-ledger detail behind each line, one document per branch+line so no single
@@ -963,13 +975,27 @@ app.get('/api/sales/monthly', async (req, res) => {
 app.get('/api/products', async (req, res) => {
   try {
     const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
-    const by = String(req.query.by) === 'hsn' ? 'hsn' : 'product';
+    const BY = ['product', 'hsn', 'party'];
+    const by = BY.includes(String(req.query.by)) ? String(req.query.by) : 'product';
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 5000);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     // Default window: the financial year in progress, in the books' own timezone.
     const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000);
     const fyStart = (nowIst.getUTCMonth() + 1 >= 4 ? nowIst.getUTCFullYear() : nowIst.getUTCFullYear() - 1);
     const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : String(fyStart) + '0401';
     const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : String(fyStart + 1) + '0331';
+    if (to < from) return res.status(400).json({ ok: false, error: `to (${to}) is before from (${from})` });
+    // A window is one financial year at most. This endpoint reads vouchers rather than
+    // the fold, so a decade asked for in one call is a full scan with items parsed --
+    // minutes on the free plan, and the proxy hangs up long before it answers. Refused
+    // with the limit named, because a truncated answer to "what did we sell" is worse
+    // than an error: nothing in it says which part is missing.
+    const span = (Date.UTC(+to.slice(0, 4), +to.slice(4, 6) - 1, +to.slice(6, 8))
+      - Date.UTC(+from.slice(0, 4), +from.slice(4, 6) - 1, +from.slice(6, 8))) / 86400000;
+    if (span > 400) {
+      return res.status(400).json({ ok: false,
+        error: `window is ${Math.round(span)} days; one financial year (400) is the limit. Ask for each year separately.` });
+    }
 
     const db = await getDb();
     const xd = await mergedHierarchy(db);
@@ -979,7 +1005,8 @@ app.get('/api/products', async (req, res) => {
     // vouchers keep whatever was typed at the time.
     const wanted = req.query.party ? new Set(aliasVariants(aliases, S.canon(String(req.query.party)))) : null;
 
-    const q = { date: { $gte: from, $lte: to }, 'details.items.0': { $exists: true } };
+    const q = { date: { $gte: from, $lte: to }, 'details.items.0': { $exists: true },
+      cancelled: { $ne: true }, optional: { $ne: true } };
     if (branch !== 'all') q.branch = branch;
     const cursor = db.collection('vouchers')
       .find(q, { projection: { _id: 0, branch: 1, date: 1, no: 1, type: 1,
@@ -987,7 +1014,15 @@ app.get('/api/products', async (req, res) => {
       .batchSize(500);
 
     const acc = new Map();
-    let scanned = 0, counted = 0, unattributed = 0;
+    let scanned = 0, counted = 0;
+    // WHY a scanned voucher did not count. "unattributed" alone could not answer the
+    // question it raises -- a window where half the vouchers are unattributed is
+    // either perfectly normal (a purchase with stock items is not a sale) or a hole in
+    // the revenue, and those two want opposite responses. So the two are counted
+    // apart, and the second one is named: voucher type and number, to look up.
+    const skipped = { notASale: 0, saleWithoutDebtor: 0, otherCustomer: 0 };
+    const byType = {};
+    const sample = [];
     for await (const v of cursor) {
       scanned++;
       // The query asks Mongo for vouchers that carry items, but a voucher without
@@ -999,16 +1034,41 @@ app.get('/api/products', async (req, res) => {
       const parties = yoy.canonKeys(S, v.party_ledgers);
       const a = yoy.attribution(S, ledgers, parties, branch === 'all');
       const buyer = a.dd;                      // the dominant Sundry Debtor
-      if (!buyer) { unattributed++; continue; }
-      if (wanted && !wanted.has(buyer)) continue;
+      // Exactly the fold's own test for a sale (`nr !== 0 && dd`), so a voucher that
+      // counts here counts there. A purchase with stock items has a creditor and no
+      // debtor; a stock journal or a delivery note has neither.
+      if (a.nr === 0) {
+        skipped.notASale++;
+        byType[v.type || '(no type)'] = (byType[v.type || '(no type)'] || 0) + 1;
+        continue;
+      }
+      if (!buyer) {
+        // A sale whose revenue nobody is on the hook for. This is the one that can
+        // mean lost revenue -- an inter-branch sale dropped by consolidation, or a
+        // debtor sitting under a group the hierarchy does not reach.
+        skipped.saleWithoutDebtor++;
+        byType[v.type || '(no type)'] = (byType[v.type || '(no type)'] || 0) + 1;
+        if (sample.length < 20) {
+          sample.push({ date: v.date, no: v.no || '', type: v.type || '', branch: v.branch,
+            revenue: Math.round(a.nr * 100) / 100, parties: Object.keys(parties).slice(0, 6) });
+        }
+        continue;
+      }
+      if (wanted && !wanted.has(buyer)) { skipped.otherCustomer++; continue; }
       counted++;
       for (const it of items) {
-        const product = String(it.description || '').split('\n')[0].trim();
-        const key = by === 'hsn' ? (String(it.hsn || '') || '(no HSN)') : (product || '(unnamed item)');
+        const product = String(it.description || '').split('\n')[0].trim() || '(unnamed item)';
+        const hsn = String(it.hsn || '') || '(no HSN)';
+        // by=party keys on the CUSTOMER and the product together, which is the row a
+        // CRM wants: one customer, one item, what it came to. The customer is the
+        // canonical name, so it joins straight onto /api/clients.
+        const key = by === 'hsn' ? hsn : (by === 'party' ? buyer + '\u0000' + product : product);
         let row = acc.get(key);
         if (!row) {
-          row = { key, value: 0, vouchers: 0, qtyByUnit: {}, customers: new Set(),
-            firstSale: v.date, lastSale: v.date, hsn: by === 'hsn' ? key : String(it.hsn || '') };
+          row = { key, ledger: by === 'party' ? buyer : undefined,
+            name: by === 'hsn' ? hsn : product,
+            value: 0, vouchers: 0, qtyByUnit: {}, customers: new Set(),
+            firstSale: v.date, lastSale: v.date, hsn: by === 'hsn' ? hsn : String(it.hsn || '') };
           acc.set(key, row);
         }
         row.value += Number(it.amount) || 0;
@@ -1023,15 +1083,31 @@ app.get('/api/products', async (req, res) => {
         }
       }
     }
-    const rows = [...acc.values()]
-      .map((r) => ({ name: r.key, hsn: r.hsn, value: Math.round(r.value * 100) / 100,
-        vouchers: r.vouchers, customers: r.customers.size, qtyByUnit: r.qtyByUnit,
-        firstSale: r.firstSale, lastSale: r.lastSale }))
-      .sort((x, y) => Math.abs(y.value) - Math.abs(x.value));
+    const all = [...acc.values()]
+      .map((r) => {
+        const out = { name: r.name, hsn: r.hsn, value: Math.round(r.value * 100) / 100,
+          vouchers: r.vouchers, customers: r.customers.size, qtyByUnit: r.qtyByUnit,
+          firstSale: r.firstSale, lastSale: r.lastSale };
+        if (r.ledger) return Object.assign({ ledger: r.ledger }, out);
+        return out;
+      })
+      // Sorted by size, then by name: paging over a list whose ties fall in whatever
+      // order a Map happened to hold them repeats one row and drops another.
+      .sort((x, y) => (Math.abs(y.value) - Math.abs(x.value))
+        || String(x.ledger || '').localeCompare(String(y.ledger || ''))
+        || String(x.name).localeCompare(String(y.name)));
+    const page = all.slice(offset, offset + limit);
     res.json({ ok: true, branch, by, from, to,
       party: req.query.party ? S.canon(String(req.query.party)) : null,
-      products: rows.length, scanned, counted, unattributed,
-      truncated: rows.length > limit, rows: rows.slice(0, limit) });
+      rows_total: all.length, products: all.length, offset, limit, returned: page.length,
+      truncated: offset + page.length < all.length,
+      nextOffset: offset + page.length < all.length ? offset + page.length : null,
+      scanned, counted, skipped,
+      // Kept for callers written against the first version: every scanned voucher that
+      // did not count, whatever the reason.
+      unattributed: skipped.notASale + skipped.saleWithoutDebtor,
+      byTypeNotCounted: byType, saleWithoutDebtorSample: sample,
+      rows: page });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -1305,7 +1381,7 @@ app.get('/api/bills/audit', async (req, res) => {
     // Tally's outstandings report lists a bill against whatever ledger it was raised
     // on, and dropping the rest would report the file's own rows as missing money.
     const netted = await db.collection('vouchers').aggregate([
-      { $match: { date: { $lte: asOn } } },
+      { $match: { date: { $lte: asOn }, ...LIVE_ONLY } },
       { $unwind: '$bills' },
       { $group: { _id: { branch: '$branch', ledger: '$bills.ledger', ref: '$bills.ref' },
         sum: { $sum: '$bills.amount' },
@@ -1427,7 +1503,7 @@ app.get('/api/bills/audit', async (req, res) => {
 
       // Then the postings, from the day the opening stands on -- anything earlier is
       // already inside it.
-      const match = { branch: br, date: { $lte: asOn } };
+      const match = { branch: br, date: { $lte: asOn }, ...LIVE_ONLY };
       if (from) match.date.$gte = from;
       const moved = await db.collection('vouchers').aggregate([
         { $match: match },
@@ -1631,7 +1707,7 @@ app.get('/api/yoy/diag', async (req, res) => {
     const orphans = new Map();
     for (const br of scope) {
       const rows = await db.collection('vouchers').aggregate([
-        { $match: { branch: br } },
+        { $match: { branch: br, ...LIVE_ONLY } },
         { $project: { kv: { $concatArrays: [
           { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
           { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
@@ -1740,7 +1816,7 @@ app.get('/api/yoy/diag', async (req, res) => {
     }
     // Bill-wise allocations carried by the vouchers themselves, every year.
     const bRows = await db.collection('vouchers').aggregate([
-      { $match: branch === 'all' ? {} : { branch } },
+      { $match: branch === 'all' ? { ...LIVE_ONLY } : { branch, ...LIVE_ONLY } },
       { $addFields: { _bl: { $map: { input: { $ifNull: ['$bills', []] }, in: '$$this.ledger' } } } },
       { $match: { _bl: { $in: [...all] } } },
       { $sort: { date: 1 } },
@@ -1794,7 +1870,7 @@ app.get('/api/yoy/diag', async (req, res) => {
         e.total = Math.round((e.opening + e.postings) * 100) / 100;
       };
       if (from && mm && mm.opening) for (const ln of all) if (mm.opening[ln]) { op += -mm.opening[ln]; each(ln, 'opening', -mm.opening[ln]); }
-      const match = { branch: br };
+      const match = { branch: br, ...LIVE_ONLY };
       if (from) match.date = { $gte: from };
       // A balance is struck ON A DAY, and Tally strikes it today. A voucher dated
       // ahead -- a post-dated cheque, a sale entered for next week -- is in the books
@@ -1875,7 +1951,7 @@ app.get('/api/yoy/vouchers', async (req, res) => {
     if (!from || !to) return res.status(400).json({ ok: false, error: 'from and to are required as YYYYMMDD' });
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 2000);
 
-    const match = { date: { $gte: from, $lte: to } };
+    const match = { date: { $gte: from, $lte: to }, ...LIVE_ONLY };
     if (branch !== 'all') match.branch = branch;
     const db = await getDb();
     // Every spelling merged into this name, because the vouchers keep whatever was

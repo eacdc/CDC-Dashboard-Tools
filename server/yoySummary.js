@@ -235,6 +235,13 @@ function interBranchInvoice(S, parties) {
 
 function addVoucher(S, v) {
   if (!v || !v.date) return S;
+  // Tally's own two "this is not a transaction" marks. A cancelled voucher carries no
+  // postings anyway, but an OPTIONAL one is a draft that Tally leaves out of every
+  // report while the Day Book shows it looking exactly like a real sale -- counting it
+  // would inflate revenue here and nowhere else, which is the hardest kind of
+  // disagreement to find. Skipped at the one place every line, party, tree and date
+  // comes from, so no reader has to remember.
+  if (v.cancelled === true || v.optional === true) { S.skipped = (S.skipped || 0) + 1; return S; }
   const branch = v.branch || v._branch;
   if (!branch) return S;
   const fy = fyLabel(fyOf(v.date));

@@ -1,6 +1,36 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.57 (server, pipeline) — October 2026 — Drafts count nowhere, and per-customer product rows
+
+**Cancelled and optional vouchers are now excluded from every figure.** The extractor
+fetches Tally's `ISCANCELLED` and `ISOPTIONAL`; the fold drops them at `addVoucher`, so
+every line, party, date and total behind the dashboards and the client endpoints drops
+them without a reader remembering to, and the queries that read vouchers directly carry
+a shared `LIVE_ONLY` filter.
+
+A cancelled voucher carries no postings and was already harmless. An **optional** one is
+the dangerous half: a draft Tally leaves out of all its own reports, which reaches the
+Day Book looking exactly like a real sale. The flag is **stored rather than dropped** at
+the extractor (a voucher cancelled after we stored it must be able to turn its copy off)
+and is **unset again** when Tally stops reporting it, because an optional voucher
+confirmed later is an ordinary sale and a flag that stuck would exclude it for ever.
+Coverage counts and `/diag` deliberately still show them.
+
+**`/api/products?by=party`** returns one row per customer × item, with `ledger` on every
+row, and the list is paged (`offset`, `rows_total`, `returned`, `nextOffset`) with a
+tie-broken sort so paging cannot repeat one row and drop another. The window is capped
+at 400 days and a wider one is **refused with the limit named** — a truncated answer to
+"what did we sell" is worse than an error, because nothing in it says which part is
+missing.
+
+**Why a voucher did not count is now reported**, separated: `skipped.notASale` (a
+purchase with stock items is not a sale) against `skipped.saleWithoutDebtor` (revenue
+nobody is on the hook for — an inter-branch sale dropped by consolidation, or a debtor
+under a group the hierarchy does not reach). The second comes with up to 20 samples
+naming voucher type, number and the revenue at stake, because those two numbers want
+opposite responses and one combined `unattributed` count could not tell them apart.
+
 ## v2.56 (server) — October 2026 — Two endpoints the CRM needs, so it cannot invent its own numbers
 
 A second application now reads this data to filter customers by what they bought. Two
