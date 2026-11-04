@@ -16,7 +16,12 @@ REM
 REM   4. This box syncs only the branch whose company is loaded. Pass it via the
 REM      CDC_BRANCHES env var (e.g. set CDC_BRANCHES=kol) or an arg: run_sync.bat -Branches kol
 REM
-REM Register a 30-minute repeating task (run once in an ADMIN shell, fix the path):
+REM PREFER Install-CdcAutostart.ps1 over registering this by hand. It registers this
+REM task AND the watchdog that starts Tally after a reboot, both triggered at logon, so
+REM a restart does not leave the sync firing on time into a Tally that is not running:
+REM   powershell -ExecutionPolicy Bypass -File .\Install-CdcAutostart.ps1 -Branches kol
+REM
+REM By hand, 30-minute repeat only (run once in an ADMIN shell, fix the path):
 REM   schtasks /Create /TN "CDC_Tally_Sync_30min" /SC MINUTE /MO 30 /F ^
 REM     /TR "\"C:\path\to\pipeline\run_sync.bat\" -Branches kol"
 REM ---------------------------------------------------------------------------

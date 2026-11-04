@@ -94,6 +94,30 @@ powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
   -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "YOUR_TOKEN"
 ```
 
+### Unattended, and surviving a restart
+
+Register both scheduled tasks in one go (once, Administrator PowerShell, on the Tally
+box). `-Branches` is the branch whose company THIS box has loaded:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-CdcAutostart.ps1 -Branches kol
+```
+
+That gives you `CDC_Tally_Sync_30min` (the incremental sync) **and**
+`CDC_Tally_Watchdog`, which runs `StartTally.ps1` every 10 minutes: if no company
+answers the gateway it starts Tally itself, so a reboot does not leave the sync firing
+on time into a Tally nobody opened. Report without touching anything:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\StartTally.ps1 -NoLaunch
+Get-Content .\logs\watchdog.log -Tail 20 -Wait
+```
+
+Two settings stay outside these scripts, and `SETUP.md` explains both: Tally must be set
+to **load the company on startup** (the watchdog can launch Tally, it cannot click), and
+**Windows must log in by itself**, because Tally has no service mode and a task with
+nobody logged on has no desktop to find it in.
+
 ### If the Tally server has no outbound internet
 
 Per the extraction doc, the RDP server may not reach the public internet. In that

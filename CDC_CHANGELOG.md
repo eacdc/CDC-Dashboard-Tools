@@ -1,6 +1,39 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.58 (pipeline) — November 2026 — The Tally box picks itself up after a restart
+
+**A reboot no longer stops the sync.** Until now the 30-minute sync quietly needed two
+things that a restart takes away — Tally running with the company loaded, and a logged-on
+session for the task to run in — and when either was missing the job still fired on time
+and logged *"no company answered"*. Nothing looked broken; the dashboard simply stopped
+moving. Two new scripts close that:
+
+- **`pipeline/StartTally.ps1`** — asks the gateway whether a company is open (through
+  `TallyToJson.ps1 -ListCompaniesJson`, the same lookup `run_daily.ps1` uses, so there is
+  no second implementation to drift) and, if nothing answers, **starts Tally itself**,
+  then polls until it comes up. It finds `tally.exe` by the usual install paths, by
+  `CDC_TALLY_EXE`, or — best — by remembering the path of a Tally it once saw running, so
+  an unusual install configures itself. Harmless to run every few minutes: when Tally is
+  answering it writes one line and stops. Its exit code names the fault rather than
+  burying it, and it will **not** kill a running-but-wedged Tally unless asked with
+  `-RestartWedged`, because a Tally with an unsaved voucher on screen is not something an
+  unattended task should close.
+- **`pipeline/Install-CdcAutostart.ps1`** — registers both tasks properly in one go:
+  the watchdog at logon and every 10 minutes, the sync at logon + 4 minutes and every 30.
+  **At logon**, not a bare schedule, so the gap after a restart is minutes; and
+  `IgnoreNew`, so the weekly sweep's several hours cannot gather a dozen overlapping runs
+  behind it. `-Branches` is required, not defaulted — it is the guard that keeps one
+  company's vouchers out of the other branch.
+
+What is left is one setting apiece, and both are said out loud by the installer rather
+than assumed: the company must be set to **load on startup inside Tally** (the watchdog
+can launch Tally, it cannot click), and **Windows must log in by itself** (`netplwiz`) —
+Tally has no service mode, so a task that runs with nobody logged on gets no desktop and
+finds no Tally at all. On an RDP box, **disconnect, never sign out**: signing out ends the
+session and takes Tally with it. `pipeline/SETUP.md` has the whole checklist and how to
+prove it worked without trusting it.
+
 ## v2.57 (server, pipeline) — October 2026 — Drafts count nowhere, and per-customer product rows
 
 **Cancelled and optional vouchers are now excluded from every figure.** The extractor
