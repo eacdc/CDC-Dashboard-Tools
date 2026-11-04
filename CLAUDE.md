@@ -93,6 +93,16 @@ listener until Tally is restarted and reads as "Unable to connect to the remote 
 from then on, however open the company is. `netstat -ano | findstr :<port>` shows both
 the address family and the stuck socket.
 
+**Every scheduled task on the Tally box must run as a logged-on user.** Tally is a
+desktop application with no service mode, so a task set to *run whether the user is
+logged on or not* gets no desktop and finds no Tally at all — it then fires on time and
+logs "no company answered", which looks like a Tally problem and is not. That is why
+`Install-CdcAutostart.ps1` registers both tasks `-LogonType Interactive` and triggers
+them **at logon**, and why `StartTally.ps1` (the watchdog that starts Tally when the
+gateway is silent) can close the reboot gap but cannot remove the need for Windows
+auto-login. `StartTally.ps1` also never kills a running Tally unless asked
+(`-RestartWedged`): an unsaved voucher on screen is not an unattended task's to discard.
+
 **`-Branch` must match the `-Company` being pulled.** The script guards on the city in
 the company name; overriding it with `-AllowBranchMismatch` is how a branch's data ends
 up under the other's.

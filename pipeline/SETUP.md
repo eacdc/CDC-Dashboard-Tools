@@ -463,6 +463,63 @@ If the manual run updates Mongo but the scheduled task doesn't, it's a Task
 Scheduler config issue (wrong path, env vars not visible to the task, or "run only
 when logged on" not set while the box is locked/logged off).
 
+## Surviving a restart (so nobody has to start anything by hand)
+
+The sync above needs two things a reboot takes away: **Tally running with the company
+loaded**, and **a logged-on session** for it to run in. Miss either and `run_sync.bat`
+still fires every 30 minutes and logs *"no company answered"* — the dashboard then
+shows last week's figures with nothing on screen looking broken. Three pieces close
+that, and only the third needs a human decision.
+
+**1. Register both tasks** (once, in an *Administrator* PowerShell on the Tally box):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-CdcAutostart.ps1 -Branches kol
+```
+
+(`-Branches ahm` on the Ahmedabad box.) It replaces the hand-made task above with two:
+
+| Task | Fires | Does |
+|---|---|---|
+| `CDC_Tally_Watchdog` | at logon, then every 10 min | `StartTally.ps1` — if no company answers the gateway, **starts Tally itself** |
+| `CDC_Tally_Sync_30min` | at logon + 4 min, then every 30 min | `run_sync.bat -Branches …` |
+
+Both are **at logon** triggers, not bare schedules: after a restart the gap is minutes
+rather than "whenever the next hour came round". Both are `IgnoreNew`, so the weekly
+sweep's several hours cannot collect a dozen overlapping runs on top of it. Undo with
+`-Remove`.
+
+**2. Tally must load the company by itself.** `StartTally.ps1` can launch Tally; it
+cannot click. Launched into the company-select screen, the gateway answers with an
+empty list and the sync is no better off — so set the company to load on startup inside
+Tally, once. Test it honestly: restart the box, log in, **touch nothing**, and ten
+minutes later read `logs\watchdog.log`. It has to say *"company/companies open"*.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\StartTally.ps1 -NoLaunch   # report only, changes nothing
+Get-Content .\logs\watchdog.log -Tail 20 -Wait                        # watch it live
+```
+
+Its exit code says which thing is wrong — `0` answering, `2` no `tally.exe` found (set
+`CDC_TALLY_EXE`), `3` answering but the expected company is not open, `4` launched and
+never answered (company not auto-loading, or a licence screen), `5` Tally running with a
+dead gateway (wedged socket, gateway off, or no company loaded). A **wedged** listener is
+the one case it will not fix on its own: killing a Tally that may have an unsaved voucher
+on screen is not something an unattended task should do, so it is opt-in with
+`-RestartWedged`.
+
+**3. Windows must log in by itself.** Tally is a desktop application with no service
+mode, so a task set to *run whether the user is logged on or not* gets no desktop and
+finds no Tally at all — which is why both tasks are *Interactive*. Until Windows logs
+in on its own, a restart still needs a person:
+
+- `netplwiz` → untick **Users must enter a user name and password** → OK → type the
+  password twice. It stores that password on the machine, so do it only on a box that
+  is already physically and network protected.
+- **On an RDP box: disconnect, do not sign out.** Closing the window with ✕ leaves the
+  session — and Tally — running. *Sign out* ends the session, Tally dies with it, and
+  the watchdog then has nowhere to run.
+
 ## Notes for this testing copy
 
 - **Branches:** `run_daily.ps1` loads both:
