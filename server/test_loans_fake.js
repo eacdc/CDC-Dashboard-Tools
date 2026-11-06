@@ -184,5 +184,135 @@ assert(near(rep.byKind.reduce((s, k) => s + k.closing, 0), rep.total.closing),
 assert(rep.loans[0].ledger === 'HDFC Term Loan',
   'the biggest balance is listed first, so a page of dormant accounts cannot bury the ones that matter');
 
+// ---------------------------------------------------------------------------
+// Accrued interest is not a borrowing, however its ledger is named
+// ---------------------------------------------------------------------------
+// Straight from the live books: "Interest on Term Loan Payable" and "Interest on PCRE
+// Loan Payable" sit under Current Liabilities > Liability for Expenses. The name rule
+// caught them because they say "Term Loan" and "PCRE Loan". They were nil in the window
+// they were spotted in, so they distorted nothing -- and would have the moment interest
+// was accrued.
+const accrual = ['Capital Account', 'Current Liabilities', 'Liability for Expenses'];
+assert(LM.loanKind('Interest on Term Loan Payable', accrual) === null,
+  'accrued interest on a term loan is interest owed, not money borrowed');
+assert(LM.loanKind('Interest on PCRE Loan Payable', accrual) === null,
+  'and the same for accrued interest on a PCRE loan');
+assert(LM.loanKind('Interest Receivable on PCRE Loan', ['Capital Account', 'Current Assets']) === null,
+  'interest RECEIVABLE is not a borrowing either, it is the other way round entirely');
+// The name exclusions must only ever block the NAME path -- a ledger the GROUP says is a
+// loan stays one, whatever words are in it.
+assert(LM.loanKind('L/C Payable to Muller Martini', ['Capital Account', 'Loans (Liability)', 'Secured Loans']) === 'secured',
+  'but a real facility under Secured Loans is untouched by the word "payable" in its name');
+assert(LM.loanKind('Loan From Director - Manu Choudhury',
+  ['Capital Account', 'Loans (Liability)', 'Unsecured Loans', 'Loan From Director']) === 'unsecured',
+  'and a director loan nested two groups deep is still an unsecured borrowing');
+
+// ---------------------------------------------------------------------------
+// An OD sweeps: its gross is turnover, not borrowing
+// ---------------------------------------------------------------------------
+// The live figures were 204 Cr drawn against 169 Cr repaid on ONE OD account over seven
+// months -- 223 Cr of a 277 Cr "drawn" headline -- which buried the 54 Cr of real new
+// facilities. The headline therefore separates facilities from the OD's net move, and the
+// split has to reconcile to the same closing as the gross does.
+const sw = LM.buildLoanMovement({
+  ledgerMeta: {
+    'Citi Bank OD': { kind: 'od_cc', group: 'Bank OD A/c', branches: ['kol'] },
+    'Term Loan A': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] },
+  },
+  openings: { kol: { asOn: '20260401', amounts: { 'Citi Bank OD': 50000000, 'Term Loan A': 20000000 } } },
+  rows: [
+    // the OD, churning: 30 Cr through it either way, net +5 Cr
+    { ledger: 'Citi Bank OD', branch: 'kol', date: '20260410', drawn: 300000000, repaid: 0 },
+    { ledger: 'Citi Bank OD', branch: 'kol', date: '20260420', drawn: 0, repaid: 250000000 },
+    // a real facility: 10 Cr drawn, 1 Cr repaid
+    { ledger: 'Term Loan A', branch: 'kol', date: '20260505', drawn: 100000000, repaid: 0 },
+    { ledger: 'Term Loan A', branch: 'kol', date: '20260510', drawn: 0, repaid: 10000000 },
+  ],
+  from: '20260401', to: '20260531', bucket: 'month',
+});
+assert(sw.total.drawnFacility === 100000000 && sw.total.repaidFacility === 10000000,
+  'the headline counts only the real facility drawn and repaid (got '
+  + sw.total.drawnFacility + ' / ' + sw.total.repaidFacility + ')');
+assert(sw.total.sweepNet === 50000000 && sw.total.sweepAccounts === 1,
+  'the OD contributes ONE net figure instead of 55 Cr of turnover in both directions');
+assert(sw.total.drawn === 400000000, 'the gross is still there for anyone who asks for it');
+assert(near(sw.total.opening + sw.total.drawnFacility - sw.total.repaidFacility + sw.total.sweepNet,
+  sw.total.closing),
+  'and the split reconciles to the same closing as the gross: opening + facilities drawn - repaid + OD net');
+assert(sw.loans.find((l) => l.ledger === 'Citi Bank OD').sweep === true
+  && sw.loans.find((l) => l.ledger === 'Term Loan A').sweep === false,
+  'each account says whether it sweeps, so the page does not have to guess from its name');
+assert(near(sw.total.sweepOpening, 50000000) && near(sw.total.sweepClosing, 100000000),
+  'and the OD accounts own opening and closing are carried, because that is the figure that matters on them');
+let swBroke = null;
+for (let i = 0; i < sw.periods.length; i++) {
+  const p = sw.periods[i];
+  if (!near(p.opening + p.drawnFacility - p.repaidFacility + p.sweepNet, p.closing)) swBroke = p.key;
+}
+assert(!swBroke, 'every period reconciles on the split too (' + (swBroke || 'held') + ')');
+
+// ---------------------------------------------------------------------------
+// A loan closing in DEBIT is reported as such
+// ---------------------------------------------------------------------------
+// Live: three Citi term loans repaid 1.75x to 2.33x their opening and closed negative,
+// and two PCFC accounts carried negative openings with no movement at all. Negative on
+// this scale means more was repaid than the account held -- which is usually a gap in the
+// vouchers between the opening's own day and the window start, not a fact about the loan.
+const debit = LM.buildLoanMovement({
+  ledgerMeta: { 'Term Loan 221780001': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] } },
+  openings: { kol: { asOn: '20260401', amounts: { 'Term Loan 221780001': 1034482.55 } } },
+  rows: [{ ledger: 'Term Loan 221780001', branch: 'kol', date: '20260610', drawn: 0, repaid: 2413793.13 }],
+  from: '20260401', to: '20260630', bucket: 'month',
+});
+assert(debit.inDebit.length === 1 && debit.inDebit[0].ledger === 'Term Loan 221780001',
+  'a loan repaid past zero is NAMED as being in debit, rather than left as a minus sign to notice');
+assert(near(debit.inDebit[0].closing, -1379310.58),
+  'with the figure it closed at, so it can be put straight beside Tally (got ' + debit.inDebit[0].closing + ')');
+assert(debit.loans[0].inDebit === true, 'and the row carries the flag for the page to mark');
+
+// Dormant accounts are counted, so a page can hide them and say how many it hid. The
+// live books carry 133 borrowing ledgers of which about 120 are long closed.
+const dorm = LM.buildLoanMovement({
+  ledgerMeta: {
+    'Live Loan': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] },
+    'Closed Lender A': { kind: 'unsecured', group: 'Unsecured Loans', branches: [] },
+    'Closed Lender B': { kind: 'unsecured', group: 'Unsecured Loans', branches: [] },
+  },
+  openings: { kol: { asOn: '20260401', amounts: { 'Live Loan': 5000000 } } },
+  rows: [{ ledger: 'Live Loan', branch: 'kol', date: '20260410', drawn: 0, repaid: 1000000 }],
+  from: '20260401', to: '20260430', bucket: 'month',
+});
+assert(dorm.dormant === 2,
+  'accounts with no balance and no movement are counted, so they can be hidden without being dropped');
+assert(dorm.loans.length === 3, 'but they are all still returned -- hiding is the page figuring, not the data');
+
+// ---------------------------------------------------------------------------
+// The opening's two halves, because one figure cannot say which is wrong
+// ---------------------------------------------------------------------------
+// Live: the April 2026 OD opening came out at 79.74 Cr against Tally's 19.40, while
+// unsecured loans matched to the rupee. Those two facts together say the mechanism works
+// and one input does not -- but a single opening figure cannot say whether the master's
+// own opening is wrong or whether vouchers between its day and April are missing. So the
+// halves are reported separately.
+const halves = LM.buildLoanMovement({
+  ledgerMeta: { 'Citi OD': { kind: 'od_cc', group: 'Bank OD A/c', branches: ['kol'] } },
+  openings: { kol: { asOn: '20250401', amounts: { 'Citi OD': 10000000 } } },
+  rows: [
+    { ledger: 'Citi OD', branch: 'kol', date: '20250801', drawn: 50000000, repaid: 0 },
+    { ledger: 'Citi OD', branch: 'kol', date: '20251201', drawn: 0, repaid: 20000000 },
+    { ledger: 'Citi OD', branch: 'kol', date: '20260510', drawn: 0, repaid: 5000000 },
+  ],
+  from: '20260401', to: '20260531', bucket: 'month',
+});
+const hp = halves.loans[0].openingParts;
+assert(near(hp.tally, 10000000),
+  "the Tally half is the master's own opening balance, untouched (got " + hp.tally + ')');
+assert(near(hp.postings, 30000000),
+  'the postings half is what we added between that day and the window start (got ' + hp.postings + ')');
+assert(near(hp.tally + hp.postings, halves.loans[0].opening),
+  'and the two halves are exactly the opening, so neither is a separate estimate');
+assert(near(halves.total.openingParts.tally, 10000000) && near(halves.total.openingParts.postings, 30000000),
+  'the totals carry the same split, so a headline that disagrees with Tally can be read the same way');
+
 console.log(fails ? `\n${fails} FAILED` : '\nall good');
 process.exit(fails ? 1 : 0);

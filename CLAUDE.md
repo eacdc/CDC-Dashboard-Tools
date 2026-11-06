@@ -289,8 +289,24 @@ not be sorted -- a test fails by name if they are.
 The opening is Tally's own opening balance (`masters.opening`, stored Tally-raw so a
 liability is +ve) plus every posting between the day it stands on and the window start --
 and MINUS any posting inside the window but before that day, which the opening already
-contains. A branch whose openings were never pulled gets movement, and the page says so
+contains. It is returned in **two halves** (`openingParts.tally` / `.postings`) because
+when an opening disagrees with Tally, which half is wrong IS the diagnosis: a wrong Tally
+half means the master, a wrong postings half means vouchers we do not hold. On a sweeping
+OD the postings half is a year of turnover, so a small gap there moves the opening by
+crores. A branch whose openings were never pulled gets movement, and the page says so
 rather than presenting it as a balance.
+
+**An OD or CC account sweeps, so its gross flow is not borrowing** -- every receipt pays
+it down, every payment draws it up. One Citi OD showed 204 Cr drawn against 169 Cr repaid
+in seven months, which was 223 Cr of a 277 Cr headline and buried the 54 Cr of real new
+facilities. So `od_cc` is a `SWEEP_KIND`: the headline reports `drawnFacility` /
+`repaidFacility` / `sweepNet`, the page shows net for those accounts, and the gross stays
+one checkbox away. The split reconciles to the same closing as the gross
+(`opening + drawnFacility - repaidFacility + sweepNet`), and a test holds that per period.
+Accrued interest is NOT a borrowing however its ledger reads -- `liability for expenses`
+and `provisions` are never-borrowing groups, and the name path also refuses `interest`,
+`subvention`, `receivable`, `provision`, `charges`, `commission`, `penalty`. Those block
+only the NAME path, so a facility the GROUP says is a loan is untouched.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
