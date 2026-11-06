@@ -218,6 +218,31 @@ const V = (branch, date, pl, ld, extra) => ({
   assert(both.ok === true && (both.notes || []).some((s) => /ahm/.test(s) && /not been pulled/.test(s)),
     'a branch whose opening balances never arrived is NAMED, so movement is not read as a balance');
 
+  // ---- the opening must not predate the vouchers ---------------------------
+  // A balance here is Tally's opening on its own day plus every posting since. If the
+  // oldest voucher held is NEWER than that day, the postings in between are in neither
+  // half and every balance is wrong by whatever happened in them -- silently, because
+  // each row still adds up. On a sweeping OD that is the whole difference: the account is
+  // paid down by postings we do not hold, so it reads near its old high for ever.
+  // The live books showed this as a 59.62 Cr swing in the wrong DIRECTION on one OD.
+  fakeDb.collection('masters').docs.push({
+    branch: 'ahm',
+    ledgers: { 'Ahm Citi OD': 'Bank OD A/c' },
+    groups: { 'Bank OD A/c': 'Loans (Liability)', 'Loans (Liability)': 'Capital Account', 'Capital Account': null },
+    ids: {},
+    opening: { 'Ahm Citi OD': 393471000 },
+    openingAsOn: '20230401',            // books begin 2023 ...
+  });
+  vs.push(V('ahm', '20260415', { 'Ahm Citi OD': 100000 }, {}));   // ... but we hold 2026 only
+  const gap = await get('/api/loans?branch=ahm&from=20260401&to=20260430&bucket=month');
+  assert(gap.ok === true, 'the endpoint still answers when the openings predate the vouchers');
+  assert((gap.notes || []).some((s) => /20230401/.test(s) && /20260415/.test(s) && /neither half/.test(s)),
+    'and it SAYS the opening stands on a day older than the oldest voucher held, naming both days');
+  assert((gap.notes || []).some((s) => /-From 20230401/.test(s)),
+    'with the back-fill that would close it, because a warning nobody can act on is noise');
+  assert(gap.firstVoucher && gap.firstVoucher.ahm === '20260415',
+    'the oldest voucher held per branch comes back, so a caller can check the span itself');
+
   // ---- a quiet window still carries the balance ----------------------------
   const quiet = await get('/api/loans?branch=kol&from=20260801&to=20261031&bucket=month');
   assert(quiet.ok === true && quiet.periods.length === 3
