@@ -84,6 +84,13 @@ const V = (branch, date, pl, ld, extra) => {
       // whose own name says "Fixed Assets". It is a payable, not an asset.
       'Robotjet Co.Ltd.': 'Sundry Creditor - Fixed Assets',
       'Advance for Capital Goods - Komori': 'Capital Advances',
+      // Ahmedabad's real shape: a group called "Advance for Machinery" holding one
+      // ledger per supplier, named after the supplier and saying nothing about machines.
+      'Heidelberger Druckmaschinen Aktiengesellschaft': 'Advance for Machinery',
+      'Gaiapac Middle East FZ-LLC- Rigid Box Machine': 'Advance for Machinery',
+      // A machinery supplier filed in the ORDINARY creditors group -- nothing in its
+      // name or its group says machine, and only the purchase itself proves what it is.
+      'Bobst India Pvt Ltd': 'Sundry Creditors',
       'Advance to Suppliers': 'Loans & Advances',
       'Digital Book Edge Printer': 'Plant & Machinery',
       // The Ahmedabad factory: accumulated in WIP while it was built, then capitalised.
@@ -102,6 +109,7 @@ const V = (branch, date, pl, ld, extra) => {
       'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
       'Sundry Creditor - Fixed Assets': 'Sundry Creditors',
       'Capital Advances': 'Current Assets', 'Loans & Advances': 'Current Assets',
+      'Advance for Machinery': 'Current Assets',
       'Secured Loans': 'Loans (Liability)', 'Loans (Liability)': 'Capital Account',
       'Indirect Expenses': 'Revenue Account', 'Purchase Accounts': 'Revenue Account',
       'Capital Account': null, 'Revenue Account': null,
@@ -157,6 +165,24 @@ const V = (branch, date, pl, ld, extra) => {
     'Machine Supplier': -0.01, 'Advance to Suppliers': -489556.34 },
     {}, { type: 'Bank Payments', narration: 'Robotjet + paper advance' }));
 
+  // AN ADVANCE GROUP THAT SAYS "MACHINERY" BUT NOT "PLANT & MACHINERY". Requiring the
+  // exact phrase missed this entirely, and with it 5.23 Cr paid against proformas --
+  // nearly all of the capex cash on these books, since machines are paid for long before
+  // any creditor is touched.
+  vs.push(V('kol', '20260506', { 'HDFC Current A/c': 28200000,
+    'Heidelberger Druckmaschinen Aktiengesellschaft': -28200000 }, {},
+    { type: 'Bank Payments', narration: 'advance against Heidelberg proforma' }));
+  vs.push(V('kol', '20260507', { 'HDFC Current A/c': 6926000,
+    'Gaiapac Middle East FZ-LLC- Rigid Box Machine': -6926000 }, {},
+    { type: 'Bank Payments', narration: 'advance, rigid box line' }));
+  // A MACHINE BOUGHT FROM A SUPPLIER IN THE ORDINARY CREDITORS GROUP, then paid. Neither
+  // the name nor the group says machinery; only the purchase proves it.
+  vs.push(V('kol', '20260610', { 'Bobst India Pvt Ltd': 4000000 },
+    { 'Factory Building': -4000000 },
+    { type: 'Purchase - Fixed Assets', party: 'Bobst India Pvt Ltd', narration: 'folder gluer' }));
+  vs.push(V('kol', '20260710', { 'HDFC Current A/c': 4000000, 'Bobst India Pvt Ltd': -4000000 }, {},
+    { type: 'Bank Payments', narration: 'paid Bobst' }));
+
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
   vs.push(V('kol', '20260819', {}, { 'Computers': -8888888, 'HDFC Term Loan': 8888888 }, { optional: true }));
@@ -175,7 +201,7 @@ const V = (branch, date, pl, ld, extra) => {
   const j = await get('/api/capex?branch=kol&from=20260401&to=20260831');
   assert(j.ok === true, 'the capex list answers');
 
-  const assets = j.rows.filter((r) => r.spend > 0).map((r) => r.asset).sort();
+  const assets = [...new Set(j.rows.filter((r) => r.spend > 0).map((r) => r.asset))].sort();
   assert(assets.join(' | ') === 'Computers | Digital Book Edge Printer | Factory Building'
     + ' | Heidelberg CD102 Press | New Line CWIP',
     'every fixed-asset purchase is listed, capital work in progress included: got ' + assets.join(' | '));
@@ -185,10 +211,10 @@ const V = (branch, date, pl, ld, extra) => {
     'and accumulated depreciation filed UNDER the asset group is excluded by name');
   assert(!j.rows.some((r) => r.asset === 'Paper Purchase'), 'a raw-material purchase is not capex');
 
-  assert(near(j.additions, 56132900),
+  assert(near(j.additions, 60132900),
     'additions are the sum of what was capitalised: 5L + 5 Cr + 20L + 15L + the 21.33L printer'
-    + ' (got ' + j.additions + ')');
-  assert(near(j.disposals, 300000) && near(j.net, 55832900),
+    + ' + the 40L folder gluer (got ' + j.additions + ')');
+  assert(near(j.disposals, 300000) && near(j.net, 59832900),
     'a disposal is reported APART and never netted into spend -- a year that bought 2 Cr and sold 1 Cr'
     + ' did not spend 1 Cr (got disposals ' + j.disposals + ', net ' + j.net + ')');
   assert(j.rows.every((r) => r.spend < 7000000 || r.asset === 'Heidelberg CD102 Press'),
@@ -214,7 +240,7 @@ const V = (branch, date, pl, ld, extra) => {
   // leg, capitalising the Ahmedabad factory was a 7 Cr "disposal" of machines nobody sold
   // AND 7 Cr of assets bought -- the building and everything in it counted twice, once as
   // the WIP leaving and once as the building arriving.
-  assert(near(j.additions, 56132900) && near(j.disposals, 300000),
+  assert(near(j.additions, 60132900) && near(j.disposals, 300000),
     'capitalising work in progress adds nothing to what was bought and nothing to what was'
     + ' sold (got additions ' + j.additions + ', disposals ' + j.disposals + ')');
   assert(near(j.moved, 140000000),
@@ -228,6 +254,28 @@ const V = (branch, date, pl, ld, extra) => {
     'the WIP accounts are what it came OUT of and the finished building is what it went INTO');
   assert(!j.byAsset.some((x) => /^WIP/.test(x.label) && x.spend),
     'and no work-in-progress account appears in what was bought');
+
+  // AN ADVANCE GROUP IS RECOGNISED BY THE WORD "MACHINERY", not by an exact phrase.
+  const hdl = (j.cashRows || []).find((r) => /Heidelberger/.test(r.paidFor));
+  assert(hdl && hdl.amount === 28200000 && hdl.kind === 'advance',
+    'an advance paid into a group called "Advance for Machinery" is capex cash -- requiring'
+    + ' the words "plant & machinery" missed every rupee of it');
+  assert((j.cashRows || []).some((r) => /Gaiapac/.test(r.paidFor)),
+    'and so is one paid to a ledger named only after the supplier, because the GROUP says'
+    + ' what the money is for');
+  // A SUPPLIER IS WHOEVER ACTUALLY SOLD US A MACHINE, not whoever is filed under a group
+  // that says so. Names and groups run out; the purchase voucher does not.
+  const bob = (j.cashRows || []).find((r) => /Bobst/.test(r.paidFor));
+  assert(bob && bob.amount === 4000000 && bob.kind === 'supplier',
+    'paying a supplier filed under ORDINARY Sundry Creditors is still capex cash when that'
+    + ' supplier sold us a fixed asset in this window -- evidence, not vocabulary');
+  assert(j.capexPartyGroups.some((x) => x.kind === 'supplier' && /Sundry Creditors/.test(x.group)),
+    'and the page says it was recognised that way rather than by its group');
+  assert((j.advanceGroups || []).some((x) => /Loans & Advances/.test(x.group) && !x.counted),
+    'while an advance account that says nothing about machinery is LISTED as not counted,'
+    + ' so money left out of the figure is visible instead of silently missing');
+  assert((j.advanceGroups || []).some((x) => /Advance for Machinery/.test(x.group) && x.counted),
+    'and one that is counted is marked as such');
 
   // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
   // that matters for a cash-flow view.
@@ -244,7 +292,8 @@ const V = (branch, date, pl, ld, extra) => {
   const direct = cash.find((r) => r.paidFor === 'Computers');
   assert(direct && direct.amount === 500000 && direct.kind === 'asset',
     'and an asset paid for straight out of the bank is cash out on the day it is paid');
-  assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000),
+  assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000
+      + 28200000 + 6926000 + 4000000),
     'the total is every one of those and nothing else -- no capitalisation journal, no'
     + ' supplier bill that has not been paid, and no disposal netted off (got ' + j.cashOut + ')');
   assert(!cash.some((r) => r.amount < 0),
@@ -270,7 +319,7 @@ const V = (branch, date, pl, ld, extra) => {
   assert(bld && bld.funded === 'credit', 'and one taken on supplier credit is marked credit');
   const fundMap = {};
   for (const f of j.byFunding) fundMap[f.key] = f.spend;
-  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 4132900),
+  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 8132900),
     'and the booking split totals back: 5 Cr against a loan leg, 20L against a bank leg, 20L +'
     + ' the printer against a supplier account (got ' + JSON.stringify(fundMap) + ')');
 
@@ -294,16 +343,16 @@ const V = (branch, date, pl, ld, extra) => {
   // The narration lives at details.narration. Reading a top-level `narration` returned
   // undefined for every voucher ever stored, so the column shipped blank on every row.
   const bought = j.rows.filter((r) => r.spend > 0 || r.disposal > 0);
-  assert(bought.filter((r) => r.narration).length === 4,
+  assert(bought.filter((r) => r.narration).length === 5,
     'the narration is read from where the extractor puts it (details.narration), not from a'
-    + ' top-level field no voucher has -- got ' + bought.filter((r) => r.narration).length + ' of 4');
+    + ' top-level field no voucher has -- got ' + bought.filter((r) => r.narration).length + ' of 5');
   const cwip = j.rows.find((r) => r.asset === 'New Line CWIP');
   assert(cwip && cwip.narration === '',
     'and an entry Tally carries no narration for comes back empty rather than undefined');
 
   // A floor, for a year of small tools nobody wants listed.
   const big = await get('/api/capex?branch=kol&from=20260401&to=20260831&min=1000000');
-  assert(big.rows.filter((r) => r.spend > 0).length === 4 && near(big.additions, 55632900),
+  assert(big.rows.filter((r) => r.spend > 0).length === 5 && near(big.additions, 59632900),
     'a minimum drops the small stuff from the list AND from the total, so the two always agree');
 
   server.close();

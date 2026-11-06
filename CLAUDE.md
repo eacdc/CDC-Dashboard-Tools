@@ -409,11 +409,23 @@ An **advance against a machine that has not arrived** is capex cash the day it i
 is most of what the user wanted and it never touches a fixed-asset ledger. Selling an asset
 is NOT negative cash out (that netted a disposal into spend, which the page refuses
 everywhere else), but a refund from a machinery creditor or advance IS. `capexPartyKind`
-recognises those accounts from the GROUP (Kolkata's is `Sundry Creditor - Fixed Assets`) and
-is deliberately narrow: a general `Advance to Suppliers` holding paper and machinery cannot
-be split by any rule here, so it is left out and said so. What it matched is returned as
-`capexPartyGroups` and listed on the page, because a missing account is money left out in
-silence.
+recognises those accounts from the GROUP (Kolkata's is `Sundry Creditor - Fixed Assets`,
+Ahmedabad's advances sit under `Advance for Machinery`) and the ledger name for advances
+only -- a creditor is matched on its group alone, because the ledger name there is a
+company's name and matching it would make "Machine Oil Suppliers" a capex account. Never
+match bare `capital`: `Capital Account` is the ROOT of every chain in Tally and would make
+the whole company capex. `machinary` is in `CAPITAL_KW` because that is how the Ahmedabad
+masters spell it.
+
+**But vocabulary runs out, so the suppliers are LEARNED from the purchases.** Requiring the
+words `plant & machinery` missed `Advance for Machinery` entirely, and with it nearly all of
+the capex cash -- the cash figure read 83 L against 13 Cr of assets bought and looked merely
+small rather than broken. A first pass now reads the purchases themselves and takes every
+payable CREDITED on a voucher that DEBITS a fixed asset as a supplier of that asset
+(`seenSupplier`, kind `supplier`): evidence rather than vocabulary, so a machinery supplier
+filed in the ordinary creditors group is still counted. The page says which way each account
+was recognised, and `advanceGroups` lists every group with "advance" in it WITH a counted
+flag, so an advance account the rule still misses is visible instead of silently absent.
 
 **`byFunding` describes how the entry was BOOKED, not when money moved.** "Booked to supplier
 account" is simply the ledger the purchase was entered against -- it does NOT mean the

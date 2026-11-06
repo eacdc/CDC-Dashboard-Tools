@@ -158,7 +158,8 @@
                   loan:'loan leg on this voucher',other:'journal entry',disposal:'disposal',
                   moved:'moved between assets'};
   var CASH_LABEL={asset:'paid straight for an asset',capital_creditor:'paid a machinery supplier',
-                  advance:'advance against a machine'};
+                  advance:'advance against a machine',
+                  supplier:'paid a supplier who sold us an asset'};
 
   (function(){
     var now=new Date(), y=now.getFullYear();
@@ -341,7 +342,6 @@
      + j.rows.filter(function(r){return r.spend>0;}).length+' PURCHASE(S)</h2><div class="body">'
      + '<div class="cards">'
      + '<div class="card"><div class="k">Assets bought</div><div class="v">'+esc(rupees(j.additions))+'</div></div>'
-     + '<div class="card"><div class="k">Of that, paid from bank</div><div class="v">'+esc(rupees(cash))+'</div></div>'
      + '<div class="card"><div class="k">Assets sold or scrapped</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
      + '<div class="card"><div class="k">Net increase in assets</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
      + (j.moved?('<div class="card"><div class="k">Moved between asset accounts</div><div class="v">'
@@ -350,13 +350,10 @@
      + '<div class="v">'+esc(rupees(j.cashOut||0))+'</div></div>'
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)+' <strong>Buying an asset is not the same as paying for it.</strong> '
-     + 'Only the <em>paid from bank</em> figure left the bank on these dates; the rest sits in a supplier bill or '
-     + 'a loan and leaves later. The funding split below says which is which. '
      + '<em>Net increase in assets</em> is bought minus sold &mdash; the two are never mixed before that.'
-     + (cash?'':' <strong>Paid from bank is nil here, and that is normal:</strong> a machine is booked against '
-       + 'its supplier on a <em>Purchase - Fixed Assets</em> voucher and paid on a separate voucher days or '
-       + 'months later, so the purchase itself touches no bank account. The payment is a settlement of the '
-       + 'bill, not a second purchase, and is deliberately not counted here.')
+     + ' <strong>None of these figures is cash.</strong> A machine is booked against its supplier, or '
+     + 'against an advance paid earlier, so the purchase voucher itself usually touches no bank account at '
+     + 'all. What actually left the bank is its own section below.'
      + (j.moved?(' <strong>'+esc(rupees(j.moved))+' moved between asset accounts</strong> and is in neither '
        + 'figure &mdash; see the last section.'):'')+'</div>'
      + '</div></section>';
@@ -428,15 +425,33 @@
     if(j.capexPartyGroups&&j.capexPartyGroups.length){
       h+='<div class="note" style="margin-top:10px">Cash is followed through these accounts, recognised from '
        + 'the group Tally files them in. If a machinery supplier or a capital advance is missing from this list, '
-       + 'its payments are not in the figure above &mdash; say so and the rule will be widened. An advance sitting '
-       + 'in a general <em>Advance to Suppliers</em> account cannot be told apart from a paper advance by any rule '
-       + 'here, and is deliberately not guessed at.</div>'
-       + '<div class="scroll"><table><thead><tr><th>Group</th><th>Treated as</th><th>Br</th>'
-       + '<th class="num">Ledgers</th></tr></thead><tbody>';
+       + 'its payments are not in the figure above &mdash; say so and the rule will be widened. A ledger that '
+       + '<strong>actually sold us an asset</strong> in this window is included whatever its group is called, on '
+       + 'the evidence of the purchase itself rather than on its name. An advance sitting in a general '
+       + '<em>Advance to Suppliers</em> account that also carries paper cannot be told apart by any rule here, '
+       + 'and is deliberately not guessed at.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Group</th><th>Treated as</th><th>Recognised by</th>'
+       + '<th>Br</th><th class="num">Ledgers</th></tr></thead><tbody>';
       for(var g2=0;g2<j.capexPartyGroups.length;g2++){var p2=j.capexPartyGroups[g2];
         h+='<tr><td class="muted" style="font-size:11.5px">'+esc(p2.group)+'</td>'
-         + '<td>'+esc(CASH_LABEL[p2.kind]||p2.kind)+'</td><td class="mono">'+esc(p2.branch)+'</td>'
+         + '<td>'+esc(CASH_LABEL[p2.kind]||p2.kind)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'
+         +   (p2.kind==='supplier'?'it sold us an asset in this window':'the group it is filed in')+'</td>'
+         + '<td class="mono">'+esc(p2.branch)+'</td>'
          + '<td class="num">'+p2.ledgers+'</td></tr>';}
+      h+='</tbody></table></div>';
+    }
+    var ag=(j.advanceGroups||[]).filter(function(x){return !x.counted;});
+    if(ag.length){
+      h+='<div class="note" style="margin-top:10px"><strong>Advance accounts NOT counted as capex.</strong> '
+       + 'These hold advances, but nothing about them says machinery, so the money paid into them is not in the '
+       + 'figure above. If one of them is for a machine, say so and it will be counted &mdash; that is exactly '
+       + 'how <em>Advance for Machinery</em> came to be missing.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Group or ledger</th><th>Br</th><th class="num">Ledgers</th>'
+       + '</tr></thead><tbody>';
+      for(var g3=0;g3<ag.length;g3++){
+        h+='<tr><td class="muted" style="font-size:11.5px">'+esc(ag[g3].group)+'</td>'
+         + '<td class="mono">'+esc(ag[g3].branch)+'</td><td class="num">'+ag[g3].ledgers+'</td></tr>';}
       h+='</tbody></table></div>';
     }
     h+='</div></section>';
