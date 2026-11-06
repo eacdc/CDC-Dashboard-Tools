@@ -442,6 +442,64 @@ const V = (branch, date, pl, ld, extra) => {
   assert(big.rows.filter((r) => r.spend > 0).length === 5 && near(big.additions, 59632900),
     'a minimum drops the small stuff from the list AND from the total, so the two always agree');
 
+  // ==========================================================================
+  // CAPEX FOR THE PERIOD: assets capitalised + rise in advances - rise in what is owed.
+  // The whole point is that it asks nothing about WHICH supplier sells machines -- the
+  // judgement that has been wrong in both directions -- and that an advance and the
+  // machine it pays for cannot be counted twice. Followed over one machine's whole life,
+  // in three separate windows, which is the only way to prove the second claim.
+  // ==========================================================================
+  fakeDb.collection('masters').docs.length = 0;
+  fakeDb.collection('vouchers').docs.length = 0;
+  fakeDb.collection('masters').docs.push({
+    branch: 'kol',
+    ledgers: { 'Kolbus Binding Line': 'Plant & Machinery',
+      'Advance for Machinery - Kolbus': 'Capital Advances',
+      'Kolbus GmbH': 'Sundry Creditor - Fixed Assets',
+      'HDFC Current A/c': 'Bank Accounts' },
+    groups: { 'Plant & Machinery': 'Fixed Assets', 'Fixed Assets': 'Capital Account',
+      'Capital Advances': 'Current Assets', 'Current Assets': 'Capital Account',
+      'Sundry Creditor - Fixed Assets': 'Sundry Creditors',
+      'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
+      'Bank Accounts': 'Current Assets', 'Capital Account': null },
+    ids: {},
+  });
+  const V2 = fakeDb.collection('vouchers').docs;
+  // Year 1: a 3 Cr advance against the proforma. No machine yet.
+  V2.push(V('kol', '20240610', { 'HDFC Current A/c': 30000000,
+    'Advance for Machinery - Kolbus': -30000000 }, {}, { type: 'Bank Payments' }));
+  // Year 2: the machine lands at 5 Cr. The advance is adjusted; 2 Cr is still owed.
+  V2.push(V('kol', '20250815', { 'Advance for Machinery - Kolbus': 30000000,
+    'Kolbus GmbH': 20000000 }, { 'Kolbus Binding Line': -50000000 },
+    { type: 'Purchase - Fixed Assets' }));
+  // Year 3: the balance is paid.
+  V2.push(V('kol', '20260910', { 'HDFC Current A/c': 20000000, 'Kolbus GmbH': -20000000 },
+    {}, { type: 'Bank Payments' }));
+
+  const flow = async (f, t) => (await get(`/api/capex?branch=kol&from=${f}&to=${t}`)).capexFlow;
+  const y1 = await flow('20240401', '20250331');
+  const y2 = await flow('20250401', '20260331');
+  const y3 = await flow('20260401', '20270331');
+
+  assert(near(y1.additions, 0) && near(y1.advanceNet, 30000000) && near(y1.total, 30000000),
+    'the year an advance is paid and no machine arrives, capex is the advance: 3 Cr (got '
+    + JSON.stringify(y1) + ')');
+  assert(near(y2.additions, 50000000) && near(y2.advanceNet, -30000000)
+    && near(y2.creditorNet, 20000000) && near(y2.total, 0),
+    'the year the 5 Cr machine ARRIVES, capex is nothing -- the advance falls by the 3 Cr'
+    + ' already counted and the 2 Cr still owed has not left yet. This is the double count'
+    + ' the whole measure exists to prevent (got ' + JSON.stringify(y2) + ')');
+  assert(near(y3.additions, 0) && near(y3.creditorNet, -20000000) && near(y3.total, 20000000),
+    'and the year the balance is PAID, capex is that 2 Cr, though the machine arrived a year'
+    + ' earlier (got ' + JSON.stringify(y3) + ')');
+  assert(near(y1.total + y2.total + y3.total, 50000000),
+    'so over the machine\'s whole life the three periods add up to exactly what it cost,'
+    + ' each rupee landing in the period it actually left: ' + (y1.total + y2.total + y3.total));
+  const whole = await flow('20240401', '20270331');
+  assert(near(whole.total, 50000000),
+    'and one window covering all three answers the same, because the advance and the bill'
+    + ' both open and close inside it');
+
   server.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall good');
   process.exit(fails ? 1 : 0);

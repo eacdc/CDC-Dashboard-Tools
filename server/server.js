@@ -2444,6 +2444,23 @@ app.get('/api/capex', async (req, res) => {
     const rows = [];
     const cashRows = [];
     let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0, unmatchedSupplier = 0;
+    // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
+    // Every rule that tries to decide which SUPPLIER is a machinery supplier has been
+    // wrong in both directions -- a freight forwarder counted in full, a machine maker
+    // left out altogether. This measure does not ask. It needs only three groups Tally
+    // itself keeps: fixed assets, capital advances, machinery creditors.
+    //
+    //    assets capitalised  +  rise in advances  -  rise in what is owed
+    //
+    // It is the CHANGE in those balances, never the payments, and that is what keeps a
+    // machine from being counted twice. Pay a 3 Cr advance: advances rise 3 Cr, nothing is
+    // capitalised, so 3 Cr. The machine arrives at 5 Cr with 2 Cr still owed: 5
+    // capitalised, advances FALL 3, owed rises 2 -- 5 - 3 - 2 = nothing, which is right,
+    // because the 3 went out last year and the 2 has not gone yet. Pay the 2: owed falls
+    // 2, so 2. Over the three periods 3 + 0 + 2 = the 5 Cr machine, each rupee landing in
+    // the period it actually left.
+    const flowBr = {};
+    const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0, creditorNet: 0 }));
     // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
     // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
     // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
@@ -2562,6 +2579,17 @@ app.get('/api/capex', async (req, res) => {
         }
       }
 
+      const fl = flowOf(v.branch);
+      for (const k of Object.keys(all)) {
+        const pp = pm[k];
+        if (!pp) continue;
+        // An advance is an ASSET, Dr-positive: paying one makes it rise, adjusting it
+        // against a delivered machine makes it fall. A creditor is a LIABILITY,
+        // Cr-positive: booking a machine against it makes it rise, paying makes it fall.
+        if (pp.kind === 'advance') fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
+        else if (pp.kind === 'capital_creditor') fl.creditorNet = Math.round((fl.creditorNet + all[k]) * 100) / 100;
+      }
+
       const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
       if (!hits.length) continue;
       // How the ENTRY WAS BOOKED -- which says nothing about when the money moved. See
@@ -2602,7 +2630,11 @@ app.get('/api/capex', async (req, res) => {
         const sold = amt > 0 ? gross * keep : 0;
         const moved = Math.round(gross * (1 - keep) * 100) / 100;
         if (spend && spend < min) continue;
-        if (spend) additions = Math.round((additions + spend) * 100) / 100;
+        if (spend) {
+          additions = Math.round((additions + spend) * 100) / 100;
+          const f2 = flowOf(v.branch);
+          f2.additions = Math.round((f2.additions + spend) * 100) / 100;
+        }
         if (sold) disposals = Math.round((disposals + sold) * 100) / 100;
         if (moved) movedTotal = Math.round((movedTotal + moved) * 100) / 100;
         rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln],
@@ -2675,6 +2707,19 @@ app.get('/api/capex', async (req, res) => {
       moved: movedTotal,
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
       unmatchedSupplier, nameNearMiss,
+      capexFlow: (() => {
+        const r2 = (n) => Math.round(n * 100) / 100;
+        const t = { additions: 0, advanceNet: 0, creditorNet: 0 };
+        for (const br of Object.keys(flowBr)) {
+          t.additions += flowBr[br].additions;
+          t.advanceNet += flowBr[br].advanceNet;
+          t.creditorNet += flowBr[br].creditorNet;
+          flowBr[br].total = r2(flowBr[br].additions + flowBr[br].advanceNet - flowBr[br].creditorNet);
+        }
+        return { additions: r2(t.additions), advanceNet: r2(t.advanceNet),
+          creditorNet: r2(t.creditorNet),
+          total: r2(t.additions + t.advanceNet - t.creditorNet), byBranch: flowBr };
+      })(),
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });

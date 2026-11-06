@@ -1,6 +1,35 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.76 (server, diag) — November 2026 — Capex for the period, computed without guessing at anything
+
+Every rule that tried to decide **which supplier sells machines** has been wrong in both
+directions — a freight forwarder counted in full, a machine maker left out altogether. So
+the page now leads with a figure that never asks:
+
+```
+    Assets capitalised
+  + Advances paid, machine not here yet      (rise in capital advances)
+  - Still owed to machine suppliers          (rise in capital creditors)
+  = Capex this period
+```
+
+Three balances Tally itself keeps — fixed assets, capital advances, machinery creditors —
+and no opinion about any supplier. It follows the **change** in those balances rather than
+the payments, which is what stops an advance and the machine it buys being counted twice.
+
+Pay a ₹3 Cr advance: advances rise, nothing is capitalised, capex is ₹3 Cr. The ₹5 Cr
+machine arrives with ₹2 Cr still owed: ₹5 Cr capitalised, advances *fall* ₹3 Cr, owed rises
+₹2 Cr — capex is **nothing**, which is right, because the ₹3 Cr left last year and the ₹2 Cr
+has not left yet. Pay the balance: owed falls, capex is ₹2 Cr. Over the three periods
+3 + 0 + 2 = the ₹5 Cr machine, each rupee landing in the period it actually left. The test
+drives exactly that machine through three separate windows.
+
+The payment-by-payment list stays, below it, answering the narrower question of **which
+cheques** — that one does rely on knowing who the machinery suppliers are, so the two need
+not agree to the rupee, and the page says so. A machine bought on a term loan is in the new
+figure even though no money left the bank: the bank paid the supplier and you owe the bank.
+
 ## v2.75 (server, diag) — November 2026 — A machine maker's own name counts, and the purchase is looked for further back
 
 **`Pinghu Bindex Machinery Co.,Ltd.` was nowhere on the page.** It is a binding-machine

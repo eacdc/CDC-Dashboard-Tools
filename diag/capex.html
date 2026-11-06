@@ -253,6 +253,11 @@
     out.capexPartyGroups=brOnly(j.capexPartyGroups);
     out.advanceGroups=brOnly(j.advanceGroups);
     out.nameNearMiss=brOnly(j.nameNearMiss);
+    var fb=(j.capexFlow&&j.capexFlow.byBranch)||{};
+    if(br==='all'){ out.capexFlow=j.capexFlow; }
+    else { var o=fb[br]||{additions:0,advanceNet:0,creditorNet:0};
+      out.capexFlow={additions:o.additions||0,advanceNet:o.advanceNet||0,creditorNet:o.creditorNet||0,
+        total:Math.round(((o.additions||0)+(o.advanceNet||0)-(o.creditorNet||0))*100)/100,byBranch:fb}; }
     out.sliceWarn=null;
     if(br==='all'){
       var bad=[];
@@ -482,6 +487,46 @@
     h+='<section><h2>WHEN IT WAS SPENT</h2><div class="body">'+monthChart(j.byMonth)
      + '<div class="note" style="margin-top:6px">Capitalised in each month. Hover a column for its items; every '
      + 'figure is in the tables below.</div></div></section>';
+
+    // THE MEASURE THAT ASKS NOTHING. Three balances Tally itself keeps, and no judgement
+    // about which supplier sells machines -- the judgement that has now been wrong in
+    // both directions.
+    var cf=j.capexFlow||{additions:0,advanceNet:0,creditorNet:0,total:0};
+    var fline=function(lab,val,note,strong){
+      return '<tr'+(strong?' class="tot"':'')+'><td>'+lab+'</td><td class="num">'+money(val)+'</td>'
+        + '<td class="muted" style="font-size:11.5px">'+note+'</td></tr>';};
+    h+='<section><h2>CAPEX FOR THE PERIOD</h2><div class="body">'
+     + '<div class="cards"><div class="card" style="border-color:#99f6e4;background:#f0fdfa">'
+     +   '<div class="k">Capex this period</div><div class="v">'+esc(rupees(cf.total))+'</div></div></div>'
+     + '<div class="scroll"><table><thead><tr><th>&nbsp;</th><th class="num">Amount</th>'
+     +   '<th>What it is</th></tr></thead><tbody>'
+     + fline('Assets capitalised', cf.additions,
+         'Machines and buildings that reached the books this period. Taken straight from the '
+         + 'fixed-asset ledgers &mdash; nothing is guessed at here.')
+     + fline((cf.advanceNet<0?'&minus; Advances released':'+ Advances paid, machine not here yet'),
+         Math.abs(cf.advanceNet),
+         (cf.advanceNet<0
+           ? 'Advances that turned INTO machines this period. Taken off, because that money left in an earlier period and is already counted in the line above.'
+           : 'Money paid against proformas for machines that have not arrived. Gone, but not yet an asset.'))
+     + fline((cf.creditorNet<0?'+ Machine bills paid off':'&minus; Still owed to machine suppliers'),
+         Math.abs(cf.creditorNet),
+         (cf.creditorNet<0
+           ? 'Old bills for machines, settled this period. Added, because the money left now though the asset arrived earlier.'
+           : 'Machines on the books but not yet paid for. Taken off, because the money has not left.'))
+     + fline('<strong>Capex this period</strong>', cf.total, '', true)
+     + '</tbody></table></div>'
+     + '<div class="note" style="margin-top:8px"><strong>This is the figure that asks nothing of '
+     + 'anybody&rsquo;s judgement.</strong> It uses three balances Tally itself keeps &mdash; fixed '
+     + 'assets, capital advances, machinery creditors &mdash; and no opinion about which supplier sells '
+     + 'machines. It follows the <em>change</em> in those balances, never the payments, and that is what '
+     + 'stops a machine being counted twice: a 3 Cr advance counts the year it is paid, and when the '
+     + 'machine arrives the advance falls by the same 3 Cr and cancels it out. Over the life of a '
+     + 'machine the lines add up to exactly what it cost, each rupee landing in the period it left. '
+     + 'The payment-by-payment list below answers a narrower question &mdash; <em>which cheques</em> '
+     + '&mdash; and relies on knowing who the machinery suppliers are, so the two need not match to the '
+     + 'rupee. A machine bought on a term loan is in this figure even though no money left your bank: '
+     + 'the bank paid the supplier and you owe the bank.</div>'
+     + '</div></section>';
 
     // WHAT ACTUALLY LEFT THE BANK. Followed on the payment vouchers, not the
     // capitalisation, because a machine is paid for long before it is capitalised.
@@ -766,14 +811,18 @@
      + 'ledger is excluded by name: writing an asset down is not buying one.<br>'
      + '<strong>3. Moved, not bought.</strong> Where one voucher debits one asset and credits another &mdash; '
      + 'capitalising work in progress &mdash; that much is a transfer and is in neither figure.<br>'
-     + '<strong>4. What counts as capex CASH.</strong> Followed on the payment voucher, never the '
+     + '<strong>4. Capex for the period.</strong> Assets capitalised, plus the rise in capital '
+     + 'advances, minus the rise in what is owed to machine suppliers. Three balances Tally keeps, no '
+     + 'judgement about suppliers, and the change in them rather than the payments &mdash; which is what '
+     + 'stops an advance and the machine it buys being counted twice.<br>'
+     + '<strong>5. What counts as capex CASH.</strong> Followed on the payment voucher, never the '
      + 'capitalisation, because a machine is paid for long before it is capitalised. Any voucher that '
      + 'credits a bank, cash or OD account contributes whatever it debited to: an asset; an account kept '
      + 'for machinery suppliers or capital advances (recognised from its group, or from its own name where '
      + 'the group says nothing &mdash; all listed above); or a party that sold us an asset &mdash; and for '
      + 'that last one, <strong>only against the bill the asset was bought on</strong>. The debits are read, not the bank total, so a payment run settling one machine '
      + 'and three paper bills contributes only the machine.<br>'
-     + '<strong>5. What is never cash.</strong> Selling an asset (that is a disposal, not negative spend), '
+     + '<strong>6. What is never cash.</strong> Selling an asset (that is a disposal, not negative spend), '
      + 'a capitalisation journal (no money moves), and a bill that has not been paid yet.'
      + '</div></div></section>';
 
