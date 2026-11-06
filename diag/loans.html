@@ -318,19 +318,29 @@
     // By kind.
     h+='<section><h2>BY KIND OF BORROWING</h2><div class="body"><div class="scroll"><table><thead><tr>'
      + '<th>Kind</th><th class="num">Accounts</th><th class="num">Opening</th><th class="num">Drawn</th>'
-     + '<th class="num">Repaid</th><th class="num">Closing</th></tr></thead><tbody>';
+     + '<th class="num">Repaid</th><th class="num">Net change</th><th class="num">Closing</th></tr></thead><tbody>';
     for(var k=0;k<j.byKind.length;k++){ var b=j.byKind[k];
       var hid=(b.sweep&&!gross);
       h+='<tr><td>'+esc(b.kindLabel)+(hid?' <span class="pill">sweeps</span>':'')+'</td><td class="num">'+b.count+'</td>'
        + '<td class="num">'+money(b.opening)+'</td>'
-       + '<td class="num">'+(hid?('<span class="muted" style="font-size:11px">net '+chg(b.netChange)+'</span>'):money(b.drawn))+'</td>'
+       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(b.drawn))+'</td>'
        + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(b.repaid))+'</td>'
+       + '<td class="num">'+chg(b.netChange)+'</td>'
        + '<td class="num"><strong>'+money(b.closing)+'</strong></td></tr>';
     }
     h+='<tr class="tot"><td>All borrowings</td><td class="num">'+j.loans.length+'</td>'
-     + '<td class="num">'+money(t.opening)+'</td><td class="num">'+money(t.drawn)+'</td>'
-     + '<td class="num">'+money(t.repaid)+'</td><td class="num">'+money(t.closing)+'</td></tr>'
-     + '</tbody></table></div></div></section>';
+     + '<td class="num">'+money(t.opening)+'</td>'
+     + '<td class="num">'+money(gross?t.drawn:t.drawnFacility)+'</td>'
+     + '<td class="num">'+money(gross?t.repaid:t.repaidFacility)+'</td>'
+     + '<td class="num">'+chg(t.netChange)+'</td>'
+     + '<td class="num">'+money(t.closing)+'</td></tr>'
+     + '</tbody></table></div>'
+     + '<div class="note" style="margin-top:8px"><strong>Export credit</strong> (PCFC / PCRE / packing credit) is '
+     + 'shown apart from <strong>term loans</strong> even though Tally files both under Secured Loans: a packing '
+     + 'credit drawn against one shipment and repaid when it realises answers a different question from a '
+     + 'seven-year loan on a press, and adding them together answers neither. The split follows your own '
+     + 'sub-groups where you have them, and the ledger name where you do not.</div>'
+     + '</div></section>';
 
     // Account by account, each expandable into its own statement. A hundred dormant
     // ledgers -- every lender ever repaid, every car loan long closed -- are hidden
