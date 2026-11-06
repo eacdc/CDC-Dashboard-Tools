@@ -80,6 +80,10 @@ const V = (branch, date, pl, ld, extra) => {
       'Paper Purchase': 'Purchase Accounts',
       'HDFC Current A/c': 'Bank Accounts',
       'Machine Supplier': 'Sundry Creditors',
+      // The trap: Kolkata files the SUPPLIERS of its machines under a creditor sub-group
+      // whose own name says "Fixed Assets". It is a payable, not an asset.
+      'Robotjet Co.Ltd.': 'Sundry Creditor - Fixed Assets',
+      'Digital Book Edge Printer': 'Plant & Machinery',
       'HDFC Term Loan': 'Secured Loans',
       'Repairs to Machinery': 'Indirect Expenses',
     },
@@ -89,6 +93,7 @@ const V = (branch, date, pl, ld, extra) => {
       'Capital Work In Progress': 'Capital Account',
       'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account',
       'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
+      'Sundry Creditor - Fixed Assets': 'Sundry Creditors',
       'Secured Loans': 'Loans (Liability)', 'Loans (Liability)': 'Capital Account',
       'Indirect Expenses': 'Revenue Account', 'Purchase Accounts': 'Revenue Account',
       'Capital Account': null, 'Revenue Account': null,
@@ -116,6 +121,18 @@ const V = (branch, date, pl, ld, extra) => {
     { type: 'Journal' }));
   vs.push(V('kol', '20260816', { 'HDFC Current A/c': 40000 }, { 'Repairs to Machinery': -40000 }));
   vs.push(V('kol', '20260817', { 'Machine Supplier': 100000 }, { 'Paper Purchase': -100000 }));
+  // ONE MACHINE BOUGHT FROM A SUPPLIER FILED UNDER "Sundry Creditor - Fixed Assets".
+  // Three vouchers, and before the ancestry rule each of them produced a capex row:
+  // the purchase (right), the payment that settled it (a second "purchase"), and the
+  // exchange difference on it. The purchase voucher also credits the creditor, which
+  // read as a DISPOSAL of the same amount as the asset.
+  vs.push(V('kol', '20260820', { 'Robotjet Co.Ltd.': 2132900 }, { 'Digital Book Edge Printer': -2132900 },
+    { type: 'Purchase - Fixed Assets', party: 'Robotjet Co.Ltd.', narration: 'Digital Book Edge Printer' }));
+  vs.push(V('kol', '20260825', { 'Robotjet Co.Ltd.': -2110443.65, 'HDFC Current A/c': 2110443.65 },
+    {}, { type: 'Bank Payments', party: 'Robotjet Co.Ltd.' }));
+  vs.push(V('kol', '20260826', { 'Robotjet Co.Ltd.': -22456.35 }, { 'Repairs to Machinery': 22456.35 },
+    { type: 'Journal', party: 'Robotjet Co.Ltd.' }));
+
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
   vs.push(V('kol', '20260819', {}, { 'Computers': -8888888, 'HDFC Term Loan': 8888888 }, { optional: true }));
@@ -135,7 +152,8 @@ const V = (branch, date, pl, ld, extra) => {
   assert(j.ok === true, 'the capex list answers');
 
   const assets = j.rows.filter((r) => r.spend > 0).map((r) => r.asset).sort();
-  assert(assets.join(' | ') === 'Computers | Factory Building | Heidelberg CD102 Press | New Line CWIP',
+  assert(assets.join(' | ') === 'Computers | Digital Book Edge Printer | Factory Building'
+    + ' | Heidelberg CD102 Press | New Line CWIP',
     'every fixed-asset purchase is listed, capital work in progress included: got ' + assets.join(' | '));
   assert(!j.rows.some((r) => r.asset === 'Depreciation' || r.asset === 'Repairs to Machinery'),
     'depreciation and repairs are expenses, not capex -- writing an asset down is not buying one');
@@ -143,13 +161,30 @@ const V = (branch, date, pl, ld, extra) => {
     'and accumulated depreciation filed UNDER the asset group is excluded by name');
   assert(!j.rows.some((r) => r.asset === 'Paper Purchase'), 'a raw-material purchase is not capex');
 
-  assert(near(j.additions, 54000000),
-    'additions are the sum of what was capitalised: 5L + 5 Cr + 20L + 15L (got ' + j.additions + ')');
-  assert(near(j.disposals, 300000) && near(j.net, 53700000),
+  assert(near(j.additions, 56132900),
+    'additions are the sum of what was capitalised: 5L + 5 Cr + 20L + 15L + the 21.33L printer'
+    + ' (got ' + j.additions + ')');
+  assert(near(j.disposals, 300000) && near(j.net, 55832900),
     'a disposal is reported APART and never netted into spend -- a year that bought 2 Cr and sold 1 Cr'
     + ' did not spend 1 Cr (got disposals ' + j.disposals + ', net ' + j.net + ')');
   assert(j.rows.every((r) => r.spend < 7000000 || r.asset === 'Heidelberg CD102 Press'),
     'a cancelled or optional voucher reaches no figure here either');
+
+  // A GROUP THAT MENTIONS FIXED ASSETS IS NOT ONE. Everything under Sundry Creditors is
+  // a payable however its sub-group is named, and reading it as an asset counted one
+  // machine up to four times.
+  assert(!j.rows.some((r) => r.asset === 'Robotjet Co.Ltd.'),
+    'a SUPPLIER filed under "Sundry Creditor - Fixed Assets" is a payable, not an asset --'
+    + ' its name never appears in the Item column');
+  const printer = j.rows.filter((r) => r.asset === 'Digital Book Edge Printer' || r.disposal === 2132900);
+  assert(printer.length === 1 && printer[0].spend === 2132900,
+    'so one machine is ONE row of 21,32,900 -- not the asset leg plus the creditor leg as a'
+    + ' disposal plus the bank payment as a second purchase (got ' + printer.length + ' row(s))');
+  assert(!j.rows.some((r) => r.disposal === 2132900),
+    'and crediting the SUPPLIER when the machine is bought is not a disposal of the machine');
+  assert(j.excludedGroups.some((x) => /Sundry Creditor - Fixed Assets/.test(x.group)),
+    'the group that was dropped is NAMED, so a real asset group filed somewhere unusual is'
+    + ' visible on the page rather than discovered a year later');
 
   // HOW IT WAS FUNDED -- the distinction the whole report rests on.
   const press = j.rows.find((r) => r.asset === 'Heidelberg CD102 Press');
@@ -161,13 +196,14 @@ const V = (branch, date, pl, ld, extra) => {
   assert(bld && bld.funded === 'credit', 'and one taken on supplier credit is marked credit');
   const fundMap = {};
   for (const f of j.byFunding) fundMap[f.key] = f.spend;
-  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 2000000),
-    'and the funding split totals back: 5 Cr on loan, 20L cash, 20L credit (got ' + JSON.stringify(fundMap) + ')');
+  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 4132900),
+    'and the funding split totals back: 5 Cr on loan, 20L cash, 20L + the printer on credit (got '
+    + JSON.stringify(fundMap) + ')');
 
   // The rollups.
   const grp = {};
   for (const g of j.byGroup) grp[g.label] = g.spend;
-  assert(near(grp['Capital Account > Fixed Assets > Plant & Machinery'], 50000000),
+  assert(near(grp['Capital Account > Fixed Assets > Plant & Machinery'], 52132900),
     'spend rolls up by the asset group Tally files it under');
   assert(j.byMonth.map((m) => m.key).join(',') === '202604,202605,202606,202607,202608',
     'and by month, in order, so a spending pattern is visible: got ' + j.byMonth.map((m) => m.key).join(','));
@@ -183,16 +219,16 @@ const V = (branch, date, pl, ld, extra) => {
     'and the voucher guid, so the row can link straight at the entry');
   // The narration lives at details.narration. Reading a top-level `narration` returned
   // undefined for every voucher ever stored, so the column shipped blank on every row.
-  assert(j.rows.filter((r) => r.narration).length === 3,
+  assert(j.rows.filter((r) => r.narration).length === 4,
     'the narration is read from where the extractor puts it (details.narration), not from a'
-    + ' top-level field no voucher has -- got ' + j.rows.filter((r) => r.narration).length + ' of 3');
+    + ' top-level field no voucher has -- got ' + j.rows.filter((r) => r.narration).length + ' of 4');
   const cwip = j.rows.find((r) => r.asset === 'New Line CWIP');
   assert(cwip && cwip.narration === '',
     'and an entry Tally carries no narration for comes back empty rather than undefined');
 
   // A floor, for a year of small tools nobody wants listed.
   const big = await get('/api/capex?branch=kol&from=20260401&to=20260831&min=1000000');
-  assert(big.rows.filter((r) => r.spend > 0).length === 3 && near(big.additions, 53500000),
+  assert(big.rows.filter((r) => r.spend > 0).length === 4 && near(big.additions, 55632900),
     'a minimum drops the small stuff from the list AND from the total, so the two always agree');
 
   server.close();

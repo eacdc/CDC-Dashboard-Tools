@@ -38,8 +38,22 @@ assert(kind('HDFC Current A/c') === null, 'a bank current account is the other s
 assert(kind('Term Loan Interest') === null,
   'and "Term Loan Interest" is an expense -- a report that turned it into a borrowing would be worse than none');
 assert(kind('A Customer') === null, 'a customer is not a loan');
-assert(LM.nearMiss('Term Loan Interest', chainOf['Term Loan Interest']) === true,
-  'a ledger NAMED like a loan but grouped elsewhere is reported as a near miss, because a loan silently absent from a loan report is the one error nobody would spot');
+// AN INTEREST LEDGER IS NOT A QUESTION. The real books hold thirty of them -- "Interest
+// on Term Loan with HDFC Bank", "Overdraft Interest - ICICI Bank", "Insurance - Export
+// Credit" -- and listing every one under "if this is a real loan, move it under a loan
+// group in Tally" is advice that would be wrong thirty times out of thirty. A warning
+// that is all certainties and no questions is one the reader learns to skip, and the one
+// genuine stray would be sitting in the middle of it.
+assert(LM.nearMiss('Term Loan Interest', chainOf['Term Loan Interest']) === false,
+  'interest on a term loan is interest OWED, not a loan filed wrongly, so it raises no question');
+assert(LM.notBorrowingByName('Interest on Term Loan with HDFC Bank') === true
+  && LM.notBorrowingByName('Insurance - Export Credit') === true
+  && LM.notBorrowingByName('Interest Subvention Return on PCRE Loan') === true,
+  'and the whole family of them is recognised as deliberate exclusions, to be counted rather than listed');
+assert(LM.notBorrowingByName('PCFC Loan with Citi Bank') === false,
+  'while a facility itself is not swept up by that rule');
+assert(LM.nearMiss('WCDL Loan with HSBC', ['Capital Account', 'Suspense A/c']) === true,
+  'a ledger NAMED like a loan but grouped elsewhere is still reported as a near miss, because a loan silently absent from a loan report is the one error nobody would spot');
 
 // ---------------------------------------------------------------------------
 // Buckets

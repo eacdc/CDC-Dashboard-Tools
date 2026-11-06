@@ -245,6 +245,23 @@
      + 'knowing.</div></div></section>';
 
     h+='<section><h2>WHAT WAS BOUGHT</h2><div class="body">'+rollTable(j.byAsset,'Asset',j.additions)+'</div></section>';
+    // A group whose NAME says fixed assets but which sits under a liability is a payables
+    // group. Reported rather than dropped in silence: if a real asset group is filed
+    // somewhere unusual, it has to be visible here and not found a year from now.
+    if(j.excludedGroups&&j.excludedGroups.length){
+      var eg='<div class="note">These groups mention fixed assets in their name but sit under a '
+       + 'liability or a receivable, so the ledgers in them are <strong>payables, not assets</strong>, '
+       + 'and nothing in them is counted above. A supplier of machinery filed under '
+       + '<em>Sundry Creditor - Fixed Assets</em> is the usual case. If one of these really is an '
+       + 'asset group, say so and it will be counted.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Group</th><th>Br</th><th class="num">Ledgers</th>'
+       + '</tr></thead><tbody>';
+      for(var x=0;x<j.excludedGroups.length;x++){var g=j.excludedGroups[x];
+        eg+='<tr><td class="muted" style="font-size:11.5px">'+esc(g.group)+'</td>'
+          + '<td class="mono">'+esc(g.branch)+'</td><td class="num">'+g.ledgers+'</td></tr>';}
+      h+='<section><h2>NOT COUNTED: NAMED LIKE AN ASSET GROUP, FILED AS A LIABILITY</h2>'
+       + '<div class="body">'+eg+'</tbody></table></div></div></section>';
+    }
     h+='<section><h2>BY ASSET GROUP</h2><div class="body">'+rollTable(j.byGroup,'Group',j.additions)+'</div></section>';
 
     var noNarr=0;

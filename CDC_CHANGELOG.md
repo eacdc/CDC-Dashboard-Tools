@@ -1,6 +1,36 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.68 (server, diag) — November 2026 — One printer was four capex rows, and two warnings that could not be acted on
+
+**A creditor group named "Sundry Creditor - Fixed Assets" was being read as a fixed-asset
+group.** Kolkata files the suppliers of its machines there. `/api/capex` tested the joined
+group chain for the words "fixed assets", so every one of those suppliers became an asset —
+and one ₹21.33 L printer produced four rows: the genuine asset leg; the creditor leg, which
+is a credit and therefore read as a **disposal** of the same amount; the bank payment that
+settled it a month later, read as a second purchase and labelled *financed by a loan*
+because the OD was its other leg; and the exchange difference on it. Additions, disposals
+and the funding split were all inflated, and the supplier's name appeared in the **Item**
+column. Classification now walks the chain top-down: a payables, receivables or bank group
+reached before any fixed-asset group disqualifies everything beneath it. Groups dropped this
+way are listed on the page under *Not counted: named like an asset group, filed as a
+liability*, so a real asset group filed somewhere unusual stays visible.
+
+**Thirty interest ledgers were being offered as loans that might be filed wrongly.**
+"Interest on Term Loan with HDFC Bank", "Overdraft Interest - ICICI Bank", "Insurance -
+Export Credit" — all named like a borrowing, all deliberately excluded, and all listed under
+*"if one of those is a real loan, move it under a loan group in Tally"*, which would be
+wrong advice thirty times out of thirty. Interest owed is not money borrowed. They are now
+reported as a single count, and the near-miss list is left for the ledgers that are a real
+question.
+
+**And the coverage-gap warning was contradicting the cross-check standing beside it.** The
+page said a one-day gap between the openings' date and the oldest voucher could be hiding
+anything — directly under a verdict that all 133 accounts reconcile to Tally's own closing
+balance. If the books reconstruct end to end, nothing happened in that gap that moves a
+figure. The note now says that, and still names the back-fill for anyone who wants the gap
+closed on paper.
+
 ## v2.67 (portal, server, diag) — November 2026 — Loans and Capex move onto the main page, and the narration comes back
 
 **The narration column was blank on every capex row, and always had been.** The extractor

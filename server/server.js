@@ -2044,6 +2044,7 @@ app.get('/api/loans', async (req, res) => {
     // count or a collision and nobody can tell which.
     const ledgerMeta = {};                   // 'br|ledger' -> meta
     const nearMisses = [];
+    let interestLike = 0;      // named like a loan, but interest/insurance: never a borrowing
     const perBranch = {};
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
@@ -2062,6 +2063,9 @@ app.get('/api/loans', async (req, res) => {
           for (const v of aliasVariants(aliases, ln)) nameOf[v] = key;
         } else if (LM.nearMiss(ln, chain)) {
           nearMisses.push({ ledger: ln, branch: br, group: chain.join(' > ') });
+        } else if (LM.notBorrowingByName(ln)
+          && (chain.join('>').toLowerCase().indexOf('loan') >= 0 || /loan|od|overdraft|pcfc|pcre/i.test(ln))) {
+          interestLike++;
         }
       }
       perBranch[br] = { master: mb, nameOf, wanted: Object.keys(nameOf) };
@@ -2177,11 +2181,23 @@ app.get('/api/loans', async (req, res) => {
         const scale = days <= 3
           ? `That is ${days} day(s). If nothing was posted in them this is fine and changes no figure here; if something was, it is missing from every balance below.`
           : `That is ${days} days of postings in neither half, so every balance below is out by whatever happened in them -- and on an OD or CC account that can be the whole difference, because a sweeping account is paid down by postings we do not hold.`;
-        notes.push(`${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. ${scale} Settle it by back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}), which is cheap and removes the question.`);
+        // THE CROSS-CHECK ALREADY ANSWERS THIS. If every account with a Tally closing
+        // balance comes out at that figure here, then opening-plus-postings reconstructs
+        // the books end to end and whatever happened in the gap changed nothing. Repeating
+        // the warning anyway, under a green "checked against Tally" verdict, teaches the
+        // reader to skip both. It is reported, but as a settled question.
+        const tc = out.tallyCheck || {};
+        const proven = tc.compared >= 5 && tc.agree === tc.compared;
+        notes.push(proven
+          ? `${br}: the opening balances stand on ${asOn} and the oldest ${br} voucher held is ${firstOf[br]}, a ${days}-day gap -- but all ${tc.compared} account(s) still reconcile to Tally's own closing balance, so nothing was posted in it that moves a figure here. Back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}) would close the gap on paper; no number below depends on it.`
+          : `${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. ${scale} Settle it by back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}), which is cheap and removes the question.`);
       }
     }
     if (nearMisses.length) {
       notes.push(`${nearMisses.length} ledger(s) are NAMED like a borrowing but are not under a loan group, so they are NOT counted: ${nearMisses.slice(0, 8).map((x) => `"${x.ledger}" (${x.group})`).join(', ')}. If one of those is a real loan, move it under a loan group in Tally or tell us.`);
+    }
+    if (interestLike) {
+      notes.push(`${interestLike} interest, insurance and subvention ledger(s) name a loan ("Interest on Term Loan with HDFC Bank") and are left out as a matter of course -- interest owed is not money borrowed. They are not listed, and nothing needs doing about them.`);
     }
     res.json({ ok: true, branch, scale: 'cr-positive',
       scaleNote: 'A loan outstanding is POSITIVE. drawn = borrowed (Cr), repaid = paid back (Dr). closing = opening + drawn - repaid.',
@@ -2203,6 +2219,38 @@ app.get('/api/loans', async (req, res) => {
 //
 // Credits to the same ledgers are disposals and are kept apart rather than netted: a year
 // that bought 2 Cr and sold 1 Cr of plant is not a year that spent 1 Cr.
+// A GROUP NAME CAN CONTAIN "FIXED ASSETS" WITHOUT BEING ONE, and testing the whole chain
+// as one string is how this report counted the same machine four times. Kolkata files the
+// suppliers of its machines under `Current Liabilities > Sundry Creditors > Sundry Creditor
+// - Fixed Assets`. A substring test over the joined chain made every one of those creditors
+// a fixed asset, so ONE purchase produced: the real asset leg; the creditor leg, which is a
+// CREDIT and therefore read as a disposal of the same amount; the bank payment that settled
+// it months later, read as a second purchase "financed by a loan" because the OD was the
+// other leg; and the exchange difference on it. The totals then counted a 21 L printer as
+// roughly 42 L of additions and 21 L of disposals, and the entry list showed the supplier's
+// name in the Item column.
+//
+// What decides it is where the chain ROOTS. Walking it top-down, a payables / receivables /
+// bank group reached BEFORE any fixed-asset group means everything below it is that group's
+// business, whatever the sub-group is called. Anything dropped this way is reported in
+// `excludedGroups` rather than silently vanishing: a real asset group filed somewhere
+// unusual must be visible on the page, not discovered a year later.
+const BLOCKS_ASSET = ['sundry creditors', 'sundry debtors', 'current liabilities',
+  'current assets', 'loans (liability)', 'secured loans', 'unsecured loans',
+  'bank od', 'bank occ', 'bank accounts', 'cash-in-hand', 'cash in hand',
+  'duties & taxes', 'provisions', 'branch / divisions', 'loans & advances',
+  'liability for expenses'];
+const MENTIONS_ASSET = ['fixed assets', 'capital work', 'capital-work'];
+function assetDepth(chain) {
+  const segs = Array.isArray(chain) ? chain : String(chain || '').split('>');
+  for (let i = 0; i < segs.length; i++) {
+    const seg = String(segs[i]).toLowerCase();
+    for (const b of BLOCKS_ASSET) if (seg.indexOf(b) >= 0) return -1;
+    for (const a of MENTIONS_ASSET) if (seg.indexOf(a) >= 0) return i;
+  }
+  return -1;
+}
+
 app.get('/api/capex', async (req, res) => {
   try {
     const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
@@ -2218,6 +2266,7 @@ app.get('/api/capex', async (req, res) => {
     // ledger name can be a fixed asset in one company and something else in the other.
     const assetOf = {};                      // br -> { ledger: group }
     const chainOf = {};                      // br -> { ledger: lowercased chain }
+    const excluded = new Map();              // group chain -> how many ledgers it holds
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
       const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
@@ -2232,9 +2281,16 @@ app.get('/api/capex', async (req, res) => {
         // is an expense and sits under Indirect Expenses, so it never reaches here; an
         // accumulated-depreciation ledger filed UNDER Fixed Assets is excluded by name,
         // because writing an asset down is not buying one.
-        const isAsset = cs.indexOf('fixed assets') >= 0
-          || cs.indexOf('capital work') >= 0 || cs.indexOf('capital-work') >= 0;
-        if (!isAsset) continue;
+        const depth = assetDepth(chain);
+        if (depth < 0) {
+          // Named like an asset group but filed under a liability: worth reporting, not
+          // worth counting. See assetDepth.
+          if (MENTIONS_ASSET.some((a) => cs.indexOf(a) >= 0)) {
+            const k = br + '|' + chain.join(' > ');
+            excluded.set(k, (excluded.get(k) || 0) + 1);
+          }
+          continue;
+        }
         const nm = ln.toLowerCase();
         if (nm.indexOf('depreciation') >= 0 || nm.indexOf('depriciation') >= 0
           || nm.indexOf('amorti') >= 0) continue;
@@ -2243,6 +2299,9 @@ app.get('/api/capex', async (req, res) => {
       assetOf[br] = map;
       chainOf[br] = chains;
     }
+    const excludedGroups = [...excluded.entries()]
+      .map(([k, n]) => ({ branch: k.split('|')[0], group: k.slice(k.indexOf('|') + 1), ledgers: n }))
+      .sort((a, b) => b.ledgers - a.ledgers);
     const anyAssets = branches.some((br) => Object.keys(assetOf[br]).length);
     if (!anyAssets) {
       return res.json({ ok: true, branch, from, to, rows: [], additions: 0, disposals: 0, net: 0,
@@ -2330,7 +2389,7 @@ app.get('/api/capex', async (req, res) => {
       scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted.',
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
-      byGroup, byMonth, byAsset, byFunding });
+      byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

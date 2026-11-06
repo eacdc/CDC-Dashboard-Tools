@@ -72,7 +72,7 @@ const NOT_BORROWING = ['loans & advances', 'loans and advances', 'current assets
 // only ever BLOCK the name-based path -- a ledger the GROUP says is a loan stays one, so
 // "L/C Payable to Muller Martini" under Secured Loans is untouched by the word "payable".
 const NOT_BORROWING_NAME = ['interest', 'subvention', 'receivable', 'provision',
-  'charges', 'commission', 'penalty'];
+  'charges', 'commission', 'penalty', 'insurance'];
 
 const KIND_LABELS = {
   od_cc: 'OD / CC (working capital)',
@@ -132,9 +132,25 @@ function isSweep(kind) { return !!SWEEP_KINDS[kind]; }
 function nearMiss(name, chain) {
   if (loanKind(name, chain)) return false;
   const nm = String(name || '').toLowerCase();
+  // AN INTEREST LEDGER IS NOT A NEAR MISS. "Interest on Term Loan with HDFC Bank" says
+  // "term loan", so the word test caught all thirty of them and the page told the reader
+  // to move them under a loan group in Tally if they were real -- which is advice that
+  // would be wrong every time. They are interest, insurance, subvention or a receivable:
+  // deliberately not borrowings, excluded by the same rule that keeps them out of the
+  // figures. A list that is thirty certainties and no questions is a list nobody reads,
+  // and the one genuine stray would sit in the middle of it unnoticed.
+  for (const bad of NOT_BORROWING_NAME) if (nm.indexOf(bad) >= 0) return false;
   // The export words count here too: a real PCFC account filed outside every loan group
   // is exactly the kind of thing that must be named rather than quietly dropped.
   return isExportCredit(nm) || NAME_KINDS.some((n) => nm.indexOf(n.kw) >= 0);
+}
+
+// How many ledgers the rule above dropped without asking the reader about them. Reported
+// as a count so the suppression is visible, never as thirty lines of noise.
+function notBorrowingByName(name) {
+  const nm = String(name || '').toLowerCase();
+  for (const bad of NOT_BORROWING_NAME) if (nm.indexOf(bad) >= 0) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,5 +437,5 @@ function buildLoanMovement(opts) {
     total, openingAsOn, openingKnown, ignoredRows: ignored, inDebit, dormant, tallyCheck };
 }
 
-module.exports = { loanKind, nearMiss, isExportCredit, bucketKeyOf, bucketLabel, bucketsBetween,
+module.exports = { loanKind, nearMiss, notBorrowingByName, isExportCredit, bucketKeyOf, bucketLabel, bucketsBetween,
   weekStart, buildLoanMovement, KIND_LABELS, KIND_ORDER, GROUP_KINDS, NAME_KINDS, EXPORT_KW, NOT_BORROWING };

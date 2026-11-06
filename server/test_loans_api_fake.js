@@ -180,8 +180,11 @@ const V = (branch, date, pl, ld, extra) => ({
     'every borrowing is listed and nothing else is: got ' + names.join(' | '));
   assert(!names.includes('Staff Loan Given'), 'money WE lent out is not reported as a borrowing');
   assert(!names.includes('HDFC Current A/c'), 'nor is the bank account the repayment came out of');
-  assert((j.nearMisses || []).some((x) => x.ledger === 'Term Loan Interest'),
-    'an expense named like a loan is NOT counted but IS named, so a real loan filed wrongly cannot hide');
+  assert(!(j.nearMisses || []).some((x) => x.ledger === 'Term Loan Interest'),
+    'interest on a term loan is not offered as a loan that might be filed wrongly -- it is'
+    + ' interest, and asking about it thirty times is how a warning stops being read');
+  assert((j.notes || []).some((n) => /interest, insurance and subvention/.test(n)),
+    'but it is COUNTED in a note, so the suppression is visible rather than silent');
 
   const pcfc = j.loans.find((l) => l.ledger === 'PCFC Loan 0012');
   assert(pcfc && pcfc.kind === 'od_cc',
