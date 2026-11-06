@@ -359,6 +359,28 @@ column rather than as an error. Both `/api/capex` and `/api/yoy/vouchers` shippe
 the capex test's fixture now writes narration where the real pull writes it, so reading the
 wrong field fails by name.
 
+**A group whose NAME says "Fixed Assets" is not necessarily one.** Kolkata files the
+suppliers of its machines under `Current Liabilities > Sundry Creditors > Sundry Creditor -
+Fixed Assets`. Testing the joined chain for `'fixed assets'` therefore made every one of
+those creditors an asset, and ONE printer produced four rows: the real asset leg, the
+creditor leg (a CREDIT, so read as a disposal of the same amount), the bank payment that
+settled it months later (read as a second purchase, "financed by a loan" because the OD was
+the other leg), and the exchange difference on it. What decides it is where the chain ROOTS
+-- `assetDepth()` walks it top-down and a payables/receivables/bank group reached BEFORE any
+fixed-asset group disqualifies everything beneath it. What is dropped this way is returned
+as `excludedGroups` and shown on the page, because a real asset group filed somewhere
+unusual must be visible, not discovered a year later.
+
+**A warning nobody can act on trains the reader to skip the ones they can.** Two on the loan
+page were doing that. Thirty interest, insurance and subvention ledgers ("Interest on Term
+Loan with HDFC Bank") were listed as near misses under *"if this is a real loan, move it
+under a loan group in Tally"* -- advice that is wrong every time, since interest owed is not
+money borrowed; `nearMiss` now applies `NOT_BORROWING_NAME` and they are reported as a count
+instead. And the opening-predates-the-vouchers gap was still shouted under a green
+"checked against Tally" verdict: when every compared account reconciles to Tally's own
+closing, that gap demonstrably changed nothing, so the note now says so rather than asking
+a question the page has already answered.
+
 **An addition is not cash out.** It is recorded the day the asset is capitalised; the
 money may have left earlier, later, or over five years. So each row carries `funded`
 (cash / credit / loan / other), read off that voucher's OTHER legs, with a loan leg
