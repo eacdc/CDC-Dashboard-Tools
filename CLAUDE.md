@@ -174,7 +174,16 @@ browser. `mergedHierarchy(db)` in `server.js` is the only way to build it.
 
 **A party's name is merged before it is folded.** One customer under two spellings is
 one row: the fold runs every voucher's ledger names through the portal's own
-`__cdcCanon` (GUID first, then the shared `/api/aliases` map). Skipping that put the
+`__cdcCanon` — GUID first, then the shared `/api/aliases` map, then, for a name the
+master no longer holds, the master ledger whose name matches once **punctuation and case
+are ignored** (`norm()`, the same equivalence `findParent` uses to classify). That last
+step is what makes a Tally rename merge by itself: matching names exactly made
+`A.K.Trading Paper Pvt.Ltd.` and `A K Trading Paper pvt ltd` two parties, and the old
+one's money did not split off but *vanished* — a name in no master is Unclassified, so it
+is neither a debtor nor a creditor and its invoices leave receivables/payables
+altogether, while the P&L, which normalises, kept counting it. Only a normalised form
+belonging to exactly ONE master ledger is used (two real ledgers differing by punctuation
+must stay two), and an alias already saved always wins. Skipping any of this put the
 customer whole on the P&L tab and split in two in the year-on-year panel. Saving the
 merge map rebuilds every year, and `/api/yoy/vouchers` looks up every spelling merged
 into a name, because the vouchers keep whatever was typed at the time.

@@ -23,6 +23,8 @@ const PORTAL = path.join(__dirname, '..', 'portal', 'index.html');
 // to the end of their line; `buildProjection` is anchored on its signature and on the
 // `return{projMonths:...}` that closes it.
 const WANTED = [
+  { name: 'norm', re: /^function norm\(s\)\{.*\}$/m },
+  { name: '__cdcCanon', re: /^window\.__cdcCanon=function\(xd,vouchers,bills\)\{[\s\S]*?\n\};$/m },
   { name: 'getChain', re: /^function getChain\(n,xd\)\{.*\}$/m },
   { name: 'chainHas', re: /^function chainHas\(n,xd,kws\)\{.*\}$/m },
   { name: 'findIB', re: /^function findIB\(xd\)\{.*\}$/m },
@@ -60,10 +62,10 @@ function build() {
   const sandbox = { window: {}, console: { log() {} } };
   sandbox.window.window = sandbox.window;
   vm.createContext(sandbox);
-  vm.runInContext(parts.join('\n') + '\n;({buildProjection,findIB,toYMD,getChain,chainHas});',
+  vm.runInContext(parts.join('\n') + '\n;0;',
     sandbox, { filename: 'portal-projection.js' });
   const api = vm.runInContext('({buildProjection:buildProjection,findIB:findIB,toYMD:toYMD,' +
-    'getChain:getChain,chainHas:chainHas})', sandbox);
+    'getChain:getChain,chainHas:chainHas,canon:window.__cdcCanon})', sandbox);
   api.window = sandbox.window;
   return api;
 }

@@ -106,7 +106,7 @@ var e=React.createElement,useState=React.useState,useRef=React.useRef;
 // how the landing badge stayed at v1.1 for months while the other two moved -- and a
 // stale badge is worse than none, because it is read as proof that a deploy did not
 // land. They all read these globals now. Bump the version HERE and nowhere else.
-window.CDC_VER='v1.15';window.CDC_BUILD='06-Nov-2026';
+window.CDC_VER='v1.16';window.CDC_BUILD='06-Nov-2026';
 var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -133,7 +133,29 @@ function mergeHierarchies(h1,h2){
 // in place; returns the canonicalizer for reuse.
 window.__cdcCanon=function(xd,vouchers,bills){
   var aliases=window.__cdcAliases||{};var ids=(xd&&xd.ids)||{};var g2n={};for(var n in ids)if(!g2n[ids[n]])g2n[ids[n]]=n;
-  function cn(name){if(!name)return name;var a=aliases[name]||name;var g=ids[a];return (g&&g2n[g])?g2n[g]:a;}
+  // A name the master no longer holds -- the OLD spelling left on older vouchers after
+  // the ledger was renamed in Tally -- is resolved to the master ledger whose name
+  // matches once punctuation and case are ignored. That is the SAME equivalence the
+  // P&L's own classifier already uses (norm(), through buildLookups/findParent), so
+  // nothing new is being asserted about identity here; what stops is the two tabs
+  // disagreeing about whether a party exists at all.
+  //
+  // Without it, "A.K.Trading Paper Pvt.Ltd." and "A K Trading Paper pvt ltd" were two
+  // parties -- and the first one did not merely split off, it DISAPPEARED: a name in no
+  // master classifies as Unclassified, which is neither a Sundry Debtor nor a Sundry
+  // Creditor, so its purchases left payables altogether while the payments typed under
+  // the new name settled nothing and showed as an advance. The P&L, which normalises,
+  // counted that same ledger correctly the whole time.
+  //
+  // Only a normalised form belonging to exactly ONE master ledger is used. Two real
+  // ledgers that differ only in punctuation must not be welded together by guesswork,
+  // and the alias map still wins outright, so a merge the user made is never overruled.
+  var ledgers=(xd&&xd.ledgers)||{};var n2n={},nCt={};
+  for(var ln in ledgers){var nk=norm(ln);nCt[nk]=(nCt[nk]||0)+1;if(!n2n[nk])n2n[nk]=ln;}
+  function cn(name){if(!name)return name;var a=aliases[name]||name;
+    var g=ids[a];if(g&&g2n[g])return g2n[g];
+    if(!ledgers.hasOwnProperty(a)){var nk2=norm(a);if(nCt[nk2]===1)return n2n[nk2];}
+    return a;}
   function rk(obj){if(!obj)return obj;var o={};for(var k in obj){var ck=cn(k);o[ck]=(o[ck]||0)+obj[k];}return o;}
   if(vouchers)for(var i=0;i<vouchers.length;i++){var v=vouchers[i];if(v.party)v.party=cn(v.party);if(v.party_ledgers)v.party_ledgers=rk(v.party_ledgers);if(v.ledgers)v.ledgers=rk(v.ledgers);
     // v.bills carries its own ledger name; leave it un-canonicalised and a renamed
