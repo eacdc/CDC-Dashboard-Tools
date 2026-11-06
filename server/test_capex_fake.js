@@ -84,6 +84,10 @@ const V = (branch, date, pl, ld, extra) => {
       // whose own name says "Fixed Assets". It is a payable, not an asset.
       'Robotjet Co.Ltd.': 'Sundry Creditor - Fixed Assets',
       'Digital Book Edge Printer': 'Plant & Machinery',
+      // The Ahmedabad factory: accumulated in WIP while it was built, then capitalised.
+      'WIP - Factory Building': 'Preoperating Block',
+      'WIP - Plant & Machinary': 'Preoperating Block',
+      'Ahmedabad Factory Building': 'Buildings',
       'HDFC Term Loan': 'Secured Loans',
       'Repairs to Machinery': 'Indirect Expenses',
     },
@@ -91,6 +95,7 @@ const V = (branch, date, pl, ld, extra) => {
       'Plant & Machinery': 'Fixed Assets', 'Buildings': 'Fixed Assets',
       'Office Equipment': 'Fixed Assets', 'Fixed Assets': 'Capital Account',
       'Capital Work In Progress': 'Capital Account',
+      'Preoperating Block': 'Fixed Assets',
       'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account',
       'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
       'Sundry Creditor - Fixed Assets': 'Sundry Creditors',
@@ -132,6 +137,13 @@ const V = (branch, date, pl, ld, extra) => {
     {}, { type: 'Bank Payments', party: 'Robotjet Co.Ltd.' }));
   vs.push(V('kol', '20260826', { 'Robotjet Co.Ltd.': -22456.35 }, { 'Repairs to Machinery': 22456.35 },
     { type: 'Journal', party: 'Robotjet Co.Ltd.' }));
+
+  // CAPITALISATION. One journal credits every work-in-progress ledger the factory was
+  // accumulated in and debits the finished building. Nothing was bought; nothing was sold.
+  vs.push(V('kol', '20260801', {},
+    { 'Ahmedabad Factory Building': -70000000,
+      'WIP - Factory Building': 60000000, 'WIP - Plant & Machinary': 10000000 },
+    { type: 'Journal', narration: 'Being the Factory Building under Construction now Capitalised' }));
 
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
@@ -186,6 +198,25 @@ const V = (branch, date, pl, ld, extra) => {
     'the group that was dropped is NAMED, so a real asset group filed somewhere unusual is'
     + ' visible on the page rather than discovered a year later');
 
+  // MONEY MOVING BETWEEN TWO ASSET ACCOUNTS IS NEITHER A PURCHASE NOR A SALE. Read leg by
+  // leg, capitalising the Ahmedabad factory was a 7 Cr "disposal" of machines nobody sold
+  // AND 7 Cr of assets bought -- the building and everything in it counted twice, once as
+  // the WIP leaving and once as the building arriving.
+  assert(near(j.additions, 56132900) && near(j.disposals, 300000),
+    'capitalising work in progress adds nothing to what was bought and nothing to what was'
+    + ' sold (got additions ' + j.additions + ', disposals ' + j.disposals + ')');
+  assert(near(j.moved, 140000000),
+    'it is reported as money MOVED between asset accounts -- both sides, so 7 Cr out and 7 Cr'
+    + ' in (got ' + j.moved + ')');
+  const cap = j.rows.filter((r) => r.moved > 0);
+  assert(cap.length === 3 && cap.every((r) => r.spend === 0 && r.disposal === 0),
+    'every leg of it is a transfer and none of them is a purchase or a disposal');
+  assert(cap.filter((r) => r.movedOut).length === 2
+    && cap.find((r) => r.asset === 'Ahmedabad Factory Building').movedOut === false,
+    'the WIP accounts are what it came OUT of and the finished building is what it went INTO');
+  assert(!j.byAsset.some((x) => /^WIP/.test(x.label) && x.spend),
+    'and no work-in-progress account appears in what was bought');
+
   // HOW IT WAS FUNDED -- the distinction the whole report rests on.
   const press = j.rows.find((r) => r.asset === 'Heidelberg CD102 Press');
   assert(press && press.funded === 'loan',
@@ -219,9 +250,10 @@ const V = (branch, date, pl, ld, extra) => {
     'and the voucher guid, so the row can link straight at the entry');
   // The narration lives at details.narration. Reading a top-level `narration` returned
   // undefined for every voucher ever stored, so the column shipped blank on every row.
-  assert(j.rows.filter((r) => r.narration).length === 4,
+  const bought = j.rows.filter((r) => r.spend > 0 || r.disposal > 0);
+  assert(bought.filter((r) => r.narration).length === 4,
     'the narration is read from where the extractor puts it (details.narration), not from a'
-    + ' top-level field no voucher has -- got ' + j.rows.filter((r) => r.narration).length + ' of 4');
+    + ' top-level field no voucher has -- got ' + bought.filter((r) => r.narration).length + ' of 4');
   const cwip = j.rows.find((r) => r.asset === 'New Line CWIP');
   assert(cwip && cwip.narration === '',
     'and an entry Tally carries no narration for comes back empty rather than undefined');

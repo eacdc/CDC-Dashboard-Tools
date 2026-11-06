@@ -371,6 +371,17 @@ fixed-asset group disqualifies everything beneath it. What is dropped this way i
 as `excludedGroups` and shown on the page, because a real asset group filed somewhere
 unusual must be visible, not discovered a year later.
 
+**Money moving between two asset accounts is neither a purchase nor a sale.** When the
+Ahmedabad factory was finished, one journal credited every work-in-progress ledger it had
+been accumulated in and debited the finished asset. Read leg by leg that was a 44 Cr
+"disposal" of machines nobody sold, and the SAME 44 Cr counted again as assets bought --
+the building and every machine in it appearing twice, once as the WIP leaving and once as
+the asset arriving. So a voucher's asset legs are weighed against each other first:
+`min(assetDr, assetCr)` is a TRANSFER, only the excess on either side is a real purchase or
+disposal, and the transfer is reported in its own section (`moved`, `movedOut`) rather than
+in either figure. A capitalisation journal nets to exactly nothing, which is the right
+answer -- the company owns what it already owned, under a different name.
+
 **A warning nobody can act on trains the reader to skip the ones they can.** Two on the loan
 page were doing that. Thirty interest, insurance and subvention ledgers ("Interest on Term
 Loan with HDFC Bank") were listed as near misses under *"if this is a real loan, move it

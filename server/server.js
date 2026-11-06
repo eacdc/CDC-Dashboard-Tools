@@ -2329,7 +2329,7 @@ app.get('/api/capex', async (req, res) => {
       { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
     ];
     const rows = [];
-    let additions = 0, disposals = 0;
+    let additions = 0, disposals = 0, movedTotal = 0;
     for (const v of vs) {
       const map = assetOf[v.branch] || {};
       const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
@@ -2346,22 +2346,44 @@ app.get('/api/capex', async (req, res) => {
           for (const kw of f.kw) if (c.indexOf(kw) >= 0) { funded = f.as; break outer; }
         }
       }
+      // MONEY MOVING BETWEEN TWO ASSET ACCOUNTS IS NEITHER A PURCHASE NOR A SALE.
+      // When the Ahmedabad factory was finished, one journal credited every
+      // work-in-progress ledger it had been accumulated in and debited the finished
+      // asset. Read leg by leg that is a 44 Cr "disposal" of machines nobody sold, and
+      // the same 44 Cr counted a SECOND time as assets bought -- the building and every
+      // machine in it appeared twice, once as WIP and once as itself.
+      //
+      // So the asset legs of a voucher are weighed against each other first: whatever is
+      // debited to one asset and credited from another is a TRANSFER, and only the excess
+      // on either side is a real purchase or a real disposal. A journal that capitalises
+      // WIP balances exactly nets to nothing, which is the correct answer -- the company
+      // owns what it already owned, under a different name.
+      let drTot = 0, crTot = 0;
+      for (const ln of hits) { const a = all[ln]; if (a < 0) drTot -= a; else crTot += a; }
+      const internal = Math.min(drTot, crTot);
+      const drKeep = drTot > 0 ? (drTot - internal) / drTot : 0;
+      const crKeep = crTot > 0 ? (crTot - internal) / crTot : 0;
       for (const ln of hits) {
         const amt = all[ln];
         // -ve = Dr = the asset went UP: that is the purchase. +ve = Cr = a disposal.
-        const spend = amt < 0 ? -amt : 0;
-        const sold = amt > 0 ? amt : 0;
+        const gross = Math.abs(amt);
+        const keep = amt < 0 ? drKeep : crKeep;
+        const spend = amt < 0 ? gross * keep : 0;
+        const sold = amt > 0 ? gross * keep : 0;
+        const moved = Math.round(gross * (1 - keep) * 100) / 100;
         if (spend && spend < min) continue;
         if (spend) additions = Math.round((additions + spend) * 100) / 100;
         if (sold) disposals = Math.round((disposals + sold) * 100) / 100;
+        if (moved) movedTotal = Math.round((movedTotal + moved) * 100) / 100;
         rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln],
           spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
+          moved, movedOut: moved ? (amt > 0) : false,
           no: v.no || '', type: v.type || '',
           party: v.party || ((v.details || {}).partyName) || '',
           narration: (((v.details || {}).narration) || '').slice(0, 300),
           reference: ((v.details || {}).reference) || '',
           guid: v.guid || '',
-          funded: spend ? funded : 'disposal' });
+          funded: spend ? funded : (sold ? 'disposal' : 'moved') });
       }
     }
     rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)
@@ -2383,12 +2405,14 @@ app.get('/api/capex', async (req, res) => {
     const byMonth = roll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
       .sort((a, b) => (a.key < b.key ? -1 : 1));
     const byAsset = roll((r) => r.branch + '|' + r.asset, (r) => r.asset).sort((a, b) => b.spend - a.spend);
-    const byFunding = roll((r) => r.funded, (r) => r.funded).sort((a, b) => b.spend - a.spend);
+    const byFunding = roll((r) => r.funded, (r) => r.funded)
+      .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
 
     res.json({ ok: true, branch, from, to, min,
-      scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted.',
+      scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
+      moved: movedTotal,
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
