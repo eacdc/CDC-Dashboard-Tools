@@ -329,8 +329,11 @@
        + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to))+'">vouchers</a></td></tr>'
        + '<tr id="ex'+idx+'" style="display:none"><td colspan="10" style="background:#fbfdfe">'
        + '<div class="note" style="margin-bottom:8px">Opening '+esc(rupees(l.opening))+' = Tally&rsquo;s own opening '
-       + '<strong>'+esc(rupees(l.openingParts.tally))+'</strong> plus <strong>'
-       + esc(rupees(l.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
+       + '<strong>'+esc(rupees(l.openingParts.tally))+'</strong>'
+       + (function(bb){var ks=Object.keys(bb||{});
+           return ks.length?(' (from '+ks.map(function(k){return k+' '+rupees(bb[k]);}).join(' + ')
+             +(ks.length>1?', SUMMED &mdash; if both companies carry the same balance for this one account, that is a double count':'')+')'):'';})(l.openingParts.byBranch)
+       + ' plus <strong>'+esc(rupees(l.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
        + '. Disagrees with Tally? The half that is wrong says where to look: the Tally half means the master, the '
        + 'postings half means vouchers we do not hold.</div>'
        + periodTable(l.periods,l.ledger,l.sweep)+'</td></tr>';

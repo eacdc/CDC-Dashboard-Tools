@@ -180,7 +180,7 @@ function buildLoanMovement(opts) {
   // missing between the opening's day and the window start. One combined figure cannot
   // say which, and on a SWEEPING OD the postings half is a year of turnover, so a small
   // gap there moves the opening by crores.
-  const opening = {}, openTally = {}, openPost = {};
+  const opening = {}, openTally = {}, openPost = {}, openByBranch = {};
   for (const n of names) { opening[n] = 0; openTally[n] = 0; openPost[n] = 0; }
 
   // Tally's own opening balance, where the branch has one and it stands on or before
@@ -194,7 +194,15 @@ function buildLoanMovement(opts) {
     if (!o.asOn) continue;
     for (const n of names) {
       const amt = (o.amounts || {})[n];
-      if (amt) { opening[n] = r2(opening[n] + amt); openTally[n] = r2(openTally[n] + amt); }
+      if (amt) {
+        opening[n] = r2(opening[n] + amt); openTally[n] = r2(openTally[n] + amt);
+        // WHICH COMPANY'S MASTER the opening came from, kept per branch. Consolidated
+        // SUMS the two, which is right when each company carries its own share of a
+        // facility and doubles it when both carry the same balance for the same account.
+        // Nobody can tell those apart from one combined figure, so both are reported and
+        // the page shows them side by side.
+        (openByBranch[n] || (openByBranch[n] = {}))[br] = r2((openByBranch[n][br] || 0) + amt);
+      }
     }
   }
 
@@ -254,7 +262,8 @@ function buildLoanMovement(opts) {
       group: meta.group || '', branches: meta.branches || [],
       opening: r2(opening[n]), drawn: tin, repaid: tout, closing: run,
       // The opening's two halves, so a disagreement with Tally says WHICH is wrong.
-      openingParts: { tally: r2(openTally[n]), postings: r2(openPost[n]) },
+      openingParts: { tally: r2(openTally[n]), postings: r2(openPost[n]),
+        byBranch: openByBranch[n] || {} },
       netChange: r2(run - opening[n]), sweep: isSweep(meta.kind),
       // A loan in DEBIT: repaid more than the account ever held. Either Tally really
       // carries it that way, or the opening is understated because vouchers between the
