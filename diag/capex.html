@@ -66,7 +66,9 @@
     list: the item, the amount, the voucher it is on, and who it was bought from. Each row also says <strong>how it was
     funded</strong>, because an addition is recorded the day the asset is capitalised and the money may have left
     earlier, later, or over five years &mdash; a press bought on term finance is not crores of cash gone in a day.
-    Assets sold or scrapped are shown apart and never netted against what was bought
+    Assets sold or scrapped are shown apart and never netted against what was bought. And because
+    the money question is a different one, the page also follows the <strong>cash</strong>: every payment
+    that went to an asset, a supplier of machinery, or an advance against a machine not yet delivered
     &middot; <a href="./">the party explainer</a> &middot; <a href="./loans.html">loan movement</a></div>
 </header>
 <main>
@@ -136,8 +138,15 @@
     var step=(r<=1?1:r<=2?2:r<=5?5:10)*p;
     return {step:step, top:step*4};
   }
-  var FUND_LABEL={cash:'paid from bank / cash',credit:'on supplier credit',loan:'financed by a loan',
-                  other:'other / adjustment',disposal:'disposal'};
+  // These describe HOW THE ENTRY WAS BOOKED, not when the money moved. "Booked to supplier"
+  // does NOT mean the machine was taken on credit -- it is simply the account the purchase
+  // was entered against, and the payment for it usually went out earlier, against a
+  // proforma. What actually left the bank is the cash section, which follows the payments.
+  var FUND_LABEL={cash:'bank leg on this voucher',credit:'booked to supplier account',
+                  loan:'loan leg on this voucher',other:'journal entry',disposal:'disposal',
+                  moved:'moved between assets'};
+  var CASH_LABEL={asset:'paid straight for an asset',capital_creditor:'paid a machinery supplier',
+                  advance:'advance against a machine'};
 
   (function(){
     var now=new Date(), y=now.getFullYear();
@@ -227,6 +236,8 @@
      + '<div class="card"><div class="k">Net increase in assets</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
      + (j.moved?('<div class="card"><div class="k">Moved between asset accounts</div><div class="v">'
          +esc(rupees(j.moved))+'</div></div>'):'')
+     + '<div class="card" style="border-color:#99f6e4;background:#f0fdfa"><div class="k">Cash out on capex</div>'
+     + '<div class="v">'+esc(rupees(j.cashOut||0))+'</div></div>'
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)+' <strong>Buying an asset is not the same as paying for it.</strong> '
      + 'Only the <em>paid from bank</em> figure left the bank on these dates; the rest sits in a supplier bill or '
@@ -244,13 +255,70 @@
      + '<div class="note" style="margin-top:6px">Capitalised in each month. Hover a column for its items; every '
      + 'figure is in the tables below.</div></div></section>';
 
-    h+='<section><h2>HOW IT WAS FUNDED</h2><div class="body">'
+    // WHAT ACTUALLY LEFT THE BANK. Followed on the payment vouchers, not the
+    // capitalisation, because a machine is paid for long before it is capitalised.
+    var cr=j.cashRows||[];
+    h+='<section><h2>CASH OUT ON CAPEX &mdash; WHAT ACTUALLY LEFT THE BANK</h2><div class="body">'
+     + '<div class="cards"><div class="card"><div class="k">Total cash out</div><div class="v">'
+     +   esc(rupees(j.cashOut||0))+'</div></div>'
+     + (j.cashByKind||[]).map(function(k){return '<div class="card"><div class="k">'
+         + esc(CASH_LABEL[k.key]||k.key)+'</div><div class="v">'+esc(rupees(k.spend))+'</div></div>';}).join('')
+     + '</div>'
+     + '<div class="note">This is the money question, and it is a different one from the figures above. '
+     + 'An asset is <em>capitalised</em> the day it is ready; it is <em>paid for</em> on its own vouchers, '
+     + 'often months earlier. So this section follows the payments: every voucher that credited a bank, cash '
+     + 'or OD account, counting the part of it that went to an asset, to a supplier of machinery, or as an '
+     + '<strong>advance against a machine that has not arrived yet</strong>. A payment run that settles one '
+     + 'machine and three paper bills contributes only the machine.</div>';
+    if(j.cashByMonth&&j.cashByMonth.length) h+=monthChart(j.cashByMonth);
+    if(cr.length){
+      h+='<div class="scroll"><table><thead><tr><th>Date</th><th>Paid for</th><th>What kind</th><th>Br</th>'
+       + '<th>Voucher</th><th class="num">Cash out</th><th>Note from Tally</th></tr></thead><tbody>';
+      for(var c=0;c<cr.length;c++){ var q2=cr[c];
+        var vl3=esc(q2.type)+(q2.no?(' '+esc(q2.no)):'');
+        h+='<tr><td class="mono">'+esc(fmt8(q2.date))+'</td>'
+         + '<td>'+esc(q2.paidFor)+(q2.alsoLegs?('<span class="muted"> +'+q2.alsoLegs+' more</span>'):'')+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(CASH_LABEL[q2.kind]||q2.kind)+'</td>'
+         + '<td class="mono">'+esc(q2.branch)+'</td>'
+         + '<td class="mono" style="white-space:nowrap">'
+         +   (q2.guid?('<a href="../voucher/?branch='+encodeURIComponent(q2.branch)+'&amp;id='
+               +encodeURIComponent(q2.guid)+'" target="_blank" rel="noopener">'+vl3+'</a>'):vl3)+'</td>'
+         + '<td class="num">'+money(q2.amount)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(q2.narration||'')+'</td></tr>';
+      }
+      h+='<tr class="tot"><td colspan="5">Total</td><td class="num">'+money(j.cashOut||0)+'</td><td></td></tr>'
+       + '</tbody></table></div>';
+    } else {
+      h+='<div class="note">No payment in this window reached an asset, a machinery supplier or a capital '
+       + 'advance. If that is wrong, the accounts being looked at are listed below &mdash; the likely cause is '
+       + 'that machinery payments go through a general supplier account that also carries raw material.</div>';
+    }
+    // What was matched, because this rests on how the chart of accounts is laid out.
+    if(j.capexPartyGroups&&j.capexPartyGroups.length){
+      h+='<div class="note" style="margin-top:10px">Cash is followed through these accounts, recognised from '
+       + 'the group Tally files them in. If a machinery supplier or a capital advance is missing from this list, '
+       + 'its payments are not in the figure above &mdash; say so and the rule will be widened. An advance sitting '
+       + 'in a general <em>Advance to Suppliers</em> account cannot be told apart from a paper advance by any rule '
+       + 'here, and is deliberately not guessed at.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Group</th><th>Treated as</th><th>Br</th>'
+       + '<th class="num">Ledgers</th></tr></thead><tbody>';
+      for(var g2=0;g2<j.capexPartyGroups.length;g2++){var p2=j.capexPartyGroups[g2];
+        h+='<tr><td class="muted" style="font-size:11.5px">'+esc(p2.group)+'</td>'
+         + '<td>'+esc(CASH_LABEL[p2.kind]||p2.kind)+'</td><td class="mono">'+esc(p2.branch)+'</td>'
+         + '<td class="num">'+p2.ledgers+'</td></tr>';}
+      h+='</tbody></table></div>';
+    }
+    h+='</div></section>';
+
+    h+='<section><h2>HOW THE ENTRY WAS BOOKED &mdash; NOT WHEN IT WAS PAID</h2><div class="body">'
+     + '<div class="note"><strong>This says nothing about whether you had paid.</strong> It is simply which '
+     + 'account the purchase was entered against. <em>Booked to supplier account</em> is the normal way a machine '
+     + 'is entered in Tally &mdash; it does not mean the machine was taken on credit, and the payment for it has '
+     + 'usually already gone out against a proforma. For the money, read the cash section above.</div>'
      + rollTable(j.byFunding.filter(function(x){return x.key!=='disposal';})
                  .map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend,disposal:0};}),
-                 'Funded by', j.additions)
-     + '<div class="note" style="margin-top:8px">Read off the voucher&rsquo;s own other legs. A loan leg wins over a '
-     + 'creditor leg, because a machine bought on term finance usually touches both and the loan is the thing worth '
-     + 'knowing.</div></div></section>';
+                 'Booked against', j.additions)
+     + '</div></section>';
 
     h+='<section><h2>WHAT WAS BOUGHT</h2><div class="body">'+rollTable(j.byAsset,'Asset',j.additions)+'</div></section>';
     // A group whose NAME says fixed assets but which sits under a liability is a payables
@@ -371,7 +439,13 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byAsset,'Asset')),'By asset');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byGroup,'Group')),'By group');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(
-      mk(j.byFunding.map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend};}),'Funded by')),'By funding');
+      mk(j.byFunding.map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend};}),'Booked against')),'Booked against');
+    var cshR=[['Date','Paid for','What kind','Branch','Voucher type','Voucher no','Cash out','Note from Tally']];
+    var cR=j.cashRows||[];
+    for(var c2=0;c2<cR.length;c2++){var q3=cR[c2];
+      cshR.push([q3.date,q3.paidFor,CASH_LABEL[q3.kind]||q3.kind,q3.branch,q3.type,q3.no,q3.amount,q3.narration]);}
+    cshR.push(['TOTAL','','','','','',j.cashOut||0,'']);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cshR),'Cash out');
     XLSX.writeFile(wb,'CDC_Capex_'+j.branch+'_'+j.from+'_'+j.to+'_'+ymd(new Date())+'.xlsx');
   }
 

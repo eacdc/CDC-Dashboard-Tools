@@ -2241,6 +2241,27 @@ const BLOCKS_ASSET = ['sundry creditors', 'sundry debtors', 'current liabilities
   'duties & taxes', 'provisions', 'branch / divisions', 'loans & advances',
   'liability for expenses'];
 const MENTIONS_ASSET = ['fixed assets', 'capital work', 'capital-work'];
+// The accounts capex money passes through on its way out: the creditor a machine is
+// booked against, and the advance paid before it ships. Recognised by the group Tally
+// files them in -- Kolkata's is literally `Sundry Creditor - Fixed Assets` -- or by an
+// advance account that names capital goods. Deliberately narrow: a general
+// "Advance to Suppliers" holding both paper and machinery cannot be split by any rule
+// here, and guessing would put raw-material money in a capex figure. What it DID match
+// is returned in `capexPartyGroups` and listed on the page, so it can be corrected.
+const CAPITAL_PARTY = ['fixed asset', 'capital goods', 'capital work', 'capital expenditure',
+  'capex', 'plant & machinery', 'plant and machinery'];
+function capexPartyKind(name, chain) {
+  const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
+  const hay = cs + '>' + String(name || '').toLowerCase();
+  if (!CAPITAL_PARTY.some((k) => hay.indexOf(k) >= 0)) return null;
+  if (hay.indexOf('advance') >= 0) return 'advance';
+  if (cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0) return 'capital_creditor';
+  return null;
+}
+const BANKISH = ['bank accounts', 'cash-in-hand', 'cash in hand', 'bank od', 'bank occ'];
+function isBankish(cs) { for (const b of BANKISH) if (String(cs || '').indexOf(b) >= 0) return true; return false; }
+
+
 function assetDepth(chain) {
   const segs = Array.isArray(chain) ? chain : String(chain || '').split('>');
   for (let i = 0; i < segs.length; i++) {
@@ -2265,7 +2286,8 @@ app.get('/api/capex', async (req, res) => {
     // Per branch from its OWN master, for the same reason the loan page does it: one
     // ledger name can be a fixed asset in one company and something else in the other.
     const assetOf = {};                      // br -> { ledger: group }
-    const chainOf = {};                      // br -> { ledger: lowercased chain }
+    const chainOf = {};                      // br -> { ledger: lowercased chain, for matching }
+    const dispOf = {};                       // br -> { ledger: chain as Tally spells it }
     const excluded = new Map();              // group chain -> how many ledgers it holds
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
@@ -2273,10 +2295,12 @@ app.get('/api/capex', async (req, res) => {
       const lub = E.buildLookups(xdb);
       const map = {};
       const chains = {};
+      const disp = {};
       for (const ln of Object.keys(xdb.ledgers || {})) {
         const chain = E.getChain(ln, xdb, lub);
         const cs = chain.join('>').toLowerCase();
         chains[ln] = cs;
+        disp[ln] = chain.join(' > ');
         // Fixed Assets, plus capital work in progress wherever it is filed. Depreciation
         // is an expense and sits under Indirect Expenses, so it never reaches here; an
         // accumulated-depreciation ledger filed UNDER Fixed Assets is excluded by name,
@@ -2298,7 +2322,33 @@ app.get('/api/capex', async (req, res) => {
       }
       assetOf[br] = map;
       chainOf[br] = chains;
+      dispOf[br] = disp;
     }
+    // CASH OUT ON CAPEX DOES NOT PASS THROUGH THE ASSET LEDGER. A machine is paid for
+    // long before it is capitalised -- an advance against a proforma, then the balance to
+    // the supplier -- and both of those touch a CREDITOR or an ADVANCE account, never the
+    // fixed asset. So the money is followed through those instead, and the two kinds are
+    // kept apart because an advance is cash gone on a machine that has not arrived.
+    const partyOf = {};                      // br -> { ledger: {kind, group} }
+    const partyGroups = new Map();
+    for (const br of branches) {
+      const chains = chainOf[br] || {};
+      const amap = assetOf[br] || {};
+      const pm = {};
+      for (const ln of Object.keys(chains)) {
+        if (amap[ln]) continue;              // the asset itself, already counted
+        const kind = capexPartyKind(ln, chains[ln]);
+        if (!kind) continue;
+        pm[ln] = { kind, group: (dispOf[br] || {})[ln] || chains[ln] };
+        const k = br + '|' + kind + '|' + pm[ln].group;
+        partyGroups.set(k, (partyGroups.get(k) || 0) + 1);
+      }
+      partyOf[br] = pm;
+    }
+    const capexPartyGroups = [...partyGroups.entries()]
+      .map(([k, n]) => { const p = k.split('|'); return { branch: p[0], kind: p[1], group: p.slice(2).join('|'), ledgers: n }; })
+      .sort((a, b) => b.ledgers - a.ledgers);
+
     const excludedGroups = [...excluded.entries()]
       .map(([k, n]) => ({ branch: k.split('|')[0], group: k.slice(k.indexOf('|') + 1), ledgers: n }))
       .sort((a, b) => b.ledgers - a.ledgers);
@@ -2329,15 +2379,65 @@ app.get('/api/capex', async (req, res) => {
       { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
     ];
     const rows = [];
-    let additions = 0, disposals = 0, movedTotal = 0;
+    const cashRows = [];
+    let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0;
     for (const v of vs) {
       const map = assetOf[v.branch] || {};
+      const pm = partyOf[v.branch] || {};
+      const chs = chainOf[v.branch] || {};
       const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
+
+      // ---- WHAT LEFT THE BANK BECAUSE OF CAPEX --------------------------------
+      // Followed on the PAYMENT voucher, not the capitalisation. A bank or cash ledger
+      // CREDITED is money going out (Tally +ve); the capex share of it is whatever that
+      // voucher DEBITED to an asset, to a machinery creditor, or to a capital advance.
+      // Taking the debits rather than the bank total is what makes a payment run that
+      // settles one machine and three paper bills contribute only the machine.
+      let bankOut = 0;
+      for (const k of Object.keys(all)) if (isBankish(chs[k])) bankOut += all[k];
+      if (Math.abs(bankOut) >= 1) {
+        let capexDr = 0; const legs = [];
+        for (const k of Object.keys(all)) {
+          const kind = map[k] ? 'asset' : (pm[k] && pm[k].kind);
+          if (!kind) continue;
+          const dr = -all[k];                     // Dr positive: money applied to capex
+          // SELLING AN ASSET IS NOT NEGATIVE CAPEX SPEND. Proceeds from scrapping old
+          // laptops came back here as cash out of -3,00,000, quietly netting a disposal
+          // into the spend figure -- the one thing this page refuses to do anywhere
+          // else. An asset leg counts only when it is DEBITED. A creditor or an advance
+          // counts both ways, because money genuinely coming BACK from a machinery
+          // supplier is a refund of capex cash and belongs in the figure.
+          if (kind === 'asset' && dr <= 0) continue;
+          capexDr += dr;
+          legs.push({ ledger: k, kind, amt: dr });
+        }
+        // Both sides must point the same way. Money out against a capex debit is a
+        // payment; money IN against a capex credit is a refund and is counted negative.
+        // Anything else (a receipt that happens to touch an asset) is not capex cash.
+        let attr = 0;
+        if (capexDr > 0 && bankOut > 0) attr = Math.min(capexDr, bankOut);
+        else if (capexDr < 0 && bankOut < 0) attr = Math.max(capexDr, bankOut);
+        if (Math.abs(attr) >= 1) {
+          legs.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
+          const lead = legs[0];
+          cashOut = Math.round((cashOut + attr) * 100) / 100;
+          cashRows.push({ date: v.date, branch: v.branch,
+            amount: Math.round(attr * 100) / 100,
+            paidFor: lead.ledger, kind: lead.kind,
+            alsoLegs: legs.length - 1,
+            no: v.no || '', type: v.type || '',
+            party: v.party || ((v.details || {}).partyName) || '',
+            narration: (((v.details || {}).narration) || '').slice(0, 300),
+            guid: v.guid || '' });
+        }
+      }
+
       const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
       if (!hits.length) continue;
-      // Work out the funding once per voucher, off every OTHER leg.
+      // How the ENTRY WAS BOOKED -- which says nothing about when the money moved. See
+      // FUND below.
       let funded = 'other';
-      const chains = chainOf[v.branch] || {};
+      const chains = chs;
       const others = Object.keys(all).filter((k) => !map[k]);
       outer:
       for (const f of FUND) {
@@ -2408,11 +2508,28 @@ app.get('/api/capex', async (req, res) => {
     const byFunding = roll((r) => r.funded, (r) => r.funded)
       .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
 
+    cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
+    const cashRoll = (keyOf, labelOf) => {
+      const m = new Map();
+      for (const r of cashRows) {
+        const k = keyOf(r);
+        const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
+        e.spend = Math.round((e.spend + r.amount) * 100) / 100;
+        e.count++;
+        m.set(k, e);
+      }
+      return [...m.values()];
+    };
+    const cashByMonth = cashRoll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
+      .sort((a, b) => (a.key < b.key ? -1 : 1));
+    const cashByKind = cashRoll((r) => r.kind, (r) => r.kind).sort((a, b) => b.spend - a.spend);
+
     res.json({ ok: true, branch, from, to, min,
       scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal,
+      cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups,
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
