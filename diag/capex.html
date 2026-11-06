@@ -60,6 +60,12 @@
   .tools select{padding:6px 8px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
     font-family:ui-monospace,monospace;max-width:320px}
   .tools .cnt{font-size:11.5px;color:#64748b;font-family:ui-monospace,monospace}
+  .tools .rng{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#475569;
+    border:1px solid #e2e8f0;border-radius:7px;padding:3px 7px;background:#f8fafc}
+  .tools .rng input{width:84px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;
+    font-size:11.5px;font-family:ui-monospace,monospace;min-width:0}
+  .tools .rng input.bad{border-color:#dc2626;background:#fef2f2}
+  .tools .rng .dash{color:#94a3b8}
   .tools button{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;
     font-size:11.5px;cursor:pointer;color:#475569}
   .tools button:hover{background:#f1f5f9}
@@ -86,7 +92,7 @@
 <main>
   <section><h2>WHAT PERIOD, WHICH COMPANY</h2><div class="body">
     <div class="row">
-      <label>branch
+      <label title="Both companies are fetched once; this narrows what is shown, with no reload">branch
         <select id="branch">
           <option value="all">Consolidated</option>
           <option value="kol">Kolkata</option>
@@ -99,7 +105,9 @@
       <button id="go">Load</button>
       <button id="xl" class="ghost" disabled>&#11015; Excel</button>
     </div>
-    <div class="note">Which ledgers count is decided by the group Tally itself put them in &mdash; anything under
+    <div class="note"><strong>Branch narrows what is shown without reloading</strong> &mdash; both companies
+      come down in one fetch, so switching is instant. Dates and the floor do need <em>Load</em>.
+      Which ledgers count is decided by the group Tally itself put them in &mdash; anything under
       <strong>Fixed Assets</strong>, plus <strong>capital work in progress</strong> wherever it is filed. Depreciation
       and repairs are expenses, not capex: writing an asset down is not buying one. An accumulated-depreciation ledger
       filed under the asset group is excluded by name for the same reason.</div>
@@ -116,7 +124,7 @@
     document.head.appendChild(s);
   }
   var $=function(id){return document.getElementById(id);};
-  var out=$('out'), err=$('err'), loaded=null;
+  var out=$('out'), err=$('err'), loaded=null, shown=null;
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -179,18 +187,82 @@
   }
   function hideTip(){ if(tip) tip.style.display='none'; }
 
+  // BRANCH IS A FILTER, NOT A QUERY. Both companies are fetched once and the selector
+  // narrows what is shown, so switching from Consolidated to Kolkata is instant instead
+  // of a round trip. The server's own branch filter is nothing more than
+  // `match.branch = br` over the same vouchers, and every figure on the page is a SUM
+  // over the rows -- so narrowing the rows here gives the same answer. That claim is
+  // checked rather than assumed: see sliceFor.
   function load(){
     err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
     $('go').disabled=true; $('xl').disabled=true;
-    var q='/api/capex?branch='+encodeURIComponent($('branch').value)
+    var q='/api/capex?branch=all'
          +'&from='+encodeURIComponent($('from').value.trim())
          +'&to='+encodeURIComponent($('to').value.trim())
          +'&min='+encodeURIComponent($('min').value.trim()||'0');
     fetch(q).then(function(r){return r.json();}).then(function(j){
       $('go').disabled=false;
       if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
-      loaded=j; $('xl').disabled=false; render(j);
+      loaded=j; $('xl').disabled=false; render(sliceFor(j,$('branch').value));
     }).catch(function(e){ $('go').disabled=false; out.innerHTML=''; err.textContent=e.message; });
+  }
+
+  // Narrow a loaded payload to one company, recomputing every rollup from the rows that
+  // remain. For 'all' nothing is dropped, and the recomputed totals are compared against
+  // the server's own -- if these two ever disagree the page says so on screen rather than
+  // quietly showing a second opinion. That check is the whole licence for summing here.
+  function sliceFor(j,br){
+    if(!j) return j;
+    var keep=function(r){return br==='all'||r.branch===br;};
+    var rows=(j.rows||[]).filter(keep), cash=(j.cashRows||[]).filter(keep);
+    var sum=function(a,f){var t=0;for(var i=0;i<a.length;i++)t+=(Number(a[i][f])||0);return Math.round(t*100)/100;};
+    var roll=function(a,keyOf,labOf,amtOf,cntOf){
+      var m={},o=[];
+      for(var i=0;i<a.length;i++){var k=keyOf(a[i]);
+        if(!m[k]){m[k]={key:k,label:labOf(a[i]),spend:0,disposal:0,count:0};o.push(m[k]);}
+        m[k].spend=Math.round((m[k].spend+(amtOf?amtOf(a[i]):a[i].spend))*100)/100;
+        m[k].disposal=Math.round((m[k].disposal+(a[i].disposal||0))*100)/100;
+        if(cntOf?cntOf(a[i]):a[i].spend) m[k].count++;}
+      return o;};
+    var byMonthLab=function(r){var k=r.date.slice(0,6);
+      return k.slice(4)+'/'+k.slice(2,4);};
+    var out={};
+    for(var k in j) out[k]=j[k];
+    out.branch=br;
+    out.rows=rows; out.cashRows=cash;
+    out.additions=sum(rows,'spend'); out.disposals=sum(rows,'disposal');
+    out.net=Math.round((out.additions-out.disposals)*100)/100;
+    out.moved=sum(rows,'moved');
+    out.cashOut=sum(cash,'amount');
+    out.byGroup=roll(rows,function(r){return r.group;},function(r){return r.group;})
+      .sort(function(a,b){return b.spend-a.spend;});
+    out.byAsset=roll(rows,function(r){return r.branch+'|'+r.asset;},function(r){return r.asset;})
+      .sort(function(a,b){return b.spend-a.spend;});
+    out.byFunding=roll(rows,function(r){return r.funded;},function(r){return r.funded;})
+      .filter(function(x){return x.key!=='moved';}).sort(function(a,b){return b.spend-a.spend;});
+    out.byMonth=roll(rows,function(r){return r.date.slice(0,6);},byMonthLab)
+      .sort(function(a,b){return a.key<b.key?-1:1;});
+    out.cashByMonth=roll(cash,function(r){return r.date.slice(0,6);},byMonthLab,
+        function(r){return r.amount;},function(){return true;})
+      .sort(function(a,b){return a.key<b.key?-1:1;});
+    out.cashByKind=roll(cash,function(r){return r.kind;},function(r){return r.kind;},
+        function(r){return r.amount;},function(){return true;})
+      .sort(function(a,b){return b.spend-a.spend;});
+    var brOnly=function(a){return (a||[]).filter(function(x){return br==='all'||x.branch===br;});};
+    out.excludedGroups=brOnly(j.excludedGroups);
+    out.capexPartyGroups=brOnly(j.capexPartyGroups);
+    out.advanceGroups=brOnly(j.advanceGroups);
+    out.sliceWarn=null;
+    if(br==='all'){
+      var bad=[];
+      if(Math.abs(out.additions-(j.additions||0))>1) bad.push('assets bought');
+      if(Math.abs(out.disposals-(j.disposals||0))>1) bad.push('assets sold');
+      if(Math.abs(out.cashOut-(j.cashOut||0))>1) bad.push('cash out');
+      if(Math.abs(out.moved-(j.moved||0))>1) bad.push('moved between accounts');
+      if(bad.length) out.sliceWarn='The totals computed in this browser disagree with the'
+        + ' server for: '+bad.join(', ')+'. The server is the one to trust -- report this.';
+    }
+    return out;
   }
 
   // One series (spend per month), so no legend box: the heading names what is plotted.
@@ -226,7 +298,22 @@
   // TOTAL follows the filter -- a total that still showed the unfiltered figure would
   // be read as the answer to the filtered question.
   var TSPEC={}, TST={};
-  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{}}); }
+  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{},rng:{}}); }
+  // A range box takes what a person would actually type for these amounts. Nobody wants
+  // to count the zeroes in 15000000 to ask for "over 1.5 crore", and getting one wrong
+  // silently filters out the thing they were looking for.
+  function parseAmt(v){
+    var t=String(v==null?'':v).toLowerCase().replace(/[\s,\u20b9]/g,'');
+    if(!t) return null;
+    var m=t.match(/^(-?[0-9]*\.?[0-9]+)(cr|crore|crores|l|lac|lacs|lakh|lakhs|k)?$/);
+    if(!m) return null;
+    var n=parseFloat(m[1]); if(isNaN(n)) return null;
+    var u=m[2]||'';
+    if(u==='cr'||u==='crore'||u==='crores') n*=1e7;
+    else if(u==='l'||u==='lac'||u==='lacs'||u==='lakh'||u==='lakhs') n*=1e5;
+    else if(u==='k') n*=1e3;
+    return n;
+  }
   function cmp(a,b){
     if(typeof a==='number'&&typeof b==='number') return a-b;
     return String(a==null?'':a).localeCompare(String(b==null?'':b));
@@ -237,6 +324,23 @@
     if(q) rows=rows.filter(function(r){return sp.search(r).toLowerCase().indexOf(q)>=0;});
     (sp.filters||[]).forEach(function(f){
       var v=st.sel[f.key]; if(v) rows=rows.filter(function(r){return f.match(r,v);});
+    });
+    (sp.ranges||[]).forEach(function(g){
+      var r0=st.rng[g.key]||{}, lo=parseAmt(r0.min), hi=parseAmt(r0.max);
+      if(lo===null&&hi===null) return;
+      var col=null;
+      for(var i=0;i<sp.cols.length;i++) if(sp.cols[i].key===g.key) col=sp.cols[i];
+      var get=g.val||(col&&col.val)||function(){return 0;};
+      rows=rows.filter(function(r){
+        var v=Number(get(r))||0;
+        // "Bought for under 20 L" means an amount under 20 L, not the absence of one.
+        // Without this, asking for small purchases returned every disposal row too,
+        // because nothing bought is nought and nought is under everything.
+        if(g.skipZero&&v===0) return false;
+        if(lo!==null&&v<lo) return false;
+        if(hi!==null&&v>hi) return false;
+        return true;
+      });
     });
     if(st.sort){
       var col=null;
@@ -297,6 +401,15 @@
       });
       h+='</select>';
     });
+    (spec.ranges||[]).forEach(function(g){
+      var r0=st.rng[g.key]||{};
+      h+='<span class="rng">'+esc(g.label)+' '
+       + '<input type="text" data-tbl="'+id+'" data-act="rmin" data-key="'+esc(g.key)+'" '
+       +   'placeholder="min" value="'+esc(r0.min||'')+'">'
+       + '<span class="dash">&ndash;</span>'
+       + '<input type="text" data-tbl="'+id+'" data-act="rmax" data-key="'+esc(g.key)+'" '
+       +   'placeholder="max" value="'+esc(r0.max||'')+'"></span>';
+    });
     h+='<button data-tbl="'+id+'" data-act="clear">clear</button>'
      + '<span class="cnt" id="tc_'+id+'">'+esc(tCount(id))+'</span></div>'
      + '<div id="tb_'+id+'">'+tBody(id)+'</div>';
@@ -330,7 +443,13 @@
     // A new window is a new question: carrying the last one's filters forward would show
     // an empty table for a group that is not in this period, with no sign of why.
     TST={}; TSPEC={};
+    shown=j;
     var h='';
+    if(j.sliceWarn){
+      h+='<section><h2>CHECK FAILED</h2><div class="body"><div class="note" '
+       + 'style="border-color:#fecaca;background:#fef2f2;color:#991b1b">'+esc(j.sliceWarn)
+       + '</div></div></section>';
+    }
     if(!j.rows.length){
       h+='<section><h2>NOTHING TO SHOW</h2><div class="body"><div class="note">'
        + esc(j.note||'No fixed-asset purchase in this window.')+'</div></div></section>';
@@ -392,6 +511,8 @@
              .map(function(v){return {v:v,label:v.toUpperCase()};}),
            match:function(r,v){return r.branch===v;}}
         ],
+        ranges:[{key:'amount',label:'cash out',skipZero:true},{key:'date',label:'date',
+                 val:function(r){return Number(r.date)||0;}}],
         cols:[
           {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
            html:function(r){return esc(fmt8(r.date));}},
@@ -518,6 +639,8 @@
            {key:'side',all:'bought and sold',options:[{v:'buy',label:'bought only'},{v:'sell',label:'sold only'}],
             match:function(r,v){return v==='buy'?r.spend>0:r.disposal>0;}}
          ],
+         ranges:[{key:'spend',label:'bought for',skipZero:true},{key:'date',label:'date',
+                  val:function(r){return Number(r.date)||0;}}],
          cols:[
            {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
             html:function(r){return esc(fmt8(r.date));}},
@@ -575,6 +698,7 @@
                .map(function(v){return {v:v,label:v.toUpperCase()};}),
              match:function(r,v){return r.branch===v;}}
           ],
+          ranges:[{key:'moved',label:'amount',skipZero:true,val:function(r){return r.moved;}}],
           cols:[
             {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
              html:function(r){return esc(fmt8(r.date));}},
@@ -618,8 +742,8 @@
   }
 
   function excel(){
-    if(!loaded||!window.XLSX) return;
-    var j=loaded, wb=XLSX.utils.book_new();
+    if(!shown||!window.XLSX) return;
+    var j=shown, wb=XLSX.utils.book_new();     // what is on screen, not the whole fetch
     var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from','Funded by',
                'Bought for','Sold off','Moved between asset accounts','Note from Tally']];
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
@@ -656,18 +780,25 @@
     var bt=ev.target.closest&&ev.target.closest('button[data-act="clear"]');
     if(bt){
       var bid=bt.getAttribute('data-tbl'), bs=tState(bid);
-      bs.q=''; bs.sel={};
+      bs.q=''; bs.sel={}; bs.rng={};
       var inp=document.querySelector('input[data-tbl="'+bid+'"][data-act="q"]');
       if(inp) inp.value='';
       var sels=document.querySelectorAll('select[data-tbl="'+bid+'"]');
       for(var i=0;i<sels.length;i++) sels[i].value='';
+      var rgs=document.querySelectorAll('input[data-tbl="'+bid+'"][data-act^="r"]');
+      for(var g=0;g<rgs.length;g++) rgs[g].value='';
       tRefresh(bid);
     }
   });
   out.addEventListener('input',function(ev){
-    var t=ev.target;
-    if(t.getAttribute&&t.getAttribute('data-act')==='q'){
+    var t=ev.target, act=t.getAttribute&&t.getAttribute('data-act');
+    if(act==='q'){
       tState(t.getAttribute('data-tbl')).q=t.value; tRefresh(t.getAttribute('data-tbl'));
+    } else if(act==='rmin'||act==='rmax'){
+      var id=t.getAttribute('data-tbl'), k=t.getAttribute('data-key'), st=tState(id);
+      (st.rng[k]=st.rng[k]||{})[act==='rmin'?'min':'max']=t.value;
+      t.classList.toggle('bad', t.value!=='' && parseAmt(t.value)===null);
+      tRefresh(id);
     }
   });
   out.addEventListener('change',function(ev){
@@ -678,6 +809,9 @@
     }
   });
 
+  $('branch').addEventListener('change',function(){
+    if(loaded) render(sliceFor(loaded,$('branch').value));
+  });
   $('go').addEventListener('click',load);
   $('xl').addEventListener('click',excel);
   load();

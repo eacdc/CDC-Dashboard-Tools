@@ -449,6 +449,26 @@ per-render binding stacks a handler per load and dies the moment a sort rebuilds
 under it -- which is why the loan page's expand toggle moved out of `render` too. `render`
 clears the filter state, since a new window is a new question.
 
+**A range box takes what a person would type.** `parseAmt` accepts `1.5cr`, `25L`, `50k`
+and plain rupees, because nobody counts the zeroes in 15000000 to ask for "over 1.5 crore"
+and a miscounted one silently filters out the thing they were looking for; an unparseable
+box turns red rather than filtering on nothing. An amount range sets `skipZero`, because
+"bought for under 20 L" means an amount under 20 L, not the absence of one -- without it,
+asking for small purchases returned every disposal row too, nought being under everything.
+A DATE range does not skip zero and is filtered on `Number(r.date)`.
+
+**On the capex page BRANCH is a filter, not a query.** Both companies come down in one
+fetch (`branch=all`) and `sliceFor()` narrows what is shown, so switching is instant
+instead of a round trip. That is only legitimate because the server's branch filter is
+nothing more than `match.branch = br` over the same vouchers and every figure on the page
+is a SUM over the rows. The licence for summing in the browser is that it is CHECKED: for
+`all`, `sliceFor` recomputes the totals and compares them with the server's own, and a
+disagreement renders a red CHECK FAILED section instead of quietly showing a second
+opinion. The workbook exports what is on screen (`shown`), not the whole fetch. The loan
+page is NOT sliced this way -- its openings, `drawnFacility` and `sweepNet` come out of
+`loanMovement.js` and are not row sums, so its top selector still reloads; its account
+table's own branch dropdown needs no reload.
+
 **Charts are inline SVG, light-only, and capped at their natural width.** No chart
 library: a CDN this office cannot reach is how a page ends up blank. Categorical hues are
 the dataviz reference palette's first five in its FIXED order (colour follows the
