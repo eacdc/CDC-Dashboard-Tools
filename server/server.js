@@ -2255,6 +2255,23 @@ const CAPITAL_KW = ['fixed asset', 'capital goods', 'capital work', 'capital exp
   'capital advance', 'capex', 'machinery', 'machinary', 'machine', 'equipment',
   'plant &', 'plant and'];
 function hasCapitalWord(hay) { for (const k of CAPITAL_KW) if (hay.indexOf(k) >= 0) return true; return false; }
+// A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME, and a company that sells what goes
+// INTO machines usually does too. `Pinghu Bindex Machinery Co.,Ltd.` is a binding-machine
+// maker filed under ordinary Sundry Creditors, so refusing to read creditor names left it
+// -- and every rupee paid to it -- off the page entirely. Reading names is therefore
+// allowed, with the consumables and services that would otherwise ride in on the same
+// words refused by hand. Every name matched this way is LISTED on the page as having been
+// recognised by its name, because this is the one rule here that guesses from English.
+const NOT_CAPITAL_NAME = ['spare', 'parts', ' oil', 'lubric', 'grease', 'repair', 'service',
+  'hire', 'rental', ' rent', 'consumable', 'chemical', 'insurance', 'freight', 'transport',
+  'clearing', 'courier', 'erection charges', 'amc'];
+function looksConsumable(nm) {
+  for (const k of NOT_CAPITAL_NAME) if (nm.indexOf(k) >= 0) return true;
+  return false;
+}
+// Returns { kind, via } or null. `via` is how it was recognised, and is shown on the page:
+// a group kept for machinery is a fact about the books, a name is an inference about
+// English, and the reader is entitled to know which one a figure rests on.
 function capexPartyKind(name, chain) {
   const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
   const nm = String(name || '').toLowerCase();
@@ -2264,13 +2281,24 @@ function capexPartyKind(name, chain) {
   // the exact words `plant & machinery` missed `Advance for Machinery` entirely, and with
   // it every rupee paid against a proforma -- which on these books is nearly all of the
   // capex cash, since the machine is paid for long before any creditor is touched.
-  if ((cs + '>' + nm).indexOf('advance') >= 0 && hasCapitalWord(cs + '>' + nm)) return 'advance';
-  // A CREDITOR is recognised from the GROUP only. The ledger name here is a company's
-  // name, and matching on it would make "Machine Oil Suppliers" under ordinary Sundry
-  // Creditors a capex account; the signal is a group kept for machinery suppliers.
-  if ((cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0)
-    && hasCapitalWord(cs)) return 'capital_creditor';
+  if ((cs + '>' + nm).indexOf('advance') >= 0 && hasCapitalWord(cs + '>' + nm)) {
+    return { kind: 'advance', via: hasCapitalWord(cs) ? 'group' : 'name' };
+  }
+  if (cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0) {
+    if (hasCapitalWord(cs)) return { kind: 'capital_creditor', via: 'group' };
+    if (hasCapitalWord(nm) && !looksConsumable(nm)) return { kind: 'capital_creditor', via: 'name' };
+  }
   return null;
+}
+// A creditor whose name says machinery but which is refused as a consumable or a service.
+// Named on the page rather than dropped: the refusal list is a judgement about words, and
+// a wrong one would otherwise take a real machine supplier off the page in silence.
+function capexNameNearMiss(name, chain) {
+  if (capexPartyKind(name, chain)) return false;
+  const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
+  if (cs.indexOf('sundry creditors') < 0 && cs.indexOf('current liabilities') < 0) return false;
+  const nm = String(name || '').toLowerCase();
+  return hasCapitalWord(nm) && looksConsumable(nm);
 }
 const BANKISH = ['bank accounts', 'cash-in-hand', 'cash in hand', 'bank od', 'bank occ'];
 function isBankish(cs) { for (const b of BANKISH) if (String(cs || '').indexOf(b) >= 0) return true; return false; }
@@ -2346,16 +2374,25 @@ app.get('/api/capex', async (req, res) => {
     const partyOf = {};                      // br -> { ledger: {kind, group} }
     const partyGroups = new Map();
     const advGroups = new Map();             // every group saying "advance", counted or not
+    const nameNearMiss = [];                 // reads like machinery, refused as a consumable
     for (const br of branches) {
       const chains = chainOf[br] || {};
       const amap = assetOf[br] || {};
       const pm = {};
       for (const ln of Object.keys(chains)) {
         if (amap[ln]) continue;              // the asset itself, already counted
-        const kind = capexPartyKind(ln, chains[ln]);
-        if (!kind) continue;
-        pm[ln] = { kind, group: (dispOf[br] || {})[ln] || chains[ln] };
-        const k = br + '|' + kind + '|' + pm[ln].group;
+        if (capexNameNearMiss(ln, chains[ln])) {
+          nameNearMiss.push({ branch: br, ledger: ln, group: (dispOf[br] || {})[ln] || chains[ln] });
+          continue;
+        }
+        const r = capexPartyKind(ln, chains[ln]);
+        if (!r) continue;
+        pm[ln] = { kind: r.kind, via: r.via, group: (dispOf[br] || {})[ln] || chains[ln] };
+        // A GROUP kept for machinery is one row however many ledgers are in it. A NAME is
+        // a guess about one company, so it is listed as that company rather than hidden
+        // inside a count of "Sundry Creditors".
+        const label = r.via === 'name' ? ln : pm[ln].group;
+        const k = br + '|' + r.kind + '|' + r.via + '|' + label;
         partyGroups.set(k, (partyGroups.get(k) || 0) + 1);
       }
       partyOf[br] = pm;
@@ -2370,7 +2407,8 @@ app.get('/api/capex', async (req, res) => {
       }
     }
     const capexPartyGroups = [...partyGroups.entries()]
-      .map(([k, n]) => { const p = k.split('|'); return { branch: p[0], kind: p[1], group: p.slice(2).join('|'), ledgers: n }; })
+      .map(([k, n]) => { const p = k.split('|');
+        return { branch: p[0], kind: p[1], via: p[2], group: p.slice(3).join('|'), ledgers: n }; })
       .sort((a, b) => b.ledgers - a.ledgers);
     const advanceGroups = [...advGroups.values()].sort((a, b) => b.ledgers - a.ledgers);
 
@@ -2415,7 +2453,18 @@ app.get('/api/capex', async (req, res) => {
     // vocabulary. Collected here, used by the cash pass below.
     const seenSupplier = {};                 // 'br|ledger' -> group, learned from purchases
     const capexBill = {};                    // 'br|ledger|ref' -> true, the bills assets were bought on
-    for (const v of vs) {
+    // A MACHINE BOUGHT IN MARCH AND PAID IN APRIL taught this pass nothing, because it
+    // only ever read the window on screen. The purchase is what identifies the supplier
+    // and names the bill, so it is looked for further back than the question asked --
+    // three years, which covers a machine on instalments without scanning the decade.
+    const lookFrom = String(Math.max(1900, Number(from.slice(0, 4)) - 3)) + from.slice(4);
+    const earlier = lookFrom < from
+      ? await db.collection('vouchers')
+        .find({ date: { $gte: lookFrom, $lt: from }, ...(branch !== 'all' ? { branch } : {}), ...LIVE_ONLY })
+        .project({ _id: 0, branch: 1, ledgers: 1, party_ledgers: 1, bills: 1 })
+        .toArray()
+      : [];
+    for (const v of earlier.concat(vs)) {
       const map = assetOf[v.branch] || {};
       const chs = chainOf[v.branch] || {};
       const dsp = dispOf[v.branch] || {};
@@ -2599,7 +2648,7 @@ app.get('/api/capex', async (req, res) => {
       const p = k.split('|');
       const g = p.slice(2).join('|');
       if (capexPartyGroups.some((x) => x.branch === p[0] && x.group === g)) continue;
-      capexPartyGroups.push({ branch: p[0], kind: 'supplier', group: g, ledgers: n });
+      capexPartyGroups.push({ branch: p[0], kind: 'supplier', via: 'sold', group: g, ledgers: n });
     }
     capexPartyGroups.sort((a, b) => b.ledgers - a.ledgers);
 
@@ -2625,7 +2674,7 @@ app.get('/api/capex', async (req, res) => {
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal,
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
-      unmatchedSupplier,
+      unmatchedSupplier, nameNearMiss,
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
