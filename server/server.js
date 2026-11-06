@@ -2114,12 +2114,28 @@ app.get('/api/loans', async (req, res) => {
         notes.push(`${br}: Tally's opening balances have not been pulled (or the day they stand on is ambiguous), so the opening shown is the movement held before ${from}, not a balance. Run the pipeline once and ask again.`);
       }
     }
+    // THE OPENING MUST NOT PREDATE THE VOUCHERS. A balance here is Tally's opening on
+    // its own day plus every posting since, so if the oldest voucher we hold is NEWER
+    // than that day, the postings in between are in neither half and the balance is
+    // wrong by exactly whatever happened in them. On a sweeping OD, where hundreds of
+    // crores move each way per year, that is the difference between a usable figure and
+    // a meaningless one -- and it is silent, because every row still adds up.
+    // The same check the party-balance reading makes; it belongs here more, not less.
+    const firstOf = {};
+    for (const br of branches) {
+      const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+      firstOf[br] = f.length ? f[0].date : null;
+      const asOn = openings[br].asOn;
+      if (asOn && firstOf[br] && firstOf[br] > asOn) {
+        notes.push(`${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. Everything posted in between is in neither half, so every balance on this page is wrong by whatever happened in that gap -- and on an OD or CC account that is the whole difference, because a sweeping account is paid down by postings we do not hold. Back-fill ${br} from ${asOn} (pipeline: -From ${asOn} -To ${firstOf[br]}) and ask again.`);
+      }
+    }
     if (nearMisses.length) {
       notes.push(`${nearMisses.length} ledger(s) are NAMED like a borrowing but are not under a loan group, so they are NOT counted: ${nearMisses.slice(0, 8).map((x) => `"${x.ledger}" (${x.group})`).join(', ')}. If one of those is a real loan, move it under a loan group in Tally or tell us.`);
     }
     res.json({ ok: true, branch, scale: 'cr-positive',
       scaleNote: 'A loan outstanding is POSITIVE. drawn = borrowed (Cr), repaid = paid back (Dr). closing = opening + drawn - repaid.',
-      ...out, nearMisses, notes });
+      ...out, nearMisses, notes, firstVoucher: firstOf });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
