@@ -427,6 +427,23 @@ filed in the ordinary creditors group is still counted. The page says which way 
 was recognised, and `advanceGroups` lists every group with "advance" in it WITH a counted
 flag, so an advance account the rule still misses is visible instead of silently absent.
 
+**A PARTY IS NOT A CATEGORY, so an evidence-recognised supplier counts only on the BILL the
+asset was bought on.** `Emirates Logistics` is a freight forwarder; its clearing charges on
+one import were capitalised into a machine, which is correct accounting -- and made it a
+"machinery supplier", after which its every routine invoice counted as capex cash: ten
+ordinary payments, 1.76 Cr, none of it capital. A bill reference is exact where a party is
+not. Pass 1 therefore also records the refs raised on asset vouchers (`capexBill`, keyed
+`br|ledger|ref`), and in pass 2 a `supplier` leg contributes only what this payment
+ALLOCATES against one of those refs -- a payment naming no such bill contributes nothing.
+This applies ONLY to `supplier`: a group kept for machinery (`capital_creditor`, `advance`)
+says every rupee through it is capital, so those still count in full. What is dropped is
+totalled as `unmatchedSupplier` and stated on the page, because money deliberately left out
+of a figure has to be visible. Requires `bills` in the voucher projection.
+
+**The page states its own rules** in a HOW THIS PAGE DECIDES section. There are now five and
+they are not guessable from the numbers -- the question "what is the logic behind capex
+classification?" is the sign that they belonged on the page rather than only in here.
+
 **`byFunding` describes how the entry was BOOKED, not when money moved.** "Booked to supplier
 account" is simply the ledger the purchase was entered against -- it does NOT mean the
 machine was taken on credit, and the payment has usually gone out earlier against a proforma.

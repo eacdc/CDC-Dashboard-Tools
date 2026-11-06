@@ -91,6 +91,9 @@ const V = (branch, date, pl, ld, extra) => {
       // A machinery supplier filed in the ORDINARY creditors group -- nothing in its
       // name or its group says machine, and only the purchase itself proves what it is.
       'Bobst India Pvt Ltd': 'Sundry Creditors',
+      // A FREIGHT FORWARDER. Its charges on one import were capitalised into a machine,
+      // which is correct accounting -- and is NOT a reason to call its every invoice capex.
+      'Emirates Logistics India Private Limited': 'Sundry Creditors',
       'Advance to Suppliers': 'Loans & Advances',
       'Digital Book Edge Printer': 'Plant & Machinery',
       // The Ahmedabad factory: accumulated in WIP while it was built, then capitalised.
@@ -179,9 +182,35 @@ const V = (branch, date, pl, ld, extra) => {
   // the name nor the group says machinery; only the purchase proves it.
   vs.push(V('kol', '20260610', { 'Bobst India Pvt Ltd': 4000000 },
     { 'Factory Building': -4000000 },
-    { type: 'Purchase - Fixed Assets', party: 'Bobst India Pvt Ltd', narration: 'folder gluer' }));
+    { type: 'Purchase - Fixed Assets', party: 'Bobst India Pvt Ltd', narration: 'folder gluer',
+      bills: [{ ledger: 'Bobst India Pvt Ltd', ref: 'BOB/FG/88', type: 'New Ref', amount: 4000000 }] }));
   vs.push(V('kol', '20260710', { 'HDFC Current A/c': 4000000, 'Bobst India Pvt Ltd': -4000000 }, {},
-    { type: 'Bank Payments', narration: 'paid Bobst' }));
+    { type: 'Bank Payments', narration: 'paid Bobst',
+      bills: [{ ledger: 'Bobst India Pvt Ltd', ref: 'BOB/FG/88', type: 'Agst Ref', amount: -4000000 }] }));
+
+  // THE FREIGHT FORWARDER. One of its bills was capitalised into the gluer's cost; the
+  // rest are ordinary import freight on paper. Before the bill rule, the first voucher
+  // made it a "machinery supplier" and every payment below counted as capex -- ten
+  // ordinary payments, 1.76 Cr of it, none of it capital.
+  vs.push(V('kol', '20260612', { 'Emirates Logistics India Private Limited': 150000 },
+    { 'Factory Building': -150000 },
+    { type: 'Purchase - Fixed Assets', party: 'Emirates Logistics India Private Limited',
+      narration: 'clearing on the gluer',
+      bills: [{ ledger: 'Emirates Logistics India Private Limited', ref: 'EMI/CAP/7',
+                type: 'New Ref', amount: 150000 }] }));
+  vs.push(V('kol', '20260620', { 'HDFC Current A/c': 150000,
+      'Emirates Logistics India Private Limited': -150000 }, {},
+    { type: 'Payment', narration: 'paid the clearing bill on the gluer',
+      bills: [{ ledger: 'Emirates Logistics India Private Limited', ref: 'EMI/CAP/7',
+                type: 'Agst Ref', amount: -150000 }] }));
+  vs.push(V('kol', '20260722', { 'HDFC Current A/c': 4200183,
+      'Emirates Logistics India Private Limited': -4200183 }, {},
+    { type: 'Payment', narration: 'Ref Bill No.Mention In Voucher',
+      bills: [{ ledger: 'Emirates Logistics India Private Limited', ref: 'EMI/PAPER/311',
+                type: 'Agst Ref', amount: -4200183 }] }));
+  vs.push(V('kol', '20260804', { 'HDFC Current A/c': 2915864,
+      'Emirates Logistics India Private Limited': -2915864 }, {},
+    { type: 'Payment', narration: 'Ref Bill No.Mention In Voucher' }));
 
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
@@ -211,10 +240,10 @@ const V = (branch, date, pl, ld, extra) => {
     'and accumulated depreciation filed UNDER the asset group is excluded by name');
   assert(!j.rows.some((r) => r.asset === 'Paper Purchase'), 'a raw-material purchase is not capex');
 
-  assert(near(j.additions, 60132900),
+  assert(near(j.additions, 60282900),
     'additions are the sum of what was capitalised: 5L + 5 Cr + 20L + 15L + the 21.33L printer'
-    + ' + the 40L folder gluer (got ' + j.additions + ')');
-  assert(near(j.disposals, 300000) && near(j.net, 59832900),
+    + ' + the 40L gluer + the 1.5L clearing capitalised into it (got ' + j.additions + ')');
+  assert(near(j.disposals, 300000) && near(j.net, 59982900),
     'a disposal is reported APART and never netted into spend -- a year that bought 2 Cr and sold 1 Cr'
     + ' did not spend 1 Cr (got disposals ' + j.disposals + ', net ' + j.net + ')');
   assert(j.rows.every((r) => r.spend < 7000000 || r.asset === 'Heidelberg CD102 Press'),
@@ -240,7 +269,7 @@ const V = (branch, date, pl, ld, extra) => {
   // leg, capitalising the Ahmedabad factory was a 7 Cr "disposal" of machines nobody sold
   // AND 7 Cr of assets bought -- the building and everything in it counted twice, once as
   // the WIP leaving and once as the building arriving.
-  assert(near(j.additions, 60132900) && near(j.disposals, 300000),
+  assert(near(j.additions, 60282900) && near(j.disposals, 300000),
     'capitalising work in progress adds nothing to what was bought and nothing to what was'
     + ' sold (got additions ' + j.additions + ', disposals ' + j.disposals + ')');
   assert(near(j.moved, 140000000),
@@ -277,6 +306,27 @@ const V = (branch, date, pl, ld, extra) => {
   assert((j.advanceGroups || []).some((x) => /Advance for Machinery/.test(x.group) && x.counted),
     'and one that is counted is marked as such');
 
+  // A PARTY IS NOT A CATEGORY. A freight forwarder whose charges on one import were
+  // capitalised into a machine is not thereby a machinery supplier, and its ordinary
+  // invoices are not capex. The bill reference is exact where the party is not.
+  const emi = (j.cashRows || []).filter((r) => /Emirates/.test(r.paidFor));
+  assert(emi.length === 1 && emi[0].amount === 150000,
+    'only the payment settling the bill the asset was actually bought on counts -- not the'
+    + ' freight forwarder\'s other invoices (got ' + emi.length + ' row(s) totalling '
+    + emi.reduce((t, r) => t + r.amount, 0) + ')');
+  assert(!(j.cashRows || []).some((r) => r.amount === 4200183 || r.amount === 2915864),
+    'an ordinary freight payment against its own bill is NOT capex cash, and neither is one'
+    + ' that names no bill at all');
+  assert(j.unmatchedSupplier >= 4200183 + 2915864 - 1,
+    'what was paid to such a party against other bills is TOTALLED, so money deliberately'
+    + ' left out of the figure is visible rather than silently dropped (got '
+    + j.unmatchedSupplier + ')');
+  // And the rule must not throw out the case it was built for.
+  const bob2 = (j.cashRows || []).find((r) => /Bobst/.test(r.paidFor));
+  assert(bob2 && bob2.amount === 4000000,
+    'a supplier that really did sell us a machine is still counted, because the payment'
+    + ' settles the very bill the machine was bought on');
+
   // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
   // that matters for a cash-flow view.
   const cash = j.cashRows || [];
@@ -293,7 +343,7 @@ const V = (branch, date, pl, ld, extra) => {
   assert(direct && direct.amount === 500000 && direct.kind === 'asset',
     'and an asset paid for straight out of the bank is cash out on the day it is paid');
   assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000
-      + 28200000 + 6926000 + 4000000),
+      + 28200000 + 6926000 + 4000000 + 150000),
     'the total is every one of those and nothing else -- no capitalisation journal, no'
     + ' supplier bill that has not been paid, and no disposal netted off (got ' + j.cashOut + ')');
   assert(!cash.some((r) => r.amount < 0),
@@ -319,7 +369,7 @@ const V = (branch, date, pl, ld, extra) => {
   assert(bld && bld.funded === 'credit', 'and one taken on supplier credit is marked credit');
   const fundMap = {};
   for (const f of j.byFunding) fundMap[f.key] = f.spend;
-  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 8132900),
+  assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 8282900),
     'and the booking split totals back: 5 Cr against a loan leg, 20L against a bank leg, 20L +'
     + ' the printer against a supplier account (got ' + JSON.stringify(fundMap) + ')');
 
@@ -343,9 +393,9 @@ const V = (branch, date, pl, ld, extra) => {
   // The narration lives at details.narration. Reading a top-level `narration` returned
   // undefined for every voucher ever stored, so the column shipped blank on every row.
   const bought = j.rows.filter((r) => r.spend > 0 || r.disposal > 0);
-  assert(bought.filter((r) => r.narration).length === 5,
+  assert(bought.filter((r) => r.narration).length === 6,
     'the narration is read from where the extractor puts it (details.narration), not from a'
-    + ' top-level field no voucher has -- got ' + bought.filter((r) => r.narration).length + ' of 5');
+    + ' top-level field no voucher has -- got ' + bought.filter((r) => r.narration).length + ' of 6');
   const cwip = j.rows.find((r) => r.asset === 'New Line CWIP');
   assert(cwip && cwip.narration === '',
     'and an entry Tally carries no narration for comes back empty rather than undefined');

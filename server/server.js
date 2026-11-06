@@ -2392,7 +2392,7 @@ app.get('/api/capex', async (req, res) => {
       // has and every row comes back blank -- which is exactly how it shipped.
       .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
         'details.narration': 1, 'details.reference': 1, 'details.partyName': 1,
-        ledgers: 1, party_ledgers: 1 })
+        ledgers: 1, party_ledgers: 1, bills: 1 })
       .toArray();
 
     // How the voucher paid for it, from its own other legs. Named rather than guessed:
@@ -2405,7 +2405,7 @@ app.get('/api/capex', async (req, res) => {
     ];
     const rows = [];
     const cashRows = [];
-    let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0;
+    let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0, unmatchedSupplier = 0;
     // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
     // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
     // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
@@ -2414,6 +2414,7 @@ app.get('/api/capex', async (req, res) => {
     // DEBITS a fixed asset is taken as a supplier of that asset -- evidence rather than
     // vocabulary. Collected here, used by the cash pass below.
     const seenSupplier = {};                 // 'br|ledger' -> group, learned from purchases
+    const capexBill = {};                    // 'br|ledger|ref' -> true, the bills assets were bought on
     for (const v of vs) {
       const map = assetOf[v.branch] || {};
       const chs = chainOf[v.branch] || {};
@@ -2430,6 +2431,17 @@ app.get('/api/capex', async (req, res) => {
         // Only a payable. A loan or a bank leg funds the purchase; it does not supply it.
         if (c.indexOf('sundry creditors') < 0 && c.indexOf('sundry debtors') < 0) continue;
         seenSupplier[v.branch + '|' + k] = dsp[k] || c;
+      }
+      // AND THE BILL ITSELF. "This party once sold us an asset" is far too wide a net:
+      // a freight forwarder whose charges on ONE import were capitalised into a machine
+      // then had its every routine invoice counted as capex -- ten ordinary payments,
+      // 1.76 Cr, none of it capital. A bill reference is exact where a party is not, so
+      // the refs raised on this voucher are remembered and only payments against THOSE
+      // count later.
+      for (const b of (v.bills || [])) {
+        if (!b || !b.ref || map[b.ledger]) continue;
+        if (!seenSupplier[v.branch + '|' + b.ledger]) continue;
+        capexBill[v.branch + '|' + b.ledger + '|' + String(b.ref).trim().toLowerCase()] = true;
       }
     }
 
@@ -2453,7 +2465,7 @@ app.get('/api/capex', async (req, res) => {
           const kind = map[k] ? 'asset'
             : ((pm[k] && pm[k].kind) || (seenSupplier[v.branch + '|' + k] ? 'supplier' : null));
           if (!kind) continue;
-          const dr = -all[k];                     // Dr positive: money applied to capex
+          let dr = -all[k];                       // Dr positive: money applied to capex
           // SELLING AN ASSET IS NOT NEGATIVE CAPEX SPEND. Proceeds from scrapping old
           // laptops came back here as cash out of -3,00,000, quietly netting a disposal
           // into the spend figure -- the one thing this page refuses to do anywhere
@@ -2461,6 +2473,22 @@ app.get('/api/capex', async (req, res) => {
           // counts both ways, because money genuinely coming BACK from a machinery
           // supplier is a refund of capex cash and belongs in the figure.
           if (kind === 'asset' && dr <= 0) continue;
+          // A GROUP kept for machinery says every rupee through it is capital. A party
+          // recognised only because it once supplied an asset says no such thing -- so
+          // it counts only to the extent this payment settles a bill the asset was
+          // actually bought on. A payment that names no such bill is an ordinary one.
+          if (kind === 'supplier') {
+            let matched = 0;
+            for (const b of (v.bills || [])) {
+              if (!b || b.ledger !== k || !b.ref) continue;
+              if (!capexBill[v.branch + '|' + k + '|' + String(b.ref).trim().toLowerCase()]) continue;
+              matched += Math.abs(Number(b.amount) || 0);
+            }
+            const skipped = Math.max(0, dr - matched);
+            if (skipped >= 1) unmatchedSupplier = Math.round((unmatchedSupplier + skipped) * 100) / 100;
+            dr = Math.min(dr, matched);
+            if (dr < 1) continue;
+          }
           capexDr += dr;
           legs.push({ ledger: k, kind, amt: dr });
         }
@@ -2597,6 +2625,7 @@ app.get('/api/capex', async (req, res) => {
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal,
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
+      unmatchedSupplier,
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
