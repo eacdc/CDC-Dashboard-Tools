@@ -181,6 +181,33 @@ vouchers never reach the browser at all — `/api/dataset` drops them.
    charged, a balance transferred in. Reading every journal as a settlement would hide
    money genuinely owed, which is why the sign decides and not the voucher type.
 
+### Opening bills vs the vouchers — counted once
+
+The uploaded bills CSV is what Tally showed **open on the day it was printed**. The
+vouchers carry bill-wise allocations back to April 2015, so once the loaded window
+reaches back past a bill's own date, the voucher that *raised* that bill is already in
+the set — and seeding the openings from the CSV as well counted it **twice**. Exactly
+2x, and whether or not the reference still matched, because Tally re-types references
+and two spellings of one bill became two bills.
+
+So `buildProjection` drops an opening bill whose date falls **inside** the loaded
+voucher window, and keeps the ones the window does not reach:
+
+| Window starts | Bill dated | What happens |
+|---|---|---|
+| 01-Apr-2025 | Feb 2025 | **kept** — the vouchers do not reach the purchase that raised it |
+| 01-Apr-2015 | Feb 2025 | **dropped** — that purchase is in the set |
+| 01-Apr-2026 | Oct 2026 (a *fresh* CSV) | **dropped** — a current snapshot is entirely inside the window |
+
+The count and value dropped come back as `openingsDropped` and are logged to the
+console. Openings quietly ceasing to count must be visible, not inferred from a figure
+that moved.
+
+Two things to know operationally: the bills slots are **cached in the browser** between
+sessions (there is a `clear cached` link beside them), so a file uploaded months ago is
+still being applied; and uploading a **fresh** CSV to check a figure used to double every
+party on it.
+
 ### FIFO Timeline Algorithm
 - Events (invoices + receipts) merged and sorted by date
 - Invoices before receipts on same date

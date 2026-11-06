@@ -106,7 +106,7 @@ var e=React.createElement,useState=React.useState,useRef=React.useRef;
 // how the landing badge stayed at v1.1 for months while the other two moved -- and a
 // stale badge is worse than none, because it is read as proof that a deploy did not
 // land. They all read these globals now. Bump the version HERE and nowhere else.
-window.CDC_VER='v1.13';window.CDC_BUILD='06-Nov-2026';
+window.CDC_VER='v1.14';window.CDC_BUILD='06-Nov-2026';
 var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -1344,6 +1344,40 @@ function combinedFIFO(openBills,yearInvs,yearRcts){
   return{avgDays:avg,unpaid:unpaid,matchedAmt:ta};
 }
 
+// THE UPLOADED SNAPSHOT IS ONLY NEEDED WHERE THE VOUCHERS DO NOT REACH.
+// A bills CSV is what Tally showed OPEN on the day it was printed. The vouchers now
+// carry bill-wise allocations back to April 2015, so whenever the loaded window reaches
+// back past a bill's own date, the voucher that RAISED that bill is already in this set
+// -- and adding the CSV's copy on top counted it TWICE. Exactly 2x, and whether or not
+// the CSV's reference still matched the voucher's, because Tally re-types references and
+// two spellings of one bill simply became two bills.
+//
+// It bit in two ordinary ways. Loading a window that starts before 1 April 2025 while a
+// payable CSV sat in the browser's cache doubled that party. And uploading a FRESH CSV
+// -- the obvious thing to do when a figure is being checked -- doubled every party on
+// it, because every bill on a fresh snapshot falls inside the loaded window.
+//
+// So a bill raised on a date this window covers is dropped: the vouchers are the source
+// once they reach it, which is the standing rule for that file. What is dropped is
+// COUNTED and returned, never silently discarded -- if the openings stop being used,
+// that has to be visible rather than inferred from a figure that moved.
+var __vMin='';
+for(var __vq=0;__vq<vouchers.length;__vq++){var __vd=vouchers[__vq].date;if(__vd&&(!__vMin||__vd<__vMin))__vMin=__vd;}
+var __obDrop={recv:0,pay:0,amount:0,coveredFrom:__vMin};
+function __openingsOutsideWindow(bills,tag){
+  if(!__vMin)return bills||[];
+  var keep=[];
+  for(var i=0;i<(bills||[]).length;i++){var b=bills[i];
+    if(b&&b.date&&b.date>=__vMin){__obDrop[tag]++;__obDrop.amount+=Math.abs(b.amount)||0;continue;}
+    keep.push(b);}
+  return keep;
+}
+recBills=__openingsOutsideWindow(recBills,'recv');
+payBills=__openingsOutsideWindow(payBills,'pay');
+try{if(__obDrop.recv||__obDrop.pay)console.log('%c[Opening bills]','color:#b45309;font-weight:bold',
+  __obDrop.recv+' receivable + '+__obDrop.pay+' payable bills from the uploaded CSV were already in the vouchers (window starts '
+  +__vMin+'), worth '+Math.round(__obDrop.amount)+' -- counted once, from the vouchers.');}catch(e){}
+
 // Step 3: Process debtors
 // Group opening bills by party
 var obByD={};for(var i=0;i<recBills.length;i++){var b=recBills[i];(obByD[b.party]=obByD[b.party]||[]).push(b);}
@@ -1520,7 +1554,7 @@ try{var __dg={debtors:{},creditors:{}};
   window.__cdcAllocDiag={mode:__BW?'billwise':'fifo',postingsWithBillRefs:__allocSeen,unreconciledToFIFO:__allocOdd};
   }catch(e){}
 
-return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA,debtorMonthly:debtorMonthly,creditorMonthly:creditorMonthly};};
+return{projMonths:pMo,xd:xd,asOfDate:today,projInflows:pIn,projInflowStats:pInSt,projInM:pInM,projOutflows:pOut,projOutflowStats:pOutSt,projOutM:pOutM,projIndExp:pIE,projNetM:pNet,companyAvgDays:{debtor:cdAvg,creditor:ccAvg},debtorCount:incDC,creditorCount:incCC,totalOutstanding:{debtors:tDOS,creditors:tCOS},excluded:{debtors:exD,creditors:exC},excludedTotals:{debtors:Object.values(exD).reduce(function(s,d){return s+d.outstanding;},0),creditors:Object.values(exC).reduce(function(s,d){return s+d.outstanding;},0)},allDebtorBills:dStats,debtorGroupAvgs:dGA,allCreditorBills:cStats,creditorGroupAvgs:cGA,debtorMonthly:debtorMonthly,creditorMonthly:creditorMonthly,openingsDropped:__obDrop};};
 
 // Console diagnostic: window.cdcDiag('A.K. Trading Paper Pvt. Ltd')
 // Prints the exact FIFO inputs (opening bills, this-year invoices, payments) and

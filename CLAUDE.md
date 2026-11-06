@@ -230,6 +230,17 @@ missing bill.
 31 March 2025; nothing computes a figure from it once the vouchers do, and no code
 path may return to it when a number looks wrong. A disagreeing number is a bug.
 
+**And it may never be added on top of vouchers that already hold the same bills.** The
+projection used to seed its openings from the uploaded CSV *and* take the invoices out of
+the vouchers, so once the loaded window reached back past a bill's own date that bill was
+counted twice — exactly 2×, and whether or not the reference still matched, since Tally
+re-types references and two spellings became two bills. One supplier read 6.29 Cr against
+roughly half that in Tally, and name-merging cannot touch it. `buildProjection` now drops
+an opening whose date the voucher window covers, keeps the ones it does not reach, and
+**reports what it dropped** (`openingsDropped`). Note the bills slots are cached in the
+browser between sessions, so a file uploaded months ago is still being applied — and
+uploading a *fresh* CSV to check a figure used to double every party on it.
+
 `/diag/clients.html` writes the client list to a workbook: every Sundry Debtor as ONE row
 (spellings merged), its contacts taken from whichever spelling actually carries them, and
 its sales per financial year from the same `yoy_party` fold the Sales Analysis tab reads —
