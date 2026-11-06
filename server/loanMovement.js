@@ -164,7 +164,7 @@ const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 // rows       : [{ ledger, branch, date, drawn, repaid }]  both >= 0, Cr-positive sense
 // Rows are expected to span [min(asOn, from) .. to]; anything outside is ignored here.
 function buildLoanMovement(opts) {
-  const { ledgerMeta, openings, rows, from, to, bucket } = opts;
+  const { ledgerMeta, openings, closings, rows, from, to, bucket } = opts;
   const keys = bucketsBetween(from, to, bucket);
   const keyIdx = new Map(keys.map((k, i) => [k, i]));
 
@@ -258,8 +258,20 @@ function buildLoanMovement(opts) {
         drawn: c.drawn, repaid: c.repaid, closing: run });
     }
     const meta = ledgerMeta[n];
-    loans.push({ ledger: n, kind: meta.kind, kindLabel: KIND_LABELS[meta.kind] || meta.kind,
+    // Tally's OWN closing balance, where the pipeline has brought one and it stands on
+    // the very day this window ends. That makes the page self-checking: our opening plus
+    // every posting we hold must land on Tally's figure, per account, with no export to
+    // reconcile by hand. A difference is the real diagnosis -- it is vouchers we do not
+    // hold, or an opening from the wrong period, and it is stated rather than waited for.
+    const cl = (closings || {})[meta.branch] || {};
+    const comparable = !!(cl.asOn && cl.asOn === to);
+    const tallyClosing = comparable ? (cl.amounts || {})[n] : undefined;
+    loans.push({ ledger: meta.name || n, key: n, branch: meta.branch || '',
+      kind: meta.kind, kindLabel: KIND_LABELS[meta.kind] || meta.kind,
       group: meta.group || '', branches: meta.branches || [],
+      tally: { asOn: cl.asOn || null, comparable,
+        closing: comparable ? r2(tallyClosing || 0) : null,
+        diff: comparable ? r2(run - (tallyClosing || 0)) : null },
       opening: r2(opening[n]), drawn: tin, repaid: tout, closing: run,
       // The opening's two halves, so a disagreement with Tally says WHICH is wrong.
       openingParts: { tally: r2(openTally[n]), postings: r2(openPost[n]),
@@ -276,7 +288,7 @@ function buildLoanMovement(opts) {
   // opening on thirty dormant accounts buries the three that matter.
   loans.sort((a, b) => (Math.abs(b.closing) - Math.abs(a.closing))
     || (Math.abs(b.drawn + b.repaid) - Math.abs(a.drawn + a.repaid))
-    || a.ledger.localeCompare(b.ledger));
+    || String(a.ledger).localeCompare(String(b.ledger)));
 
   // All borrowings together, same statement shape. Summed from the per-ledger cells, so
   // the total cannot disagree with the rows above it.
@@ -333,11 +345,23 @@ function buildLoanMovement(opts) {
     },
   };
   const inDebit = loans.filter((l) => l.inDebit)
-    .map((l) => ({ ledger: l.ledger, opening: l.opening, repaid: l.repaid, closing: l.closing }));
+    .map((l) => ({ ledger: l.ledger, branch: l.branch, opening: l.opening, repaid: l.repaid, closing: l.closing }));
+  // Where Tally's own closing is comparable and we do not match it, worst first. This is
+  // the reconciliation the page exists to make possible, so it is computed rather than
+  // left to be eyeballed down a column of a hundred accounts.
+  const checked = loans.filter((l) => l.tally && l.tally.comparable);
+  const disagree = checked.filter((l) => Math.abs(l.tally.diff) > 1)
+    .map((l) => ({ ledger: l.ledger, branch: l.branch, ours: l.closing,
+      tally: l.tally.closing, diff: l.tally.diff }))
+    .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  const tallyCheck = { asOn: (checked[0] && checked[0].tally.asOn) || null,
+    compared: checked.length, agree: checked.length - disagree.length,
+    differ: disagree.length,
+    diffTotal: r2(disagree.reduce((s2, d) => s2 + d.diff, 0)), worst: disagree.slice(0, 20) };
   const dormant = loans.filter((l) => !l.moved && Math.abs(l.closing) < 0.5).length;
   return { bucket, from, to, buckets: keys.length, loans, periods,
     byKind: Object.values(byKind).sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing)),
-    total, openingAsOn, openingKnown, ignoredRows: ignored, inDebit, dormant };
+    total, openingAsOn, openingKnown, ignoredRows: ignored, inDebit, dormant, tallyCheck };
 }
 
 module.exports = { loanKind, nearMiss, bucketKeyOf, bucketLabel, bucketsBetween,

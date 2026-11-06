@@ -155,8 +155,10 @@
 
   // One voucher-level drill-down, so a figure that looks wrong can be opened rather
   // than argued about. /api/yoy/vouchers lists what actually hit the account.
-  function vchLink(ledger,from,to){
-    return '/api/yoy/vouchers?branch='+encodeURIComponent($('branch').value)
+  // The row's OWN branch, not the selector: a loan belongs to one company's books, and
+  // asking the other for its vouchers returns nothing.
+  function vchLink(ledger,from,to,br){
+    return '/api/yoy/vouchers?branch='+encodeURIComponent(br||$('branch').value)
          +'&ledger='+encodeURIComponent(ledger)+'&from='+from+'&to='+to;
   }
 
@@ -167,7 +169,7 @@
   // `sweep` means an OD/CC account, whose gross in and out are the company's turnover
   // passing through rather than borrowing decisions. Those columns are suppressed unless
   // asked for, and the net change stands in their place.
-  function periodTable(periods, ledger, sweep){
+  function periodTable(periods, ledger, sweep, br){
     var gross=$('gross').checked, hideGross=(sweep&&!gross);
     var h='<div class="scroll"><table><thead><tr><th>Period</th><th class="num">Opening</th>';
     if(!hideGross) h+='<th class="num">Drawn (+)</th><th class="num">Repaid (&minus;)</th>';
@@ -179,7 +181,7 @@
       if(!hideGross) h+='<td class="num">'+money(p.drawn)+'</td><td class="num">'+money(p.repaid)+'</td>';
       h+='<td class="num">'+chg(ch)+'</td>'
        + '<td class="num"><strong>'+money(p.closing)+'</strong></td>'
-       + '<td>'+(ledger&&!quiet?('<a target="_blank" href="'+esc(vchLink(ledger,periodFrom(p),periodTo(p)))+'">vouchers</a>'):'')+'</td></tr>';
+       + '<td>'+(ledger&&!quiet?('<a target="_blank" href="'+esc(vchLink(ledger,periodFrom(p),periodTo(p),br))+'">vouchers</a>'):'')+'</td></tr>';
     }
     return h+'</tbody></table></div>';
   }
@@ -221,6 +223,32 @@
        + 'vouchers between the opening&rsquo;s own day and '+esc(fmt8(j.from))+' are missing. Check these first: '
        + j.inDebit.slice(0,6).map(function(x){return '<span class="mono">'+esc(x.ledger)+'</span> ('+esc(rupees(x.closing))+')';}).join(', ')
        + '.</div>';
+    }
+
+    // TALLY'S OWN CLOSING, where the pipeline has brought one standing on the day this
+    // window ends. This is the whole point of the page: a figure that proves itself
+    // against Tally account by account, with no export to reconcile by hand.
+    var tc=j.tallyCheck;
+    if(tc&&tc.compared){
+      if(!tc.differ){
+        h+='<div class="verdict yes" style="margin-bottom:12px"><strong>Checked against Tally.</strong> All '
+         + tc.compared+' account(s) with a Tally closing balance for '+esc(fmt8(tc.asOn))
+         + ' come out at the same figure here. These numbers are not an estimate.</div>';
+      } else {
+        h+='<div class="warn"><strong>'+tc.differ+' of '+tc.compared
+         + ' accounts do not match Tally’s own closing balance at '+esc(fmt8(tc.asOn))
+         + ', '+esc(rupees(tc.diffTotal))+' in total.</strong> Ours minus Tally’s, worst first: '
+         + tc.worst.slice(0,8).map(function(w){
+             return '<span class="mono">'+esc(w.ledger)+'</span> ('+esc(w.branch)+') ours '
+               + esc(rupees(w.ours))+' vs Tally '+esc(rupees(w.tally))+' = '+esc(rupees(w.diff));
+           }).join('; ')
+         + '. A difference is vouchers we do not hold, or an opening from the wrong period — not an '
+         + 'opinion about the loan.</div>';
+      }
+    } else if(tc){
+      h+='<div class="note" style="margin-bottom:10px">No Tally closing balance to check against for '
+       + esc(fmt8(j.to))+'. The pipeline stores one as at each sync date, so set <strong>to</strong> to the '
+       + 'last sync date and every account on this page is checked against Tally automatically.</div>';
     }
 
     var t=j.total, net=t.closing-t.opening, gross=$('gross').checked;
@@ -338,7 +366,7 @@
        + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(l.repaid))+'</td>'
        + '<td class="num">'+chg(l.netChange)+'</td>'
        + '<td class="num"><strong>'+money(l.closing)+'</strong></td>'
-       + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to))+'">vouchers</a></td></tr>'
+       + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to,l.branch))+'">vouchers</a></td></tr>'
        + '<tr id="ex'+idx+'" style="display:none"><td colspan="10" style="background:#fbfdfe">'
        + '<div class="note" style="margin-bottom:8px">Opening '+esc(rupees(l.opening))+' = Tally&rsquo;s own opening '
        + '<strong>'+esc(rupees(l.openingParts.tally))+'</strong>'
@@ -348,7 +376,13 @@
        + ' plus <strong>'+esc(rupees(l.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
        + '. Disagrees with Tally? The half that is wrong says where to look: the Tally half means the master, the '
        + 'postings half means vouchers we do not hold.</div>'
-       + periodTable(l.periods,l.ledger,l.sweep)+'</td></tr>';
+       + (l.tally&&l.tally.comparable
+           ? ('<div class="note" style="margin-bottom:8px">Tally\u2019s own closing at '+esc(fmt8(l.tally.asOn))
+              +': <strong>'+esc(rupees(l.tally.closing))+'</strong> &middot; ours '+esc(rupees(l.closing))
+              +' &middot; difference '+(Math.abs(l.tally.diff)<1?'<span style="color:var(--green)">none</span>'
+                :('<strong style="color:var(--red)">'+esc(rupees(l.tally.diff))+'</strong>'))+'</div>')
+           : '')
+       + periodTable(l.periods,l.ledger,l.sweep,l.branch)+'</td></tr>';
     }
     h+='<tr class="tot"><td colspan="4">All borrowings'+(nil&&!showNil?' (including the '+nil+' nil ones)':'')+'</td>'
      + '<td class="num">'+money(t.opening)+'</td>'
@@ -362,9 +396,9 @@
       h+='<section><h2>NAMED LIKE A BORROWING, BUT NOT COUNTED</h2><div class="body">'
        + '<div class="note">These are not under a loan group, so they are left out of every figure above. '
        + 'If one of them is a real facility, move it under a loan group in Tally.</div>'
-       + '<div class="scroll"><table><thead><tr><th>Ledger</th><th>Group it is actually under</th></tr></thead><tbody>';
+       + '<div class="scroll"><table><thead><tr><th>Ledger</th><th>Branch</th><th>Group it is actually under</th></tr></thead><tbody>';
       for(var m=0;m<j.nearMisses.length;m++){
-        h+='<tr><td>'+esc(j.nearMisses[m].ledger)+'</td><td class="muted">'+esc(j.nearMisses[m].group)+'</td></tr>';
+        h+='<tr><td>'+esc(j.nearMisses[m].ledger)+'</td><td class="mono">'+esc(j.nearMisses[m].branch||'')+'</td><td class="muted">'+esc(j.nearMisses[m].group)+'</td></tr>';
       }
       h+='</tbody></table></div></div></section>';
     }

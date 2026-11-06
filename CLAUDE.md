@@ -286,6 +286,30 @@ Interest") is listed as a **near miss** rather than silently dropped. Note that
 `'unsecured loans'` CONTAINS `'secured loans'`, so the group keywords are ordered and must
 not be sorted -- a test fails by name if they are.
 
+**An opening balance must be asked for BY DATE.** `OPENINGBALANCE` with no
+`SVFROMDATE`/`SVTODATE` is the opening of whatever period the company is sitting in --
+1 Apr 2026 for a company opened in 2026-27 -- while `openingAsOn` came from `BOOKSFROM`,
+1 Apr 2025. Storing the first and labelling it the second made every balance computed as
+*opening + postings since openingAsOn* count a whole year twice. Proved to the paisa
+against Tally's own group summary: six loan accounts low by exactly their FY 2025-26
+repayments, a dormant director loan exactly right (no postings, nothing to double), and
+two PCFC accounts Tally shows at nil reading as crores *in debit*. The error is
+proportional to how much the account moved, which is why unsecured matched while OD was
+60 Cr out. The request now names the period and fetches `CLOSINGBALANCE` too, so
+`masters.closing`/`closingAsOn` let any page check itself against Tally per account. This
+affects every `masters.opening` reader -- the loan page, `/diag`'s party balance,
+`/api/bills/audit` -- and needs ONE pipeline run to take effect.
+
+**A loan is keyed `branch|ledger`, classified from that branch's OWN master.** The merged
+hierarchy is Kolkata-first, so a name that is a Bank OD in Kolkata and a bank account in
+Ahmedabad read as a loan for both -- and `/api/loans` then took Ahmedabad's opening and
+postings for that name as loan figures. Tally has `Citi Bank, (Kolkata)` at 6.36 Cr in
+Kolkata and `Citi Bank, (Ahmedabad)` at 1.41 L in Ahmedabad, two accounts; Ahmedabad
+*also* carries a `Citi Bank, (Kolkata)` outside its loan group holding 39.35 Cr, and that
+phantom is what made one row read 79.66 Cr. One query per company, asking only for the
+names that are loans in it, and the alias map scoped per branch so a party merge cannot
+weld two companies' bank accounts together.
+
 The opening is Tally's own opening balance (`masters.opening`, stored Tally-raw so a
 liability is +ve) plus every posting between the day it stands on and the window start --
 and MINUS any posting inside the window but before that day, which the opening already

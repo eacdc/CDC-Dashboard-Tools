@@ -912,6 +912,7 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # The timeout is short for the same reason as (2): this must never be able to wedge the
 # sync again.
 $ledgerOpening = @{}
+$ledgerClosing = @{}
 # The date FIRST: an opening balance whose day is unknown cannot be added to anything,
 # so if the company will not say when its books begin, we do not ask for openings at all.
 $openingAsOn = ""
@@ -929,6 +930,27 @@ if (-not $openingAsOn) {
     Write-Warning "  Openings: skipped -- Tally did not say when this company's books begin, and an opening balance without its day cannot be added to anything."
 }
 if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
+    # NAME THE PERIOD. Without SVFROMDATE/SVTODATE, OPENINGBALANCE is the opening of
+    # whatever period the company happens to be sitting in -- and a company opened in
+    # 2026-27 answers with the balance on 1-Apr-2026 while BOOKSFROM says 1-Apr-2025.
+    # We stored the first and labelled it the second, so every balance computed as
+    # "opening + postings since openingAsOn" counted a whole year twice.
+    #
+    # Proved against Tally's own Loans (Liability) group summary: six loan accounts came
+    # out LOW BY EXACTLY their FY 2025-26 repayments, to the paisa, while a dormant
+    # director loan was exactly right -- because a ledger with no postings cannot be
+    # double-counted. Two PCFC accounts that Tally shows closed at nil read as 5.46 Cr
+    # and 4.56 Cr in DEBIT for the same reason.
+    #
+    # So the period is pinned and the label is the date we actually asked for. Naming a
+    # date does make Tally recompute, which is why this is still its own request with one
+    # attempt and a short timeout -- the voucher sync must never wait on it.
+    #
+    # CLOSINGBALANCE comes back in the same request, as at the end of the window. That
+    # is what makes the figures self-checking: opening + every posting we hold must equal
+    # Tally's own closing, per ledger, with no export to reconcile against by hand.
+    $openFrom = $openingAsOn
+    $openTo   = $ToDate
     $openPayload = @"
 <ENVELOPE>
   <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
@@ -936,12 +958,14 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
   <BODY><DESC>
     <STATICVARIABLES>
       <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVFROMDATE TYPE="Date">$openFrom</SVFROMDATE>
+      <SVTODATE TYPE="Date">$openTo</SVTODATE>
       <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
     </STATICVARIABLES>
     <TDL><TDLMESSAGE>
       <COLLECTION NAME="LedgerOpening" ISMODIFY="No">
         <TYPE>Ledger</TYPE>
-        <FETCH>NAME,OPENINGBALANCE</FETCH>
+        <FETCH>NAME,OPENINGBALANCE,CLOSINGBALANCE</FETCH>
       </COLLECTION>
     </TDLMESSAGE></TDL>
   </DESC></BODY>
@@ -952,7 +976,7 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
     # and the right move is to give up at once rather than grind it into a state where
     # the voucher sync cannot get an answer either.
     try {
-        [xml]$ox = Post-Tally $openPayload 1 30
+        [xml]$ox = Post-Tally $openPayload 1 60
         foreach ($l in $ox.SelectNodes("//LEDGER")) {
             $on = xval $l.NAME; if (-not $on) { continue }
             # Raw Tally sign, like every amount here: -ve = Dr, +ve = Cr. Only the
@@ -960,8 +984,10 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
             # master document for nothing.
             $ob = ToAmount (xval $l.OPENINGBALANCE)
             if ($ob -ne 0) { $ledgerOpening[$on] = $ob }
+            $cb = ToAmount (xval $l.CLOSINGBALANCE)
+            if ($cb -ne 0) { $ledgerClosing[$on] = $cb }
         }
-        Write-Host ("  Openings: {0} ledgers carry one, as at {1} (the company's BOOKSFROM -- the request names no date, because naming one makes Tally recompute)" -f $ledgerOpening.Count, $openingAsOn)
+        Write-Host ("  Openings: {0} ledgers carry one as at {1}, and {2} carry a closing as at {3} -- both asked for BY DATE, so neither can be the wrong period's" -f $ledgerOpening.Count, $openingAsOn, $ledgerClosing.Count, $openTo)
     } catch {
         Write-Warning ("  Ledger openings not fetched: {0}" -f $_.Exception.Message)
         Write-Warning "  The sync continues without them -- only outstanding-from-Tally is affected, no voucher data is lost."
@@ -1046,10 +1072,13 @@ $mIds = [ordered]@{}
 foreach ($ln in ($ledgerIds.Keys | Sort-Object)) { $mIds[$ln] = $ledgerIds[$ln] }
 $mOpening = [ordered]@{}
 foreach ($ln in ($ledgerOpening.Keys | Sort-Object)) { $mOpening[$ln] = $ledgerOpening[$ln] }
+$mClosing = [ordered]@{}
+foreach ($ln in ($ledgerClosing.Keys | Sort-Object)) { $mClosing[$ln] = $ledgerClosing[$ln] }
 # The date is stored WITH the balances: a balance without the day it was struck on
 # is not a fact anyone can use, and each company here covers one financial year.
 $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mContacts; ids = $mIds;
                          opening = $mOpening; openingAsOn = $openingAsOn;
+                         closing = $mClosing; closingAsOn = $ToDate;
                          openingAsOnDerived = $false }
 
 # ======================================================================
