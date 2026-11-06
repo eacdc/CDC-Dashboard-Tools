@@ -399,6 +399,20 @@ winning over a creditor leg because a machine on term finance usually touches bo
 header shows additions and paid-from-bank separately for that reason. Disposals are
 reported apart and NEVER netted into spend. `npm run test:capex`.
 
+**CAPEX FOR THE PERIOD asks nothing of anybody's judgement, and is the headline.**
+`capexFlow` = assets capitalised + rise in capital advances - rise in what is owed to
+machinery creditors. Three balances Tally itself keeps, and NO opinion about which supplier
+sells machines -- the opinion that has now been wrong in both directions (a freight
+forwarder counted in full, a machine maker left out). It follows the CHANGE in those
+balances, never the payments, and that is what stops an advance and the machine it buys
+being counted twice: pay 3 Cr of advance (advances +3 Cr, capex 3 Cr); the 5 Cr machine
+arrives with 2 Cr owed (capitalised +5, advances -3, owed +2 => 0, because the 3 went out
+last year and the 2 has not gone); pay the 2 (owed -2 => 2). Three periods, 3 + 0 + 2 = the
+5 Cr machine, each rupee in the period it left. `npm run test:capex` drives exactly that
+machine through three windows. Signs: an advance is a Dr-positive ASSET (`-all[k]`), a
+creditor a Cr-positive LIABILITY (`+all[k]`). A machine on a term loan IS in this figure
+though no money left the bank -- the bank paid the supplier and the company owes the bank.
+
 **Cash out on capex is a different question, followed on the PAYMENT voucher.** An asset is
 capitalised the day it is ready and paid for on its own vouchers, often months earlier, so
 the asset ledger is the wrong place to look for money. `cashRows` is built from every
