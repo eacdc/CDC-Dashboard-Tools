@@ -101,7 +101,13 @@ function runBusyWith(setBusy,tag,fn){
 function busyLabel(isBusy,label){return isBusy?[React.createElement('span',{key:'s',className:'cdcspin'}),label]:label;}
 (function(){
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.13';var APP_BUILD='06-Nov-2026';
+// ONE place for the version every screen of this page shows. The landing badge, the
+// Projected Cashflow header and the P&L header sit in THREE different scopes, which is
+// how the landing badge stayed at v1.1 for months while the other two moved -- and a
+// stale badge is worse than none, because it is read as proof that a deploy did not
+// land. They all read these globals now. Bump the version HERE and nowhere else.
+window.CDC_VER='v1.13';window.CDC_BUILD='06-Nov-2026';
+var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
 var PL_CATS={'Sales Accounts':'revenue','Direct Incomes':'revenue','Indirect Incomes':'revenue','Purchase Accounts':'purchase','Direct Expenses':'direct_expense','Indirect Expenses':'indirect_expense'};
@@ -1055,7 +1061,7 @@ function App(){var s=useState(null),d=s[0],setD=s[1];return d?e(Dash,{data:d,set
 })();
 (function(){
 var e=React.createElement,useState=React.useState,useRef=React.useRef;
-var APP_VERSION='v1.13';var APP_BUILD='06-Nov-2026';
+var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 // Defensive client-side cache wipe: clear any pre-cached HTTP entries for this URL on load.
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -2662,7 +2668,7 @@ function Portal(){
           e('div',{style:{fontSize:'10px',letterSpacing:'4px',color:'#94a3b8',textTransform:'uppercase',fontFamily:'monospace'}},'CDC FINANCE PORTAL'),
           e('h1',{style:{fontSize:'22px',fontWeight:700,margin:'4px 0 0'}},'One Upload → Every View'),
           e('p',{style:{color:'#64748b',fontSize:'12px',marginTop:'4px'}},'P&L · Cashflow · Ledger Audit · Projection · Receivables · Payables · Pred vs Actual'),
-          e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'monospace',color:'#047857',letterSpacing:'1px'}},'v1.1 · 21-Jul-2026')),
+          e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'monospace',color:'#047857',letterSpacing:'1px'}},window.CDC_VER+' · '+window.CDC_BUILD)),
         e('div',{style:{display:'flex',borderRadius:'8px',overflow:'hidden',border:'1px solid #cbd5e1',marginBottom:'14px'}},
           ['mongo','upload'].map(function(mm){var lbl=mm==='mongo'?'🗄 MongoDB (auto)':'📁 Upload files';return e('span',{key:mm,onClick:function(){setMode(mm);setErr(null);},style:{flex:1,textAlign:'center',padding:'8px 10px',cursor:'pointer',fontSize:'12px',fontFamily:'monospace',fontWeight:700,background:mode===mm?'#0891b2':'#f1f5f9',color:mode===mm?'#fff':'#475569'}},lbl);})),
         mode==='mongo'&&e('div',{style:{marginBottom:'4px'}},
