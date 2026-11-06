@@ -2022,28 +2022,48 @@ app.get('/api/loans', async (req, res) => {
     }
 
     const db = await getDb();
-    const xd = await mergedHierarchy(db);
-    const lu = E.buildLookups(xd);
     const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
-
-    // Which ledgers are borrowings, by the group Tally itself put them in.
-    const ledgerMeta = {};
-    const nearMisses = [];
-    for (const ln of Object.keys(xd.ledgers)) {
-      const chain = E.getChain(ln, xd, lu);
-      const kind = LM.loanKind(ln, chain);
-      if (kind) {
-        ledgerMeta[ln] = { kind, group: chain.join(' > '), branches: [] };
-      } else if (LM.nearMiss(ln, chain)) {
-        nearMisses.push({ ledger: ln, group: chain.join(' > ') });
-      }
-    }
-    // The vouchers keep whatever name was typed, so an account renamed in Tally is asked
-    // for under every spelling merged into it -- the same rule /api/yoy/vouchers follows.
     const aliases = await readAliasMap(db);
-    const nameOf = {};                       // raw voucher name -> canonical loan ledger
-    for (const ln of Object.keys(ledgerMeta)) for (const v of aliasVariants(aliases, ln)) nameOf[v] = ln;
-    const wanted = Object.keys(nameOf);
+
+    // EACH COMPANY IS CLASSIFIED BY ITS OWN MASTER, AND A LOAN IS KEYED BY BRANCH.
+    // The merged hierarchy is Kolkata-first, so a ledger NAME that is a Bank OD in
+    // Kolkata and something else entirely in Ahmedabad reads as a loan for both -- and
+    // this endpoint then took Ahmedabad's opening and Ahmedabad's postings for that name
+    // as loan figures. Tally's own report shows what that cost: Kolkata has
+    // "Citi Bank, (Kolkata)" opening 6.36 Cr and Ahmedabad has "Citi Bank, (Ahmedabad)"
+    // opening 1.41 L, two different accounts -- while this page showed ONE row carrying a
+    // phantom 39.35 Cr, which is what Ahmedabad's same-named ledger holds OUTSIDE its
+    // loan group. Tally reports each company separately for exactly this reason.
+    //
+    // So: classify per branch from that branch's own groups, and key every loan
+    // `branch|ledger`. A facility recorded in both companies is then two rows that add
+    // up, which is what consolidation means, instead of one row that may be a double
+    // count or a collision and nobody can tell which.
+    const ledgerMeta = {};                   // 'br|ledger' -> meta
+    const nearMisses = [];
+    const perBranch = {};
+    for (const br of branches) {
+      const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
+      const lub = E.buildLookups(xdb);
+      const nameOf = {};                     // raw voucher name -> 'br|ledger'
+      for (const ln of Object.keys(xdb.ledgers || {})) {
+        const chain = E.getChain(ln, xdb, lub);
+        const kind = LM.loanKind(ln, chain);
+        const key = br + '|' + ln;
+        if (kind) {
+          ledgerMeta[key] = { kind, group: chain.join(' > '), name: ln, branch: br, branches: [br] };
+          // The vouchers keep whatever name was typed, so an account renamed in Tally is
+          // asked for under every spelling merged into it -- scoped to this branch, so a
+          // merge saved for a party cannot weld two companies' bank accounts together.
+          for (const v of aliasVariants(aliases, ln)) nameOf[v] = key;
+        } else if (LM.nearMiss(ln, chain)) {
+          nearMisses.push({ ledger: ln, branch: br, group: chain.join(' > ') });
+        }
+      }
+      perBranch[br] = { master: mb, nameOf, wanted: Object.keys(nameOf) };
+    }
+    const wanted = Object.keys(ledgerMeta);
 
     if (!wanted.length) {
       return res.json({ ok: true, branch, bucket, from, to, scale: 'cr-positive',
@@ -2055,8 +2075,10 @@ app.get('/api/loans', async (req, res) => {
     // The openings Tally itself carries, on the day they stand. Cr-positive, so they are
     // taken as stored: `masters.opening` is Tally-raw, where a liability is +ve.
     const openings = {};
+    const closings = {};
     for (const br of branches) {
-      const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const mm = perBranch[br].master;
+      const nameOf = perBranch[br].nameOf;
       const seen = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
       const asOn = (seen.length === 1 && DATE8.test(seen[0])) ? seen[0] : null;
       const amounts = {};
@@ -2067,6 +2089,19 @@ app.get('/api/loans', async (req, res) => {
         }
       }
       openings[br] = { asOn, amounts };
+      // Tally's OWN closing balance, as at the day it was asked for. This is what makes
+      // the page self-checking: our opening plus every posting we hold must land on it,
+      // per account, with nothing to reconcile by hand. Only arrives once the pipeline
+      // has been re-run with the dated openings request.
+      const cAsOn = (mm && DATE8.test(String(mm.closingAsOn || ''))) ? String(mm.closingAsOn) : null;
+      const cAmt = {};
+      if (cAsOn && mm.closing) {
+        for (const raw of Object.keys(mm.closing)) {
+          const canon = nameOf[raw];
+          if (canon && mm.closing[raw]) cAmt[canon] = (cAmt[canon] || 0) + mm.closing[raw];
+        }
+      }
+      closings[br] = { asOn: cAsOn, amounts: cAmt };
     }
 
     // Rows must reach back to whichever is earlier: the window start, or the day the
@@ -2076,35 +2111,37 @@ app.get('/api/loans', async (req, res) => {
       const a = openings[br].asOn;
       if (a && a < queryFrom) queryFrom = a;
     }
-    const match = { date: { $gte: queryFrom, $lte: to }, ...LIVE_ONLY };
-    if (branch !== 'all') match.branch = branch;
-    const raw = await db.collection('vouchers').aggregate([
-      { $match: match },
-      { $project: { branch: 1, date: 1, kv: { $concatArrays: [
-        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
-        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
-      { $unwind: '$kv' },
-      { $match: { 'kv.k': { $in: wanted } } },
-      { $group: { _id: { k: '$kv.k', d: '$date', b: '$branch' },
-        // +ve = Cr = borrowed; -ve = Dr = repaid. Kept apart rather than netted, or a
-        // drawdown and a repayment on the same day would cancel and both would vanish
-        // from a report whose whole subject is the two of them.
-        drawn: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } },
-        repaid: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, { $multiply: ['$kv.v', -1] }, 0] } } } },
-    ], { allowDiskUse: true }).toArray();
-
+    // ONE QUERY PER BRANCH, each asking only for the names that are loans in THAT
+    // company. A single query over both would have to accept a name that is a loan in
+    // either, which is the collision this endpoint exists to have stopped making.
     const rows = [];
-    for (const r of raw) {
-      const canon = nameOf[r._id.k];
-      if (!canon) continue;
-      const br = r._id.b;
-      const meta = ledgerMeta[canon];
-      if (meta && br && meta.branches.indexOf(br) < 0) meta.branches.push(br);
-      rows.push({ ledger: canon, branch: br, date: String(r._id.d || ''),
-        drawn: r.drawn || 0, repaid: r.repaid || 0 });
+    for (const br of branches) {
+      const want = perBranch[br].wanted;
+      if (!want.length) continue;
+      const nameOf = perBranch[br].nameOf;
+      const raw = await db.collection('vouchers').aggregate([
+        { $match: { branch: br, date: { $gte: queryFrom, $lte: to }, ...LIVE_ONLY } },
+        { $project: { branch: 1, date: 1, kv: { $concatArrays: [
+          { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+          { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+        { $unwind: '$kv' },
+        { $match: { 'kv.k': { $in: want } } },
+        { $group: { _id: { k: '$kv.k', d: '$date' },
+          // +ve = Cr = borrowed; -ve = Dr = repaid. Kept apart rather than netted, or a
+          // drawdown and a repayment on the same day would cancel and both would vanish
+          // from a report whose whole subject is the two of them.
+          drawn: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } },
+          repaid: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, { $multiply: ['$kv.v', -1] }, 0] } } } },
+      ], { allowDiskUse: true }).toArray();
+      for (const r of raw) {
+        const key = nameOf[r._id.k];
+        if (!key) continue;
+        rows.push({ ledger: key, branch: br, date: String(r._id.d || ''),
+          drawn: r.drawn || 0, repaid: r.repaid || 0 });
+      }
     }
 
-    const out = LM.buildLoanMovement({ ledgerMeta, openings, rows, from, to, bucket });
+    const out = LM.buildLoanMovement({ ledgerMeta, openings, closings, rows, from, to, bucket });
     // What the figures do and do not rest on, said rather than assumed. A branch whose
     // openings never arrived gives movement, not a balance, and that has to be on the
     // page and not in a comment here.

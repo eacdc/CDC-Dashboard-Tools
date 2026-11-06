@@ -266,6 +266,70 @@ const V = (branch, date, pl, ld, extra) => ({
   assert(near(quiet.total.opening, j.total.closing) && near(quiet.total.closing, j.total.opening + j.total.drawn - j.total.repaid),
     'and opens exactly where the previous window closed -- the statement is continuous across windows');
 
+  // ---- one NAME, two companies, two different things -----------------------
+  // Straight from Tally's own Loans (Liability) summaries. Kolkata has
+  // "Citi Bank, (Kolkata)" under Bank OD A/c opening 6.36 Cr; Ahmedabad has
+  // "Citi Bank, (Ahmedabad)" under Bank OD A/c opening 1.41 L. Two accounts, two names.
+  // But Ahmedabad ALSO carries a ledger called "Citi Bank, (Kolkata)" -- outside its loan
+  // group -- holding 39.35 Cr. Classifying from the merged (Kolkata-first) hierarchy made
+  // that name a loan for BOTH companies, so Ahmedabad's 39.35 Cr and its postings were
+  // read as Kolkata OD movement, and the page showed one row of 79.66 Cr where Tally
+  // shows 6.36 Cr and 1.41 L.
+  const kolM = fakeDb.collection('masters').docs.find((d) => d.branch === 'kol');
+  const ahmM = fakeDb.collection('masters').docs.find((d) => d.branch === 'ahm');
+  kolM.ledgers['Citi Bank, (Kolkata)'] = 'Bank OD A/c';
+  kolM.opening['Citi Bank, (Kolkata)'] = 63606668.97;
+  ahmM.openingAsOn = '20250401';
+  ahmM.ledgers['Citi Bank, (Ahmedabad)'] = 'Bank OD A/c';
+  ahmM.ledgers['Citi Bank, (Kolkata)'] = 'Bank Accounts';          // NOT a loan here
+  ahmM.groups['Bank Accounts'] = 'Current Assets';
+  ahmM.groups['Current Assets'] = 'Capital Account';
+  ahmM.opening['Citi Bank, (Ahmedabad)'] = 140650;
+  ahmM.opening['Citi Bank, (Kolkata)'] = 393471000;                // the phantom
+  // and Ahmedabad posts to its own "Citi Bank, (Kolkata)" ledger, which is a bank there
+  vs.push(V('ahm', '20260420', { 'Citi Bank, (Kolkata)': 250000000 }, {}));
+
+  const coll = await get('/api/loans?branch=all&from=20260401&to=20260430&bucket=month');
+  const citiRows = coll.loans.filter((l) => /^Citi Bank/.test(l.ledger));
+  assert(citiRows.length === 2,
+    'the two companies Citi accounts are TWO rows, as Tally reports them (got '
+    + JSON.stringify(citiRows.map((l) => l.branch + ':' + l.ledger)) + ')');
+  const kolCiti = citiRows.find((l) => l.branch === 'kol');
+  const ahmCiti = citiRows.find((l) => l.branch === 'ahm');
+  assert(kolCiti && near(kolCiti.opening, 63606668.97),
+    "Kolkata's OD opens at Tally's own 6.36 Cr, with nothing of Ahmedabad's added (got "
+    + (kolCiti && kolCiti.opening) + ')');
+  assert(ahmCiti && ahmCiti.ledger === 'Citi Bank, (Ahmedabad)' && near(ahmCiti.opening, 140650),
+    "and Ahmedabad's OD is its own ledger at its own 1.41 L (got "
+    + (ahmCiti && ahmCiti.ledger) + ' ' + (ahmCiti && ahmCiti.opening) + ')');
+  assert(near(kolCiti.openingParts.tally, 63606668.97)
+    && Object.keys(kolCiti.openingParts.byBranch).join(',') === 'kol',
+    "the Kolkata row's Tally half is Kolkata's alone -- the 39.35 Cr Ahmedabad holds outside its"
+    + ' loan group reaches no figure (got ' + kolCiti.openingParts.tally
+    + ' from ' + JSON.stringify(kolCiti.openingParts.byBranch) + ')');
+  assert(!coll.loans.some((l) => near(l.openingParts.tally, 457077668.97)),
+    'and nothing anywhere carries the two companies openings summed together');
+  assert(!coll.loans.some((l) => l.branch === 'ahm' && l.ledger === 'Citi Bank, (Kolkata)'),
+    'a ledger that is a bank account in Ahmedabad is not a borrowing there, whatever Kolkata calls the same name');
+  assert(coll.loans.every((l) => (l.branches || []).length <= 1),
+    'and no row claims to span both companies any more, because a loan belongs to one set of books');
+
+  // ---- Tally's own closing makes the page self-checking --------------------
+  // Once the pipeline brings CLOSINGBALANCE for the day asked for, every account can be
+  // put against Tally without an export. A difference IS the diagnosis.
+  kolM.closing = { 'HDFC Term Loan': 9000000, 'Citi Bank, (Kolkata)': 11111111 };
+  kolM.closingAsOn = '20260731';
+  const chk = await get('/api/loans?branch=kol&from=20260401&to=20260731&bucket=month');
+  assert(chk.tallyCheck && chk.tallyCheck.asOn === '20260731' && chk.tallyCheck.compared >= 2,
+    "Tally's own closing is compared account by account when it stands on the day asked for");
+  assert(chk.tallyCheck.worst.some((w) => w.ledger === 'Citi Bank, (Kolkata)' && Math.abs(w.diff) > 1),
+    'an account that does not match Tally is NAMED, worst first, with both figures and the difference');
+  assert(chk.loans.find((l) => l.ledger === 'HDFC Term Loan').tally.diff === 0,
+    'and one that does match reports a difference of zero rather than nothing at all');
+  const noChk = await get('/api/loans?branch=kol&from=20260401&to=20260630&bucket=month');
+  assert(noChk.tallyCheck.compared === 0,
+    "but a window ending on another day is NOT compared, because Tally's closing stands on one day only");
+
   server.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall good');
   process.exit(fails ? 1 : 0);
