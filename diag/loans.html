@@ -80,6 +80,12 @@
   .tools select{padding:6px 8px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
     font-family:ui-monospace,monospace;max-width:320px}
   .tools .cnt{font-size:11.5px;color:#64748b;font-family:ui-monospace,monospace}
+  .tools .rng{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#475569;
+    border:1px solid #e2e8f0;border-radius:7px;padding:3px 7px;background:#f8fafc}
+  .tools .rng input{width:84px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;
+    font-size:11.5px;font-family:ui-monospace,monospace;min-width:0}
+  .tools .rng input.bad{border-color:#dc2626;background:#fef2f2}
+  .tools .rng .dash{color:#94a3b8}
   .tools button{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;
     font-size:11.5px;cursor:pointer;color:#475569}
   .tools button:hover{background:#f1f5f9}
@@ -330,7 +336,22 @@
   // TOTAL follows the filter -- a total that still showed the unfiltered figure would
   // be read as the answer to the filtered question.
   var TSPEC={}, TST={};
-  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{}}); }
+  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{},rng:{}}); }
+  // A range box takes what a person would actually type for these amounts. Nobody wants
+  // to count the zeroes in 15000000 to ask for "over 1.5 crore", and getting one wrong
+  // silently filters out the thing they were looking for.
+  function parseAmt(v){
+    var t=String(v==null?'':v).toLowerCase().replace(/[\s,\u20b9]/g,'');
+    if(!t) return null;
+    var m=t.match(/^(-?[0-9]*\.?[0-9]+)(cr|crore|crores|l|lac|lacs|lakh|lakhs|k)?$/);
+    if(!m) return null;
+    var n=parseFloat(m[1]); if(isNaN(n)) return null;
+    var u=m[2]||'';
+    if(u==='cr'||u==='crore'||u==='crores') n*=1e7;
+    else if(u==='l'||u==='lac'||u==='lacs'||u==='lakh'||u==='lakhs') n*=1e5;
+    else if(u==='k') n*=1e3;
+    return n;
+  }
   function cmp(a,b){
     if(typeof a==='number'&&typeof b==='number') return a-b;
     return String(a==null?'':a).localeCompare(String(b==null?'':b));
@@ -341,6 +362,23 @@
     if(q) rows=rows.filter(function(r){return sp.search(r).toLowerCase().indexOf(q)>=0;});
     (sp.filters||[]).forEach(function(f){
       var v=st.sel[f.key]; if(v) rows=rows.filter(function(r){return f.match(r,v);});
+    });
+    (sp.ranges||[]).forEach(function(g){
+      var r0=st.rng[g.key]||{}, lo=parseAmt(r0.min), hi=parseAmt(r0.max);
+      if(lo===null&&hi===null) return;
+      var col=null;
+      for(var i=0;i<sp.cols.length;i++) if(sp.cols[i].key===g.key) col=sp.cols[i];
+      var get=g.val||(col&&col.val)||function(){return 0;};
+      rows=rows.filter(function(r){
+        var v=Number(get(r))||0;
+        // "Bought for under 20 L" means an amount under 20 L, not the absence of one.
+        // Without this, asking for small purchases returned every disposal row too,
+        // because nothing bought is nought and nought is under everything.
+        if(g.skipZero&&v===0) return false;
+        if(lo!==null&&v<lo) return false;
+        if(hi!==null&&v>hi) return false;
+        return true;
+      });
     });
     if(st.sort){
       var col=null;
@@ -400,6 +438,15 @@
         h+='<option value="'+esc(o.v)+'"'+(st.sel[f.key]===o.v?' selected':'')+'>'+esc(o.label)+'</option>';
       });
       h+='</select>';
+    });
+    (spec.ranges||[]).forEach(function(g){
+      var r0=st.rng[g.key]||{};
+      h+='<span class="rng">'+esc(g.label)+' '
+       + '<input type="text" data-tbl="'+id+'" data-act="rmin" data-key="'+esc(g.key)+'" '
+       +   'placeholder="min" value="'+esc(r0.min||'')+'">'
+       + '<span class="dash">&ndash;</span>'
+       + '<input type="text" data-tbl="'+id+'" data-act="rmax" data-key="'+esc(g.key)+'" '
+       +   'placeholder="max" value="'+esc(r0.max||'')+'"></span>';
     });
     h+='<button data-tbl="'+id+'" data-act="clear">clear</button>'
      + '<span class="cnt" id="tc_'+id+'">'+esc(tCount(id))+'</span></div>'
@@ -656,6 +703,8 @@
                     {v:'sweep',label:'sweeping (OD / CC)'}],
            match:function(r,v){return v==='moved'?!!r.l.moved:(v==='debit'?!!r.l.inDebit:!!r.l.sweep);}}
         ],
+        ranges:[{key:'closing',label:'closing',val:function(r){return r.l.closing;}},
+                {key:'netChange',label:'net change',val:function(r){return r.l.netChange;}}],
         cols:[
           {key:'ledger',label:'Account',val:function(r){return r.l.ledger;},
            html:function(r){var l=r.l, hid=(l.sweep&&!gross);
@@ -799,18 +848,25 @@
     var bt=ev.target.closest&&ev.target.closest('button[data-act="clear"]');
     if(bt){
       var bid=bt.getAttribute('data-tbl'), bs=tState(bid);
-      bs.q=''; bs.sel={};
+      bs.q=''; bs.sel={}; bs.rng={};
       var inp=document.querySelector('input[data-tbl="'+bid+'"][data-act="q"]');
       if(inp) inp.value='';
       var sels=document.querySelectorAll('select[data-tbl="'+bid+'"]');
       for(var si=0;si<sels.length;si++) sels[si].value='';
+      var rgs=document.querySelectorAll('input[data-tbl="'+bid+'"][data-act^="r"]');
+      for(var gi=0;gi<rgs.length;gi++) rgs[gi].value='';
       tRefresh(bid);
     }
   });
   out.addEventListener('input',function(ev){
-    var t2=ev.target;
-    if(t2.getAttribute&&t2.getAttribute('data-act')==='q'){
+    var t2=ev.target, act=t2.getAttribute&&t2.getAttribute('data-act');
+    if(act==='q'){
       tState(t2.getAttribute('data-tbl')).q=t2.value; tRefresh(t2.getAttribute('data-tbl'));
+    } else if(act==='rmin'||act==='rmax'){
+      var id3=t2.getAttribute('data-tbl'), k3=t2.getAttribute('data-key'), st3=tState(id3);
+      (st3.rng[k3]=st3.rng[k3]||{})[act==='rmin'?'min':'max']=t2.value;
+      t2.classList.toggle('bad', t2.value!=='' && parseAmt(t2.value)===null);
+      tRefresh(id3);
     }
   });
   out.addEventListener('change',function(ev){

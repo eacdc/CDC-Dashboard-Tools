@@ -1,6 +1,30 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.73 (diag) — November 2026 — Amount ranges, and branch stops being a reload
+
+**Min/max boxes on every amount column** — *bought for*, *cash out*, *moved*, and on the
+loan page *closing* and *net change* — plus a date range on the capex lists. They take what
+a person actually types: `1.5cr`, `25L`, `50k` or plain rupees. Nobody counts the zeroes in
+15000000 to ask for "over 1.5 crore", and a miscounted one silently filters out the thing
+they were looking for; a box it cannot read turns red rather than filtering on nothing.
+
+An amount range ignores rows with no amount: *bought for under 20 L* means an amount under
+20 L, not the absence of one. Without that, asking for small purchases returned every
+disposal row as well, nought being under everything.
+
+**Branch on the capex page is now a filter rather than a query.** Both companies come down
+in one fetch and the selector narrows what is shown, so Consolidated → Kolkata → Ahmedabad
+is instant with no reload; only the dates and the floor still need *Load*. Every figure on
+that page is a sum over the rows, so narrowing the rows gives the same answer the server
+would — and that is checked, not assumed: on Consolidated the page recomputes its own
+totals and compares them against the server's, showing a red **CHECK FAILED** panel if they
+ever differ. The Excel export follows what is on screen.
+
+The loan page keeps its reload: its openings, facility split and sweep net come out of the
+movement engine and are not row sums, so they cannot be re-derived in the browser honestly.
+Its account table's own branch dropdown needs no reload.
+
 ## v2.72 (server, diag) — November 2026 — "Advance for Machinery" was not matching, and the capex cash was nearly all of it
 
 Cash out on capex read **₹83.62 L against ₹13.01 Cr of assets bought**. It looked merely
