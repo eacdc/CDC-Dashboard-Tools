@@ -27,6 +27,8 @@ npm start                      # http://localhost:3000 (needs MONGODB_URI in .en
 npm run test:sync              # incremental sync + the delete guards
 npm run test:yoy               # year-on-year fold, its API, the drill-down trees,
                                # and the Sales Analysis sections
+npm run test:proj              # what a party still owes: the receivables engine,
+                               # lifted out of the portal (projEngine.js) and run in Node
 npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
@@ -77,6 +79,21 @@ deliberate, and the fix is to update `WANTED` in `plEngine.js`, never to copy th
 expenses negative, and nothing calls `Math.abs()` on a monthly figure — reversed
 entries must net out. Growth % therefore reads cost lines by size and value lines
 signed (see the year-on-year section of `CDC_Dashboard_Logic_Reference.md`).
+
+**What a party owes is decided by the SIGN of its own posting, never by the other leg
+of the voucher.** Cr a Sundry Debtor settles a bill, Dr raises one, on every voucher
+type except the non-posting ones listed in `NOPOST`. The engine used to try to
+recognise a settlement by its contra leg — a journal counted only when a *loan* ledger
+was debited, or the other branch appeared — and an export invoice knocked off against a
+PCFC loan defeated that in four ways at once (the loan sits under Bank OD, so the
+extractor files it under `party_ledgers`; its group chain carries no loan keyword
+because `getChain` omits the ledger's own name; the type is "Journal - Export", not
+`'Journal'`; and the contra leg may be exchange difference or a bad debt). Every one of
+those left an invoice open for ever at full value. `/api/bills/audit` always netted
+allocations without a voucher-type filter, so the server and the portal disagreed, and
+the server was right. Do not reintroduce an inference from the contra leg;
+`npm run test:proj` holds each shape, and `server/projEngine.js` lifts the engine out of
+`portal/index.html` by regex so a rename fails that suite by name.
 
 **A voucher's key is `branch:guid`.** Two companies can never collide, so re-pushing
 one branch cannot overwrite the other's data. The `ledgers` vs `party_ledgers` split is

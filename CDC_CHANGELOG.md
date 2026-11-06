@@ -1,6 +1,54 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.59 (portal) — November 2026 — An invoice paid through a loan is no longer outstanding for ever
+
+**Receivables was overstating what export customers owe.** One customer read **17.45
+lakh** on the portal against **6.74 lakh** in Tally, and it was not the only one. The
+cause is the way an export bill is financed: the bank advances against the invoice
+(PCFC / packing credit), the customer's money reaches the bank, the loan is knocked off,
+and a **journal** squares the customer. No Receipt voucher is ever written — so an
+engine that only believes receipts leaves that invoice open at full value for ever.
+
+This was supposed to have been handled, and the attempt is instructive: it tried to
+*recognise* a settlement from the voucher's **other** leg — counting a journal only when
+a loan ledger was debited, or when the other branch appeared in it. A PCFC journal
+defeats that four ways at once. The packing-credit account sits under **Bank OD A/c**, so
+the extractor files it under `party_ledgers` while the test only read `ledgers`. The
+loan keywords were matched against the **group chain**, which never includes the ledger's
+own name, so "PCFC Loan 0012" under Bank OD matched none of them. The type was tested as
+`'Journal'` exactly, while every other voucher type in that file is matched by prefix, so
+"Journal - Export" fell straight through. And a realisation whose other leg is exchange
+difference, or a bad debt written off, has no loan and no branch in it at all.
+
+**So the inference is gone.** A posting to a Sundry Debtor moves that debtor's balance
+and its **sign** says which way: Cr settles a bill, Dr raises one — on every voucher
+type, carrying whatever bill references the posting holds, so the bill the journal
+**names** is the bill that closes. Creditors, mirrored. Nothing asks what the other leg
+was, because double entry already said it. This is also what `/api/bills/audit` has
+always done on the server: it nets allocations with no voucher-type filter. The portal
+was the only place that filtered, and it was the one that was wrong.
+
+Three consequences worth knowing: a journal that **debits** a customer now correctly
+*raises* what it owes (that direction was missed entirely before, understating some
+parties); a **bad debt written off** stops being outstanding, as it does in Tally; and
+renamed receipt or sales voucher types — "Receipt - Export", "GST Sales 26-27" — are now
+handled by sign instead of falling through a fixed list. Memos, reversing journals and
+the order/inventory vouchers post nothing and are excluded by name (`NOPOST`).
+
+The **cashflow actuals** tab had the same blind spot in its PCFC block and is fixed the
+same way: the loan leg is looked for in both ledger maps, the instrument is recognised by
+ledger name as well as group (`packing credit`, `bill discount`, `pcfc`, `pcre`, `wcdl`
+— deliberately *not* `bank od`, or every overdraft current account would report itself
+as a loan repayment), and journals are matched by name rather than equality. The
+branch-settlement block's skip test was widened identically, so a journal carrying both
+a loan leg and a branch leg cannot be claimed by both and counted twice.
+
+**New: `npm run test:proj`.** `server/projEngine.js` lifts the receivables engine out of
+`portal/index.html` by regex and runs it in Node — the browser's own code, not a copy of
+it — and `server/test_proj_fake.js` pins every shape above, starting with the reported
+figures to the rupee. Renaming the engine fails that suite by name, deliberately.
+
 ## v2.58 (pipeline) — November 2026 — The Tally box picks itself up after a restart
 
 **A reboot no longer stops the sync.** Until now the 30-minute sync quietly needed two
