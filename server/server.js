@@ -2461,6 +2461,13 @@ app.get('/api/capex', async (req, res) => {
     // the period it actually left.
     const flowBr = {};
     const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0, creditorNet: 0 }));
+    // AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP. The label was written at the
+    // moment the money left and never revisited, so payments for machines long since
+    // installed still read "machine not here yet". Every posting to an advance ledger is
+    // collected here -- the payments that put money in, and the credits that take it out
+    // when the machine is capitalised or set against the supplier -- and run FIFO below,
+    // so each payment is told whether its own money is still sitting there.
+    const advPost = {};
     // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
     // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
     // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
@@ -2595,7 +2602,11 @@ app.get('/api/capex', async (req, res) => {
         // An advance is an ASSET, Dr-positive: paying one makes it rise, adjusting it
         // against a delivered machine makes it fall. A creditor is a LIABILITY,
         // Cr-positive: booking a machine against it makes it rise, paying makes it fall.
-        if (pp.kind === 'advance') fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
+        if (pp.kind === 'advance') {
+          fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
+          const ak = v.branch + '|' + k;
+          (advPost[ak] || (advPost[ak] = [])).push({ date: v.date, dr: -all[k], guid: v.guid || '' });
+        }
         else if (pp.kind === 'capital_creditor') fl.creditorNet = Math.round((fl.creditorNet + all[k]) * 100) / 100;
       }
 
@@ -2692,6 +2703,32 @@ app.get('/api/capex', async (req, res) => {
       capexPartyGroups.push({ branch: p[0], kind: 'supplier', via: 'sold', group: g, ledgers: n });
     }
     capexPartyGroups.sort((a, b) => b.ledgers - a.ledgers);
+
+    // FIFO, in date order: a credit to an advance account releases the OLDEST money
+    // still sitting in it, which is how an advance account actually works -- the first
+    // proforma paid is the first machine to arrive. What is left at the end of the window
+    // is money still out against machines that have not come.
+    const advStillOpen = new Set();
+    for (const ak of Object.keys(advPost)) {
+      const list = advPost[ak].slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      const queue = [];
+      for (const pst of list) {
+        if (pst.dr > 0) { queue.push({ guid: pst.guid, left: pst.dr }); continue; }
+        let rel = -pst.dr;
+        while (rel > 0.5 && queue.length) {
+          const head = queue[0];
+          const take = Math.min(head.left, rel);
+          head.left -= take; rel -= take;
+          if (head.left <= 0.5) queue.shift();
+        }
+      }
+      // Part-released counts as still open: the machine is not here until all of it is.
+      for (const q of queue) if (q.guid) advStillOpen.add(ak + '|' + q.guid);
+    }
+    for (const r of cashRows) {
+      if (r.kind !== 'advance') continue;
+      if (!advStillOpen.has(r.branch + '|' + r.paidFor + '|' + r.guid)) r.kind = 'advance_done';
+    }
 
     cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
     const cashRoll = (keyOf, labelOf) => {

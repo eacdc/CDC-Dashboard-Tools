@@ -169,11 +169,13 @@
   // money is at, which is the thing a reader is actually asking about.
   var CASH_LABEL={asset:'paid straight for an asset',
                   advance:'advance &mdash; machine not here yet',
+                  advance_done:'advance &mdash; machine has since arrived',
                   creditor:'paid a machine supplier&rsquo;s bill',
                   capital_creditor:'machine supplier',supplier:'machine supplier'};
   // The ROLE of an account, as plain text with no entities: the matched-accounts table
   // escapes its cells, so a label carrying an &mdash; printed the entity itself.
-  var ROLE_LABEL={advance:'capital advance',capital_creditor:'machine supplier',
+  var ROLE_LABEL={advance:'capital advance',advance_done:'capital advance',
+                  capital_creditor:'machine supplier',
                   supplier:'machine supplier',creditor:'machine supplier',asset:'the asset itself'};
   // HOW WE KNEW IT WAS CAPEX. A different question from the one above, and the reason
   // two rows that are the same kind of payment can rest on very different evidence.
@@ -558,7 +560,12 @@
      + 'machine and three paper bills contributes only the machine.<br><br>'
      + '<strong>Two columns, two different questions.</strong> <em>What kind</em> is what the payment '
      + 'IS &mdash; straight for an asset, an advance before the machine arrives, or settling a machine '
-     + 'supplier&rsquo;s bill. <em>Counted because</em> is how that account was recognised as capex at '
+     + 'supplier&rsquo;s bill &mdash; and an advance says whether the machine has <strong>since '
+     + 'arrived</strong>, because an advance stops being one the day it does, and a payment made two '
+     + 'years ago for a press now running should not still read &ldquo;not here yet&rdquo;. It is worked '
+     + 'out from the advance account itself: a credit to it releases the oldest money sitting there, so '
+     + 'what is left at the end of the period is what is genuinely still out. '
+     + '<em>Counted because</em> is how that account was recognised as capex at '
      + 'all: the group Tally files it in, its own name saying machinery, or its having actually sold us '
      + 'an asset. A supplier recognised the last way is the only one restricted to the specific bill the '
      + 'asset was bought on &mdash; the other two are accounts that exist for machinery, so everything '

@@ -1,6 +1,27 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.78 (server, diag) — November 2026 — An advance stops being one when the machine turns up
+
+Payments for presses long since installed still read **"advance — machine not here yet"**.
+The label was written the day the money left and never revisited, so a 2024 proforma payment
+for a machine running on the floor today was still being reported as money out against
+something undelivered.
+
+Each advance payment is now told whether its own money is still sitting in the advance
+account. Every posting to those accounts is run **FIFO in date order** — a credit releases
+the oldest money in the account, which is how an advance account actually behaves: the first
+proforma paid is the first machine to arrive. A payment whose money has been released reads
+**"advance — machine has since arrived"**; one still out keeps the old label. Part-released
+counts as still out, because the machine is not here until all of it is.
+
+The two total separately on the cards, so *what is still out against machines that have not
+come* is a figure you can read off the page rather than work out by hand. Both filter and
+sort like any other kind.
+
+The period figure is unaffected — it was never counting payments, only the movement in the
+balances, so an advance that converts into a machine already cancelled itself there.
+
 ## v2.77 (server, diag) — November 2026 — What a payment is, and how we knew, are two different columns
 
 *"Paid a machinery supplier"* and *"paid a supplier who sold us an asset"* sat side by side
