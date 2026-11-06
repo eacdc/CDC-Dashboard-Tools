@@ -306,5 +306,66 @@ const cnNamed = { date: '20260501', type: 'Credit Note', no: 'CN/1',
 assert(near(owed([saleV, cnNamed], 'Gamma Trading'), 2500000),
   'and so does a credit note, which is the same movement under a different voucher type');
 
+// ---------------------------------------------------------------------------
+// 11. A ledger RENAMED in Tally is one party, and its money does not vanish.
+// ---------------------------------------------------------------------------
+// Vouchers keep whatever was typed at the time, so after a rename the older ones carry
+// the old spelling. The projection matched names exactly, so the two were two parties --
+// and the old one did not merely split off, it DISAPPEARED: a name in no master
+// classifies as Unclassified, which is neither a debtor nor a creditor, so its purchases
+// left payables altogether while the payments typed under the new name settled nothing.
+// The P&L tab, which normalises punctuation, had been counting that ledger correctly the
+// whole time, so the two tabs disagreed about whether the money existed.
+const AKT_NEW = 'A K Trading Paper pvt ltd';   // what Tally holds now
+const AKT_OLD = 'A.K.Trading Paper Pvt.Ltd.';  // what older vouchers say
+const xdR = {
+  groups: Object.assign({}, xd.groups, { 'Purchase Accounts': 'Revenue Account' }),
+  ledgers: { [AKT_NEW]: 'Sundry Creditors', 'Paper Purchase': 'Purchase Accounts', 'HDFC Current A/c': 'Bank Accounts' },
+  ids: { [AKT_NEW]: 'guid-akt-0001' },
+};
+function renameRun(aliasMap, xdUse) {
+  const vs = [
+    { date: '20260401', type: 'Purchase', no: 'PUR/1',
+      party_ledgers: { [AKT_OLD]: 5000000 }, ledgers: { 'Paper Purchase': -5000000 },
+      bills: [{ ledger: AKT_OLD, ref: 'PUR/1', type: 'New Ref', amount: 5000000 }] },
+    { date: '20260801', type: 'Payment', no: 'PAY/1',
+      party_ledgers: { [AKT_NEW]: -3000000, 'HDFC Current A/c': 3000000 }, ledgers: {},
+      bills: [{ ledger: AKT_NEW, ref: 'PUR/1', type: 'Agst Ref', amount: -3000000 }] },
+  ];
+  eng.window.__cdcAliases = aliasMap || {};
+  eng.canon(xdUse, vs, null);
+  const o = eng.buildProjection(vs, xdUse, eng.findIB(xdUse), [], [], AS_ON);
+  const rows = {};
+  for (const k in o.allCreditorBills) rows[k] = Math.round(o.allCreditorBills[k].outstanding);
+  return rows;
+}
+const renamed1 = renameRun(null, xdR);
+assert(Object.keys(renamed1).length === 1 && near(renamed1[AKT_NEW], 2000000),
+  'a ledger renamed in Tally is ONE party with its payment applied, without anybody merging names by hand'
+  + ' (got ' + JSON.stringify(renamed1) + ')');
+assert(!Object.prototype.hasOwnProperty.call(renamed1, AKT_OLD),
+  'and the old spelling is not a second party whose purchases sit there unpaid for ever');
+
+const renamed2 = renameRun({ [AKT_OLD]: AKT_NEW }, xdR);
+assert(Object.keys(renamed2).length === 1 && near(renamed2[AKT_NEW], 2000000),
+  'an alias the user saved by hand still does exactly the same thing, and still wins');
+
+// SAFETY: two REAL ledgers that differ only in punctuation must not be welded together.
+// Both are in the master, so neither name is missing and nothing is guessed at.
+const xdTwo = {
+  groups: xdR.groups,
+  ledgers: { [AKT_NEW]: 'Sundry Creditors', [AKT_OLD]: 'Sundry Creditors',
+    'Paper Purchase': 'Purchase Accounts', 'HDFC Current A/c': 'Bank Accounts' },
+  ids: { [AKT_NEW]: 'guid-akt-0001', [AKT_OLD]: 'guid-akt-0002' },
+};
+// Its purchase stays on the OLD ledger's own name and is NOT moved onto the new one,
+// so the payment typed against the other ledger does not settle it. That is the right
+// answer when both really exist: they are two accounts, and only a human can say
+// otherwise -- which is what the alias map is for.
+const two = renameRun(null, xdTwo);
+assert(near(two[AKT_OLD], 5000000) && !Object.prototype.hasOwnProperty.call(two, AKT_NEW),
+  'but two ledgers that BOTH exist in the master stay separate -- punctuation alone never welds them'
+  + ' (got ' + JSON.stringify(two) + ')');
+
 console.log(fails ? `\n${fails} FAILED` : '\nall good');
 process.exit(fails ? 1 : 0);

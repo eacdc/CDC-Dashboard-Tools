@@ -681,6 +681,35 @@ it, which only Tally itself can judge.
 Asking for `?asOn=` a later date is how the reason to stop uploading becomes visible —
 the vouchers carry invoices raised since the file was printed, and the file cannot.
 
+### A ledger renamed in Tally
+
+Vouchers keep whatever name was typed at the time, so after a rename the older ones carry
+the old spelling. `__cdcCanon` resolves a name in three steps:
+
+1. the saved **alias map** (`/api/aliases`) — a merge a person made always wins;
+2. the ledger's **GUID**, via `xd.ids`, which survives a rename;
+3. for a name the master no longer holds, the master ledger whose name matches once
+   **punctuation and case are ignored** (`norm()`).
+
+Step 3 is what makes an ordinary rename merge by itself. Without it
+`A.K.Trading Paper Pvt.Ltd.` and `A K Trading Paper pvt ltd` were two parties — and the
+old one's money did not merely split off, it **disappeared**: a name in no master
+classifies as `Unclassified`, which is neither a Sundry Debtor nor a Sundry Creditor, so
+its invoices left receivables/payables altogether while payments typed under the new name
+settled nothing and sat as an advance. The P&L tab normalises when it classifies, so it
+had been counting that ledger correctly all along — the two tabs disagreed about whether
+the money existed.
+
+`norm()` adds no new notion of identity: it is the same equivalence `buildLookups` /
+`findParent` already use. Two guards keep it honest — only a normalised form belonging to
+**exactly one** master ledger is used, so two real ledgers differing only in punctuation
+stay two accounts (then only a human can say otherwise, which is what the merge map is
+for); and the alias map is applied first, so a saved merge is never overruled.
+
+The server's year-on-year fold runs the same canonicaliser (lifted by `plEngine.js`), so
+Sales Analysis, `/api/clients` and the year-on-year figures merge these names too — but
+those are **stored**, so they change only after a rebuild.
+
 ### One customer, two names
 
 A party renamed in Tally — or simply entered twice under two spellings — is one

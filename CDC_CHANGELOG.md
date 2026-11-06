@@ -1,6 +1,37 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.62 (portal, server) — November 2026 — A renamed ledger is one party, and its money stops vanishing
+
+**A ledger renamed in Tally was two parties — and the old one's money disappeared.**
+Vouchers keep whatever was typed at the time, so after a rename the older ones carry the
+old spelling. The projection matched names exactly, so `A.K.Trading Paper Pvt.Ltd.` and
+`A K Trading Paper pvt ltd` were two accounts. The old one did not merely split off: a
+name the master no longer holds classifies as **Unclassified**, which is neither a Sundry
+Debtor nor a Sundry Creditor, so its purchases left payables **altogether** while the
+payments typed under the new name settled nothing and sat as an advance. Meanwhile the
+P&L tab, which normalises punctuation when it classifies, had been counting that same
+ledger correctly the whole time — so the two tabs disagreed about whether the money
+existed, and no amount of merging names by hand changed it.
+
+`__cdcCanon` now resolves a name the master does not hold to the master ledger whose name
+matches **once punctuation and case are ignored** — the same equivalence
+`buildLookups`/`findParent` already use for classification, so nothing new is asserted
+about identity. Renames of that shape merge by themselves, with nobody touching the merge
+screen.
+
+Two guards. Only a normalised form belonging to **exactly one** master ledger is used, so
+two real ledgers differing only in punctuation stay two accounts — then only a human can
+say otherwise, which is what the merge map is for. And the alias map still wins outright,
+so a merge already saved is never overruled.
+
+This touches the server too: the year-on-year fold runs the same canonicaliser
+(`plEngine.js` lifts it), so the Sales Analysis tab, `/api/clients` and the year-on-year
+figures merge these names as well — **after a rebuild**, since those are stored.
+
+Four new assertions in `npm run test:proj`, including the money that used to vanish and
+the two-real-ledgers safety case.
+
 ## v2.61 (portal) — November 2026 — A return is not an invoice
 
 **A return booked on a `Sales ...` or `Purchase ...` voucher type was added as a fresh
