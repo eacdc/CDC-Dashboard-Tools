@@ -1,6 +1,36 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.74 (server, diag) — November 2026 — A freight forwarder is not a machinery supplier
+
+Ten payments to **Emirates Logistics India Private Limited** — ₹1.76 Cr of ordinary import
+freight — were sitting in capex cash as *"paid a supplier who sold us an asset"*.
+
+They were there because the rule was too generous. Emirates' clearing charges on one import
+had been capitalised into a machine's cost, which is correct accounting; the evidence rule
+then concluded that Emirates was a machinery supplier, and counted **every** payment to them
+as capital. A party is not a category: one capitalised invoice does not make every invoice
+from that company capital.
+
+**A bill reference is exact where a party is not.** The asset purchase raises a bill against
+the supplier; a payment that settles *that* bill is capex cash, and a payment settling any
+other bill of theirs is not. Both sides are already in the vouchers, so the refs raised on
+asset vouchers are recorded and an evidence-recognised supplier now contributes only what a
+payment allocates against one of them. A payment naming no such bill contributes nothing.
+
+This narrowing applies only to suppliers recognised **by evidence**. An account kept for
+machinery suppliers or capital advances still counts in full — that group exists for
+machinery, so every rupee through it is capital.
+
+What is now excluded is stated rather than quietly dropped: the cash section reports the
+total paid to such parties against their other bills, and says why it is not in the figure.
+
+**And the page now states its own rules.** A new *How this page decides* section sets out all
+five — what counts as an asset, bought versus sold, moved rather than bought, what counts as
+capex cash, and what is never cash. The rules had accumulated to the point where they were
+not guessable from the figures, which is a thing the page should say rather than a thing to
+be asked.
+
 ## v2.73 (diag) — November 2026 — Amount ranges, and branch stops being a reload
 
 **Min/max boxes on every amount column** — *bought for*, *cash out*, *moved*, and on the

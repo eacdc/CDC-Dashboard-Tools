@@ -453,7 +453,8 @@
     if(!j.rows.length){
       h+='<section><h2>NOTHING TO SHOW</h2><div class="body"><div class="note">'
        + esc(j.note||'No fixed-asset purchase in this window.')+'</div></div></section>';
-      out.innerHTML=h; return;
+
+    out.innerHTML=h; return;
     }
     var cash=0; for(var f=0;f<j.byFunding.length;f++) if(j.byFunding[f].key==='cash') cash=j.byFunding[f].spend;
 
@@ -496,6 +497,14 @@
      + 'or OD account, counting the part of it that went to an asset, to a supplier of machinery, or as an '
      + '<strong>advance against a machine that has not arrived yet</strong>. A payment run that settles one '
      + 'machine and three paper bills contributes only the machine.</div>';
+    if(j.unmatchedSupplier>0){
+      h+='<div class="note"><strong>'+esc(rupees(j.unmatchedSupplier))+' is deliberately NOT in that '
+       + 'figure.</strong> It went to parties that did sell us an asset at some point &mdash; a freight '
+       + 'forwarder whose clearing charges on one import were capitalised into a machine, say &mdash; but '
+       + 'against their <em>other</em> bills. A party is not a category: one capitalised invoice does not '
+       + 'make every invoice from that company capital. Only a payment settling the bill the asset was '
+       + 'actually bought on is counted.</div>';
+    }
     if(j.cashByMonth&&j.cashByMonth.length) h+=monthChart(j.cashByMonth);
     if(cr.length){
       h+=tHtml('cash',{
@@ -731,6 +740,28 @@
         })
        + '</div></section>';
     }
+
+      h+='<section><h2>HOW THIS PAGE DECIDES</h2><div class="body">'
+     + '<div class="note" style="line-height:1.75">'
+     + '<strong>1. What counts as an asset.</strong> The group Tally files the ledger in &mdash; anything '
+     + 'under <em>Fixed Assets</em>, plus capital work in progress. Read top-down: if a payables, '
+     + 'receivables or bank group comes first, nothing below it is an asset however the sub-group is '
+     + 'named. That is why <em>Sundry Creditor - Fixed Assets</em> holds suppliers, not assets.<br>'
+     + '<strong>2. Bought or sold.</strong> A debit to an asset is a purchase, a credit is a disposal, and '
+     + 'the two are never netted. Depreciation and repairs are expenses. An accumulated-depreciation '
+     + 'ledger is excluded by name: writing an asset down is not buying one.<br>'
+     + '<strong>3. Moved, not bought.</strong> Where one voucher debits one asset and credits another &mdash; '
+     + 'capitalising work in progress &mdash; that much is a transfer and is in neither figure.<br>'
+     + '<strong>4. What counts as capex CASH.</strong> Followed on the payment voucher, never the '
+     + 'capitalisation, because a machine is paid for long before it is capitalised. Any voucher that '
+     + 'credits a bank, cash or OD account contributes whatever it debited to: an asset; an account kept '
+     + 'for machinery suppliers or capital advances (recognised from its group, listed above); or a party '
+     + 'that sold us an asset &mdash; and for that last one, <strong>only against the bill the asset was '
+     + 'bought on</strong>. The debits are read, not the bank total, so a payment run settling one machine '
+     + 'and three paper bills contributes only the machine.<br>'
+     + '<strong>5. What is never cash.</strong> Selling an asset (that is a disposal, not negative spend), '
+     + 'a capitalisation journal (no money moves), and a bill that has not been paid yet.'
+     + '</div></div></section>';
 
     out.innerHTML=h;
     var marks=out.querySelectorAll('[data-tip]');
