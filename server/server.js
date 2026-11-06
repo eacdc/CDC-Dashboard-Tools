@@ -1970,7 +1970,10 @@ app.get('/api/yoy/vouchers', async (req, res) => {
       { $match: { _k: { $in: names } } },
       { $sort: { date: 1 } },
       { $limit: limit + 1 },
-      { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, narration: 1, guid: 1, ledgers: 1, party_ledgers: 1 } },
+      // Same correction as /api/capex: narration is details.narration, so asking for a
+      // top-level `narration` returned blank for every voucher this endpoint has served.
+      { $project: { _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
+        narration: '$details.narration', ledgers: 1, party_ledgers: 1 } },
     ], { allowDiskUse: true }).toArray();
 
     const truncated = rows.length > limit;
@@ -2250,7 +2253,11 @@ app.get('/api/capex', async (req, res) => {
     const match = { date: { $gte: from, $lte: to }, ...LIVE_ONLY };
     if (branch !== 'all') match.branch = branch;
     const vs = await db.collection('vouchers').find(match)
-      .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, narration: 1, guid: 1,
+      // NARRATION IS NOT A TOP-LEVEL FIELD. The extractor puts it inside `details`
+      // (details.narration), so projecting `narration: 1` asks for a field no voucher
+      // has and every row comes back blank -- which is exactly how it shipped.
+      .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
+        'details.narration': 1, 'details.reference': 1, 'details.partyName': 1,
         ledgers: 1, party_ledgers: 1 })
       .toArray();
 
@@ -2290,8 +2297,11 @@ app.get('/api/capex', async (req, res) => {
         if (sold) disposals = Math.round((disposals + sold) * 100) / 100;
         rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln],
           spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
-          no: v.no || '', type: v.type || '', party: v.party || '',
-          narration: (v.narration || '').slice(0, 300), guid: v.guid || '',
+          no: v.no || '', type: v.type || '',
+          party: v.party || ((v.details || {}).partyName) || '',
+          narration: (((v.details || {}).narration) || '').slice(0, 300),
+          reference: ((v.details || {}).reference) || '',
+          guid: v.guid || '',
           funded: spend ? funded : 'disposal' });
       }
     }
