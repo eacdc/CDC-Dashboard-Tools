@@ -266,6 +266,60 @@ party on it.
 
 ---
 
+## LOAN MOVEMENT (`/diag/loans.html`, `GET /api/loans`)
+
+A borrowing statement: **opening + drawn − repaid = closing**, per loan account, per day,
+week or month, with each period's closing carried into the next so the page reads straight
+down and can be checked against Tally at any date in it.
+
+**Cr-positive, and only here.** A loan is a liability, so money borrowed is Cr (+ve) and
+money repaid is Dr (−ve). This report shows a loan outstanding as a **positive** number —
+the opposite of the Dr-positive scale the receivables code uses. That is deliberate: a
+page reading *"loan outstanding: −1,62,00,000"* gets misread. The response carries `scale`
+and `scaleNote` so no caller has to infer it.
+
+**Which ledgers are borrowings.** By the group Tally itself put them in first:
+
+| Group contains | Kind |
+|---|---|
+| `bank od`, `bank occ` | OD / CC / packing credit |
+| `unsecured loans` | Unsecured loans |
+| `secured loans` | Secured loans |
+| `loans (liability)` | Other borrowings |
+
+That list is **ordered, and must not be sorted**: `'unsecured loans'` contains
+`'secured loans'`, so the wrong order labels every director's loan as secured debt. A test
+fails by name if it changes.
+
+Then by **ledger name**, but only for a ledger that is already a liability: packing credit,
+cash credit, overdraft, bill discount, PCFC, PCRE, WCDL, term loan, buyer's credit. Reading
+the name matters because `getChain` returns the *group* chain and never the ledger's own
+name — which is precisely how "PCFC Loan 0012" under Bank OD A/c matched no loan keyword
+and stayed invisible to the cashflow tab for a year.
+
+Never counted: `Loans & Advances (Asset)` (money *we* lent), banks, cash, debtors,
+creditors, taxes, branches. A ledger whose **name** says borrowing but whose group says
+otherwise — "Term Loan Interest" under Indirect Expenses — is returned under `nearMisses`
+and shown on the page. A loan missing from a loan report is the one error nobody would
+spot, so it is named rather than dropped.
+
+**Both ledger maps are read.** A packing credit sits under Bank OD A/c, which the extractor
+files into `party_ledgers`, while a secured loan lands in `ledgers`.
+
+**The opening** is Tally's own (`masters.opening`, stored Tally-raw so a liability is +ve)
+on the day it stands, plus every posting between that day and the window start — and
+**minus** any posting inside the window but *before* that day, because the opening already
+contains it and it would otherwise be counted twice. A branch whose openings were never
+pulled gets movement, and `notes` says so rather than letting it read as a balance.
+
+**Drawdowns and repayments are never netted**, not even within one day: that is how an OD
+account behaves, and netting would report a day of heavy churn as a day on which nothing
+happened.
+
+The arithmetic is in `server/loanMovement.js` and has no database in it, so
+`npm run test:loans` drives it directly; `/api/loans` is a thin adapter. A request spanning
+more than 800 periods is refused, naming the bucket to use instead.
+
 ## KEY SIGN CONVENTIONS (Tally JSON)
 
 | Context | Positive (Dr) | Negative (Cr) |

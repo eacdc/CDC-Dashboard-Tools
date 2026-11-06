@@ -12,6 +12,7 @@ const { ingest, resetBranch, getSyncState, syncIncremental, readMaster } = requi
 const { suggestAliases, newProfiles, addVoucher, finalizeProfiles } = require('./aliasSuggest');
 const yoy = require('./yoySummary');
 const E = require('./plEngine');
+const LM = require('./loanMovement');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -1986,6 +1987,139 @@ app.get('/api/yoy/vouchers', async (req, res) => {
       delete r.ledgers; delete r.party_ledgers;
     }
     res.json({ ledger, branch, from, to, names, exact, count: rows.length, truncated, vouchers: rows });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/loans?branch=all|kol|ahm&from=YYYYMMDD&to=YYYYMMDD&bucket=day|week|month
+// Opening, drawdowns, repayments and closing for every borrowing account -- secured and
+// unsecured loans, OD/CC, packing credit, PCFC, bill discounting, term loans -- as a
+// running statement where each period's closing is the next one's opening.
+//
+// Cr-POSITIVE throughout: a loan outstanding is a POSITIVE number, `drawn` adds to it,
+// `repaid` subtracts. The receivables code is Dr-positive; a loan report on that scale
+// reads "outstanding: -1,62,00,000" and gets misread, so it is flipped here and said so
+// in the response.
+//
+// Both ledger maps are read. A packing credit sits under Bank OD A/c, which the
+// extractor files under `party_ledgers`, while a secured loan lands in `ledgers` --
+// looking in only one of them is how PCFC accounts stayed invisible for a year.
+//
+// The arithmetic is in loanMovement.js and has no database in it; this is the adapter.
+app.get('/api/loans', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const bucket = ['day', 'week', 'month'].includes(String(req.query.bucket)) ? String(req.query.bucket) : 'month';
+    const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : null;
+    const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : null;
+    if (!from || !to) return res.status(400).json({ ok: false, error: 'from and to are required as YYYYMMDD' });
+    if (to < from) return res.status(400).json({ ok: false, error: `to (${to}) is before from (${from})` });
+    // A day-by-day statement over a decade is 3,650 columns nobody reads and a response
+    // nobody can hold. The cap names itself so the caller can widen the bucket instead.
+    const span = LM.bucketsBetween(from, to, bucket).length;
+    if (span > 800) {
+      return res.status(400).json({ ok: false,
+        error: `${span} ${bucket} periods is too many to return at once (max 800). Use bucket=week or bucket=month, or a shorter window.` });
+    }
+
+    const db = await getDb();
+    const xd = await mergedHierarchy(db);
+    const lu = E.buildLookups(xd);
+    const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
+
+    // Which ledgers are borrowings, by the group Tally itself put them in.
+    const ledgerMeta = {};
+    const nearMisses = [];
+    for (const ln of Object.keys(xd.ledgers)) {
+      const chain = E.getChain(ln, xd, lu);
+      const kind = LM.loanKind(ln, chain);
+      if (kind) {
+        ledgerMeta[ln] = { kind, group: chain.join(' > '), branches: [] };
+      } else if (LM.nearMiss(ln, chain)) {
+        nearMisses.push({ ledger: ln, group: chain.join(' > ') });
+      }
+    }
+    // The vouchers keep whatever name was typed, so an account renamed in Tally is asked
+    // for under every spelling merged into it -- the same rule /api/yoy/vouchers follows.
+    const aliases = await readAliasMap(db);
+    const nameOf = {};                       // raw voucher name -> canonical loan ledger
+    for (const ln of Object.keys(ledgerMeta)) for (const v of aliasVariants(aliases, ln)) nameOf[v] = ln;
+    const wanted = Object.keys(nameOf);
+
+    if (!wanted.length) {
+      return res.json({ ok: true, branch, bucket, from, to, scale: 'cr-positive',
+        loans: [], periods: [], byKind: [], total: { opening: 0, drawn: 0, repaid: 0, closing: 0 },
+        nearMisses,
+        note: 'No ledger in either company sits under a loan group (Secured Loans, Unsecured Loans, Bank OD/OCC, Loans (Liability)). Either nothing is borrowed, or the masters have not been pulled -- /api/meta says which.' });
+    }
+
+    // The openings Tally itself carries, on the day they stand. Cr-positive, so they are
+    // taken as stored: `masters.opening` is Tally-raw, where a liability is +ve.
+    const openings = {};
+    for (const br of branches) {
+      const mm = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const seen = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
+      const asOn = (seen.length === 1 && DATE8.test(seen[0])) ? seen[0] : null;
+      const amounts = {};
+      if (asOn && mm && mm.opening) {
+        for (const raw of Object.keys(mm.opening)) {
+          const canon = nameOf[raw];
+          if (canon && mm.opening[raw]) amounts[canon] = (amounts[canon] || 0) + mm.opening[raw];
+        }
+      }
+      openings[br] = { asOn, amounts };
+    }
+
+    // Rows must reach back to whichever is earlier: the window start, or the day the
+    // openings stand on. Both directions matter -- see buildLoanMovement.
+    let queryFrom = from;
+    for (const br of branches) {
+      const a = openings[br].asOn;
+      if (a && a < queryFrom) queryFrom = a;
+    }
+    const match = { date: { $gte: queryFrom, $lte: to }, ...LIVE_ONLY };
+    if (branch !== 'all') match.branch = branch;
+    const raw = await db.collection('vouchers').aggregate([
+      { $match: match },
+      { $project: { branch: 1, date: 1, kv: { $concatArrays: [
+        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+      { $unwind: '$kv' },
+      { $match: { 'kv.k': { $in: wanted } } },
+      { $group: { _id: { k: '$kv.k', d: '$date', b: '$branch' },
+        // +ve = Cr = borrowed; -ve = Dr = repaid. Kept apart rather than netted, or a
+        // drawdown and a repayment on the same day would cancel and both would vanish
+        // from a report whose whole subject is the two of them.
+        drawn: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } },
+        repaid: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, { $multiply: ['$kv.v', -1] }, 0] } } } },
+    ], { allowDiskUse: true }).toArray();
+
+    const rows = [];
+    for (const r of raw) {
+      const canon = nameOf[r._id.k];
+      if (!canon) continue;
+      const br = r._id.b;
+      const meta = ledgerMeta[canon];
+      if (meta && br && meta.branches.indexOf(br) < 0) meta.branches.push(br);
+      rows.push({ ledger: canon, branch: br, date: String(r._id.d || ''),
+        drawn: r.drawn || 0, repaid: r.repaid || 0 });
+    }
+
+    const out = LM.buildLoanMovement({ ledgerMeta, openings, rows, from, to, bucket });
+    // What the figures do and do not rest on, said rather than assumed. A branch whose
+    // openings never arrived gives movement, not a balance, and that has to be on the
+    // page and not in a comment here.
+    const notes = [];
+    for (const br of branches) {
+      if (!openings[br].asOn) {
+        notes.push(`${br}: Tally's opening balances have not been pulled (or the day they stand on is ambiguous), so the opening shown is the movement held before ${from}, not a balance. Run the pipeline once and ask again.`);
+      }
+    }
+    if (nearMisses.length) {
+      notes.push(`${nearMisses.length} ledger(s) are NAMED like a borrowing but are not under a loan group, so they are NOT counted: ${nearMisses.slice(0, 8).map((x) => `"${x.ledger}" (${x.group})`).join(', ')}. If one of those is a real loan, move it under a loan group in Tally or tell us.`);
+    }
+    res.json({ ok: true, branch, scale: 'cr-positive',
+      scaleNote: 'A loan outstanding is POSITIVE. drawn = borrowed (Cr), repaid = paid back (Dr). closing = opening + drawn - repaid.',
+      ...out, nearMisses, notes });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

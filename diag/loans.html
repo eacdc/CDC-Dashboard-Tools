@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDC &middot; Loan movement &mdash; opening, drawn, repaid, closing</title>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--ink:#0f172a;--dim:#64748b;--teal:#0f766e;--red:#dc2626;--amber:#b45309;--green:#15803d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{margin:0;font-size:16px}
+  .sub{font-size:12px;color:var(--dim);margin-top:3px}
+  main{padding:18px 20px;max-width:1500px}
+  button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--teal);
+         background:var(--teal);color:#fff;cursor:pointer;font-weight:600}
+  button.ghost{background:#fff;color:var(--teal)}
+  button:disabled{opacity:.55;cursor:progress}
+  input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:16px;overflow:hidden}
+  h2{margin:0;padding:10px 14px;font-size:12.5px;background:#f1f5f9;border-bottom:1px solid var(--line);
+     font-family:ui-monospace,monospace;letter-spacing:.03em;color:#334155}
+  .body{padding:12px 14px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--dim);
+     font-family:ui-monospace,monospace;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th.num{text-align:right}
+  td{padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  td.num{text-align:right;font-family:ui-monospace,monospace;white-space:nowrap}
+  tr.tot td{font-weight:700;background:#f8fafc;border-top:2px solid var(--line)}
+  tr.sub td{background:#f8fafc;font-weight:600}
+  tr.quiet td{color:#94a3b8}
+  .mono{font-family:ui-monospace,monospace}
+  .muted{color:var(--dim)}
+  .note{font-size:12px;color:var(--dim)}
+  .err{color:var(--red);font-family:ui-monospace,monospace;font-size:12.5px}
+  .warn{background:#fef3c7;border:1px solid #fcd34d;color:#78350f;padding:10px 12px;border-radius:8px;
+        font-size:12.5px;margin-bottom:10px;line-height:1.5}
+  .cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .card{flex:1;min-width:170px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fff}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-family:ui-monospace,monospace}
+  .card .v{font-size:19px;font-weight:700;font-family:ui-monospace,monospace;margin-top:3px}
+  .card.up .v{color:var(--red)}
+  .card.down .v{color:var(--green)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .pill{display:inline-block;font-size:10.5px;font-family:ui-monospace,monospace;padding:1px 6px;
+        border-radius:999px;background:#f1f5f9;color:#475569;margin-left:5px}
+  .ex{cursor:pointer;color:var(--teal);font-weight:600}
+  a{color:var(--teal)}
+  .zero{color:#cbd5e1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Loan movement &mdash; opening, drawn, repaid, closing</h1>
+  <div class="sub">Every borrowing account in both companies: secured and unsecured loans, OD and CC, packing credit,
+    PCFC, bill discounting, term loans. Each period&rsquo;s closing is the next one&rsquo;s opening, so the statement
+    can be read straight down and checked against Tally at any date in it. A loan outstanding is shown as a
+    <strong>positive</strong> number &mdash; <span class="mono">drawn</span> adds to it,
+    <span class="mono">repaid</span> takes it away
+    &middot; <a href="./">the party explainer</a> &middot; <a href="./clients.html">every client</a></div>
+</header>
+<main>
+  <section><h2>WHICH BORROWINGS, OVER WHAT PERIOD</h2><div class="body">
+    <div class="row">
+      <label>branch
+        <select id="branch">
+          <option value="all">Consolidated</option>
+          <option value="kol">Kolkata</option>
+          <option value="ahm">Ahmedabad</option>
+        </select>
+      </label>
+      <label>from <input id="from" size="10" placeholder="YYYYMMDD"></label>
+      <label>to <input id="to" size="10" placeholder="YYYYMMDD"></label>
+      <label>per
+        <select id="bucket">
+          <option value="month">Month</option>
+          <option value="week">Week (Mon&ndash;Sun)</option>
+          <option value="day">Day</option>
+        </select>
+      </label>
+      <button id="go">Load</button>
+      <button id="xl" class="ghost" disabled>&#11015; Excel</button>
+    </div>
+    <div class="note">Which ledgers count is decided by the group Tally itself put them in &mdash; Secured Loans,
+      Unsecured Loans, Bank OD/OCC, Loans (Liability) &mdash; plus a ledger under Current Liabilities whose
+      <em>name</em> says packing credit, PCFC, cash credit, bill discounting, WCDL, term loan or buyer&rsquo;s credit.
+      Money <em>we</em> lent out (Loans &amp; Advances) is never counted, and a ledger named like a loan but grouped
+      elsewhere is listed as a near miss rather than silently dropped.</div>
+    <div id="err" class="err" style="margin-top:8px"></div>
+  </div></section>
+  <div id="out"></div>
+</main>
+<script src="../vendor/xlsx.full.min.js"></script>
+<script>
+(function(){
+  // Vendored and served from this origin -- the office network cannot reach a CDN, and a
+  // page that silently does nothing is worse than one that says why.
+  if(!window.XLSX){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    document.head.appendChild(s);
+  }
+  var $=function(id){return document.getElementById(id);};
+  var out=$('out'), err=$('err');
+  var loaded=null, openRows={};
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  // Indian grouping, because every figure here is read beside Tally, which does the same.
+  function rupees(n){
+    var v=Math.round((n||0)*100)/100, neg=v<0, a=Math.abs(v);
+    a=(Math.round(a*100)%100)?a.toFixed(2):String(Math.round(a));
+    var p=a.split('.'), i=p[0];
+    var last3=i.slice(-3), rest=i.slice(0,-3);
+    if(rest) last3=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+','+last3;
+    return (neg?'-':'')+'₹'+last3+(p[1]?'.'+p[1]:'');
+  }
+  function money(n){ return (Math.abs(n||0)<0.5) ? '<span class="zero">&mdash;</span>' : esc(rupees(n)); }
+  function fmt8(d){if(!d||d.length<8)return d||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+  function ymd(d){return String(d.getFullYear())+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
+
+  // Default window: this financial year to date. April starts the year here.
+  (function(){
+    var now=new Date(), y=now.getFullYear();
+    if(now.getMonth()<3) y-=1;
+    $('from').value=String(y)+'0401';
+    $('to').value=ymd(now);
+  })();
+
+  function load(){
+    err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
+    $('go').disabled=true; $('xl').disabled=true; openRows={};
+    var q='/api/loans?branch='+encodeURIComponent($('branch').value)
+         +'&from='+encodeURIComponent($('from').value.trim())
+         +'&to='+encodeURIComponent($('to').value.trim())
+         +'&bucket='+encodeURIComponent($('bucket').value);
+    fetch(q).then(function(r){return r.json();}).then(function(j){
+      $('go').disabled=false;
+      if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
+      loaded=j; $('xl').disabled=false;
+      render(j);
+    }).catch(function(e){
+      $('go').disabled=false; out.innerHTML='';
+      err.textContent=e.message;
+    });
+  }
+
+  // One voucher-level drill-down, so a figure that looks wrong can be opened rather
+  // than argued about. /api/yoy/vouchers lists what actually hit the account.
+  function vchLink(ledger,from,to){
+    return '/api/yoy/vouchers?branch='+encodeURIComponent($('branch').value)
+         +'&ledger='+encodeURIComponent(ledger)+'&from='+from+'&to='+to;
+  }
+
+  function periodTable(periods, ledger){
+    var h='<div class="scroll"><table><thead><tr>'
+      + '<th>Period</th><th class="num">Opening</th><th class="num">Drawn (+)</th>'
+      + '<th class="num">Repaid (&minus;)</th><th class="num">Closing</th><th class="num">Change</th><th></th></tr></thead><tbody>';
+    for(var i=0;i<periods.length;i++){
+      var p=periods[i], ch=p.closing-p.opening, quiet=(!p.drawn&&!p.repaid);
+      h+='<tr'+(quiet?' class="quiet"':'')+'><td class="mono">'+esc(p.label)+'</td>'
+       + '<td class="num">'+money(p.opening)+'</td>'
+       + '<td class="num">'+money(p.drawn)+'</td>'
+       + '<td class="num">'+money(p.repaid)+'</td>'
+       + '<td class="num"><strong>'+money(p.closing)+'</strong></td>'
+       + '<td class="num">'+(Math.abs(ch)<0.5?'<span class="zero">&mdash;</span>':(ch>0?'<span style="color:var(--red)">+':'<span style="color:var(--green)">')+esc(rupees(ch))+'</span>')+'</td>'
+       + '<td>'+(ledger&&!quiet?('<a target="_blank" href="'+esc(vchLink(ledger,periodFrom(p),periodTo(p)))+'">vouchers</a>'):'')+'</td></tr>';
+    }
+    return h+'</tbody></table></div>';
+  }
+  // The dates a period covers, for the drill-down link. A month key is YYYYMM; a week
+  // and a day key are both the first date of the period.
+  function periodFrom(p){ return (p.key.length===6)?(p.key+'01'):p.key; }
+  function periodTo(p){
+    if(p.key.length===6){ var y=+p.key.slice(0,4), m=+p.key.slice(4,6);
+      var d=new Date(Date.UTC(y, m, 0)); return p.key+('0'+d.getUTCDate()).slice(-2); }
+    if($('bucket').value==='week'){
+      var dd=new Date(Date.UTC(+p.key.slice(0,4), +p.key.slice(4,6)-1, +p.key.slice(6,8)));
+      dd.setUTCDate(dd.getUTCDate()+6);
+      return String(dd.getUTCFullYear())+('0'+(dd.getUTCMonth()+1)).slice(-2)+('0'+dd.getUTCDate()).slice(-2);
+    }
+    return p.key;
+  }
+
+  function render(j){
+    var h='';
+    // What the figures rest on, before any figure is shown. An opening that is really
+    // just "the movement we hold" must not be read as a balance.
+    if(j.notes&&j.notes.length) for(var n=0;n<j.notes.length;n++) h+='<div class="warn">'+esc(j.notes[n])+'</div>';
+
+    if(!j.loans.length){
+      h+='<section><h2>NOTHING TO SHOW</h2><div class="body"><div class="note">'
+       + esc(j.note||'No borrowing account was found in this window.')+'</div></div></section>';
+      out.innerHTML=h; return;
+    }
+
+    var t=j.total, net=t.closing-t.opening;
+    h+='<section><h2>'+esc(j.from)+' TO '+esc(j.to)+' &middot; '+esc(String(j.bucket).toUpperCase())
+     + ' &middot; '+j.loans.length+' ACCOUNT(S)</h2><div class="body">'
+     + '<div class="cards">'
+     + '<div class="card"><div class="k">Opening</div><div class="v">'+esc(rupees(t.opening))+'</div></div>'
+     + '<div class="card up"><div class="k">Drawn</div><div class="v">+'+esc(rupees(t.drawn))+'</div></div>'
+     + '<div class="card down"><div class="k">Repaid</div><div class="v">&minus;'+esc(rupees(t.repaid))+'</div></div>'
+     + '<div class="card"><div class="k">Closing</div><div class="v">'+esc(rupees(t.closing))+'</div></div>'
+     + '<div class="card '+(net>0?'up':'down')+'"><div class="k">Net borrowing '+(net>0?'up':'down')+'</div>'
+     + '<div class="v">'+(net>0?'+':'')+esc(rupees(net))+'</div></div>'
+     + '</div>'
+     + '<div class="note">'+esc(j.scaleNote)
+     + ' Opening is Tally&rsquo;s own opening balance plus every posting between the day it stands on and '
+     + esc(fmt8(j.from))+'.</div>'
+     + '</div></section>';
+
+    // All borrowings together, period by period.
+    h+='<section><h2>ALL BORROWINGS, PERIOD BY PERIOD</h2><div class="body">'
+     + periodTable(j.periods,null)
+     + '<div class="note" style="margin-top:8px">Each closing is the next row&rsquo;s opening. A period with no '
+     + 'movement is still listed, carrying the balance &mdash; a statement that skipped a quiet month would read as if '
+     + 'the loan had gone away.</div></div></section>';
+
+    // By kind.
+    h+='<section><h2>BY KIND OF BORROWING</h2><div class="body"><div class="scroll"><table><thead><tr>'
+     + '<th>Kind</th><th class="num">Accounts</th><th class="num">Opening</th><th class="num">Drawn</th>'
+     + '<th class="num">Repaid</th><th class="num">Closing</th></tr></thead><tbody>';
+    for(var k=0;k<j.byKind.length;k++){ var b=j.byKind[k];
+      h+='<tr><td>'+esc(b.kindLabel)+'</td><td class="num">'+b.count+'</td>'
+       + '<td class="num">'+money(b.opening)+'</td><td class="num">'+money(b.drawn)+'</td>'
+       + '<td class="num">'+money(b.repaid)+'</td><td class="num"><strong>'+money(b.closing)+'</strong></td></tr>';
+    }
+    h+='<tr class="tot"><td>All borrowings</td><td class="num">'+j.loans.length+'</td>'
+     + '<td class="num">'+money(t.opening)+'</td><td class="num">'+money(t.drawn)+'</td>'
+     + '<td class="num">'+money(t.repaid)+'</td><td class="num">'+money(t.closing)+'</td></tr>'
+     + '</tbody></table></div></div></section>';
+
+    // Account by account, each expandable into its own statement.
+    h+='<section><h2>ACCOUNT BY ACCOUNT</h2><div class="body"><div class="scroll"><table><thead><tr>'
+     + '<th>Account</th><th>Kind</th><th>Group</th><th>Branch</th><th class="num">Opening</th>'
+     + '<th class="num">Drawn</th><th class="num">Repaid</th><th class="num">Closing</th><th></th>'
+     + '</tr></thead><tbody>';
+    for(var i=0;i<j.loans.length;i++){ var l=j.loans[i];
+      h+='<tr'+(l.moved||Math.abs(l.closing)>=0.5?'':' class="quiet"')+'>'
+       + '<td><span class="ex" data-i="'+i+'">&#9656; '+esc(l.ledger)+'</span></td>'
+       + '<td>'+esc(l.kindLabel)+'</td><td class="muted" style="font-size:11.5px">'+esc(l.group)+'</td>'
+       + '<td class="mono">'+esc((l.branches||[]).join(', ')||'&mdash;')+'</td>'
+       + '<td class="num">'+money(l.opening)+'</td><td class="num">'+money(l.drawn)+'</td>'
+       + '<td class="num">'+money(l.repaid)+'</td><td class="num"><strong>'+money(l.closing)+'</strong></td>'
+       + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to))+'">vouchers</a></td></tr>'
+       + '<tr id="ex'+i+'" style="display:none"><td colspan="9" style="background:#fbfdfe">'
+       + periodTable(l.periods,l.ledger)+'</td></tr>';
+    }
+    h+='<tr class="tot"><td colspan="4">All borrowings</td>'
+     + '<td class="num">'+money(t.opening)+'</td><td class="num">'+money(t.drawn)+'</td>'
+     + '<td class="num">'+money(t.repaid)+'</td><td class="num">'+money(t.closing)+'</td><td></td></tr>'
+     + '</tbody></table></div></div></section>';
+
+    if(j.nearMisses&&j.nearMisses.length){
+      h+='<section><h2>NAMED LIKE A BORROWING, BUT NOT COUNTED</h2><div class="body">'
+       + '<div class="note">These are not under a loan group, so they are left out of every figure above. '
+       + 'If one of them is a real facility, move it under a loan group in Tally.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Ledger</th><th>Group it is actually under</th></tr></thead><tbody>';
+      for(var m=0;m<j.nearMisses.length;m++){
+        h+='<tr><td>'+esc(j.nearMisses[m].ledger)+'</td><td class="muted">'+esc(j.nearMisses[m].group)+'</td></tr>';
+      }
+      h+='</tbody></table></div></div></section>';
+    }
+
+    out.innerHTML=h;
+    var exs=out.querySelectorAll('.ex');
+    for(var e2=0;e2<exs.length;e2++){
+      exs[e2].addEventListener('click',function(){
+        var i=this.getAttribute('data-i'), row=$('ex'+i);
+        var on=row.style.display==='none';
+        row.style.display=on?'':'none';
+        this.innerHTML=(on?'&#9662; ':'&#9656; ')+esc(loaded.loans[+i].ledger);
+      });
+    }
+  }
+
+  // The workbook: one sheet per view, so a statement can be mailed to a bank or put
+  // beside Tally in another window without anyone retyping it.
+  function excel(){
+    if(!loaded||!window.XLSX) return;
+    var j=loaded, wb=XLSX.utils.book_new();
+    var head=['Period','Opening','Drawn','Repaid','Closing'];
+    var all=[head];
+    for(var i=0;i<j.periods.length;i++){ var p=j.periods[i];
+      all.push([p.label,p.opening,p.drawn,p.repaid,p.closing]); }
+    all.push(['TOTAL',j.total.opening,j.total.drawn,j.total.repaid,j.total.closing]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(all),'All borrowings');
+
+    var acc=[['Account','Kind','Group','Branch','Opening','Drawn','Repaid','Closing']];
+    for(var a=0;a<j.loans.length;a++){ var l=j.loans[a];
+      acc.push([l.ledger,l.kindLabel,l.group,(l.branches||[]).join(' '),l.opening,l.drawn,l.repaid,l.closing]); }
+    acc.push(['ALL','','','',j.total.opening,j.total.drawn,j.total.repaid,j.total.closing]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(acc),'Accounts');
+
+    // Every account's own statement, one block after another, so nothing is lost.
+    var det=[['Account','Period','Opening','Drawn','Repaid','Closing']];
+    for(var b=0;b<j.loans.length;b++){ var L=j.loans[b];
+      for(var c=0;c<L.periods.length;c++){ var q=L.periods[c];
+        det.push([L.ledger,q.label,q.opening,q.drawn,q.repaid,q.closing]); } }
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(det),'Per account per period');
+
+    var d=new Date();
+    XLSX.writeFile(wb,'CDC_Loans_'+j.branch+'_'+j.bucket+'_'+j.from+'_'+j.to+'_'
+      +ymd(d)+'.xlsx');
+  }
+
+  $('go').addEventListener('click',load);
+  $('xl').addEventListener('click',excel);
+  load();
+})();
+</script>
+</body>
+</html>

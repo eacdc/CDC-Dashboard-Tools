@@ -29,6 +29,7 @@ npm run test:yoy               # year-on-year fold, its API, the drill-down tree
                                # and the Sales Analysis sections
 npm run test:proj              # what a party still owes: the receivables engine,
                                # lifted out of the portal (projEngine.js) and run in Node
+npm run test:loans             # loan movement arithmetic, and /api/loans end to end
 npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
@@ -266,6 +267,30 @@ First/last sale dates come from `branch|sales|seen`, written per FY in the fold'
 pass; PAN/address/state/country come from a separate `LedgerDetail` request in
 `TallyToJson.ps1`, kept separate so an unrecognised field name cannot take the daily
 voucher sync down.
+
+`/diag/loans.html` is the borrowing statement: opening, drawn, repaid and closing for every
+loan account, by day, week or month, with each period's closing carried into the next so it
+can be read straight down and checked against Tally at any date in it. It is
+**Cr-positive** -- a loan outstanding is a POSITIVE number, the opposite of the Dr-positive
+scale the receivables code uses, because "outstanding: -1,62,00,000" is a figure that gets
+misread. The arithmetic is in `server/loanMovement.js` with no database in it, so
+`npm run test:loans` drives it directly; `/api/loans` is a thin adapter over it.
+
+Which ledgers count is decided by the GROUP Tally put them in (Secured Loans, Unsecured
+Loans, Bank OD/OCC, Loans (Liability)), plus a ledger under Current Liabilities whose
+**name** says packing credit, PCFC, cash credit, bill discounting, WCDL, term loan or
+buyer's credit -- the group chain never contains the ledger's own name, which is how every
+PCFC account hid from the cashflow tab for a year. `Loans & Advances (Asset)` is money WE
+lent and is never counted; a ledger named like a loan but grouped elsewhere ("Term Loan
+Interest") is listed as a **near miss** rather than silently dropped. Note that
+`'unsecured loans'` CONTAINS `'secured loans'`, so the group keywords are ordered and must
+not be sorted -- a test fails by name if they are.
+
+The opening is Tally's own opening balance (`masters.opening`, stored Tally-raw so a
+liability is +ve) plus every posting between the day it stands on and the window start --
+and MINUS any posting inside the window but before that day, which the opening already
+contains. A branch whose openings were never pulled gets movement, and the page says so
+rather than presenting it as a balance.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
