@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDC &middot; Capex &mdash; what was bought, when, for how much</title>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--ink:#0f172a;--dim:#64748b;--teal:#0f766e;--red:#dc2626;--amber:#b45309;--green:#15803d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{margin:0;font-size:16px}
+  .sub{font-size:12px;color:var(--dim);margin-top:3px}
+  main{padding:18px 20px;max-width:1500px}
+  button{font:inherit;padding:7px 14px;border-radius:7px;border:1px solid var(--teal);
+         background:var(--teal);color:#fff;cursor:pointer;font-weight:600}
+  button.ghost{background:#fff;color:var(--teal)}
+  button:disabled{opacity:.55;cursor:progress}
+  input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:16px;overflow:hidden}
+  h2{margin:0;padding:10px 14px;font-size:12.5px;background:#f1f5f9;border-bottom:1px solid var(--line);
+     font-family:ui-monospace,monospace;letter-spacing:.03em;color:#334155}
+  .body{padding:12px 14px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;color:var(--dim);
+     font-family:ui-monospace,monospace;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th.num{text-align:right}
+  td{padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  td.num{text-align:right;font-family:ui-monospace,monospace;white-space:nowrap}
+  tr.tot td{font-weight:700;background:#f8fafc;border-top:2px solid var(--line)}
+  .mono{font-family:ui-monospace,monospace}
+  .muted{color:var(--dim)}
+  .note{font-size:12px;color:var(--dim)}
+  .err{color:var(--red);font-family:ui-monospace,monospace;font-size:12.5px}
+  .cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .card{flex:1;min-width:170px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fff}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-family:ui-monospace,monospace}
+  .card .v{font-size:19px;font-weight:700;font-family:ui-monospace,monospace;margin-top:3px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .pill{display:inline-block;font-size:10px;font-family:ui-monospace,monospace;padding:1px 6px;
+        border-radius:999px;margin-left:5px}
+  .f-cash{background:#dcfce7;color:#14532d} .f-credit{background:#fef3c7;color:#78350f}
+  .f-loan{background:#e0e7ff;color:#3730a3} .f-other{background:#f1f5f9;color:#475569}
+  .f-disposal{background:#fee2e2;color:#991b1b}
+  a{color:var(--teal)}
+  .zero{color:#cbd5e1}
+  /* Chart tokens: light only, like every page here. One series, so no legend box --
+     the heading names it. Sequential needs no categorical palette. */
+  .viz{color-scheme:light;--bar:#2a78d6;--muted:#898781;--axis:#c3c2b7;--ink:#0b0b0b}
+  .viz svg{display:block;width:100%;height:auto;overflow:visible;margin:0 auto}
+  .viz .gl{stroke:var(--axis);stroke-width:1;shape-rendering:crispEdges}
+  .viz .ax{fill:var(--muted);font-size:9.5px;font-family:ui-monospace,monospace}
+  .viz .vt{fill:var(--ink);font-size:10px;font-family:ui-monospace,monospace;font-weight:700}
+  .viz rect{cursor:pointer}
+  .viz rect:hover{opacity:.82}
+  .tip{position:fixed;z-index:9;pointer-events:none;background:#0f172a;color:#fff;font-size:11.5px;
+       padding:6px 9px;border-radius:7px;max-width:300px;line-height:1.45;display:none;
+       font-family:ui-monospace,monospace;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Capex &mdash; what was bought, when, for how much</h1>
+  <div class="sub">Every posting that <strong>debits a fixed asset</strong> (or capital work in progress), as a dated
+    list: the item, the amount, the voucher it is on, and who it was bought from. Each row also says <strong>how it was
+    funded</strong>, because an addition is recorded the day the asset is capitalised and the money may have left
+    earlier, later, or over five years &mdash; a press bought on term finance is not crores of cash gone in a day.
+    Disposals are shown apart and never netted against purchases
+    &middot; <a href="./">the party explainer</a> &middot; <a href="./loans.html">loan movement</a></div>
+</header>
+<main>
+  <section><h2>WHAT PERIOD, WHICH COMPANY</h2><div class="body">
+    <div class="row">
+      <label>branch
+        <select id="branch">
+          <option value="all">Consolidated</option>
+          <option value="kol">Kolkata</option>
+          <option value="ahm">Ahmedabad</option>
+        </select>
+      </label>
+      <label>from <input id="from" size="10" placeholder="YYYYMMDD"></label>
+      <label>to <input id="to" size="10" placeholder="YYYYMMDD"></label>
+      <label>ignore items under <input id="min" size="9" value="0"></label>
+      <button id="go">Load</button>
+      <button id="xl" class="ghost" disabled>&#11015; Excel</button>
+    </div>
+    <div class="note">Which ledgers count is decided by the group Tally itself put them in &mdash; anything under
+      <strong>Fixed Assets</strong>, plus <strong>capital work in progress</strong> wherever it is filed. Depreciation
+      and repairs are expenses, not capex: writing an asset down is not buying one. An accumulated-depreciation ledger
+      filed under the asset group is excluded by name for the same reason.</div>
+    <div id="err" class="err" style="margin-top:8px"></div>
+  </div></section>
+  <div id="out"></div>
+</main>
+<script src="../vendor/xlsx.full.min.js"></script>
+<script>
+(function(){
+  if(!window.XLSX){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    document.head.appendChild(s);
+  }
+  var $=function(id){return document.getElementById(id);};
+  var out=$('out'), err=$('err'), loaded=null;
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function rupees(n){
+    var v=Math.round((n||0)*100)/100, neg=v<0, a=Math.abs(v);
+    a=(Math.round(a*100)%100)?a.toFixed(2):String(Math.round(a));
+    var p=a.split('.'), i=p[0];
+    var last3=i.slice(-3), rest=i.slice(0,-3);
+    if(rest) last3=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',')+','+last3;
+    return (neg?'-':'')+'₹'+last3+(p[1]?'.'+p[1]:'');
+  }
+  function money(n){ return (Math.abs(n||0)<0.5)?'<span class="zero">&mdash;</span>':esc(rupees(n)); }
+  function fmt8(d){if(!d||d.length<8)return d||'';
+    var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+  function ymd(d){return String(d.getFullYear())+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
+  function crShort(n){
+    var a=Math.abs(n||0), s=(n<0?'-':'');
+    if(a>=1e7) return s+(a/1e7).toFixed(a>=1e8?0:1)+' Cr';
+    if(a>=1e5) return s+(a/1e5).toFixed(0)+' L';
+    if(a>=1e3) return s+Math.round(a/1e3)+' K';
+    return s+Math.round(a);
+  }
+  // A gridline must be labelled with the value it actually sits on. Picking a "nice"
+  // TOP and quartering it gives steps like 1.25 Cr, which crShort then rounds to
+  // "1.3 Cr" -- a label a quarter-lakh away from its own line. So pick a nice STEP
+  // (1, 2 or 5 x 10^k) and let the top follow; the ticks are then exact at the
+  // precision they are printed in.
+  function axisSteps(maxv){
+    var v=Math.max(1,maxv||1), raw=v/4, p=Math.pow(10,Math.floor(Math.log10(raw))), r=raw/p;
+    var step=(r<=1?1:r<=2?2:r<=5?5:10)*p;
+    return {step:step, top:step*4};
+  }
+  var FUND_LABEL={cash:'paid from bank / cash',credit:'on supplier credit',loan:'financed by a loan',
+                  other:'other / adjustment',disposal:'disposal'};
+
+  (function(){
+    var now=new Date(), y=now.getFullYear();
+    if(now.getMonth()<3) y-=1;
+    $('from').value=String(y)+'0401';
+    $('to').value=ymd(now);
+  })();
+
+  var tip=null;
+  function showTip(ev,html){
+    if(!tip){tip=document.createElement('div');tip.className='tip';document.body.appendChild(tip);}
+    tip.innerHTML=html; tip.style.display='block';
+    var x=ev.clientX+14,y=ev.clientY+14;
+    if(x+310>window.innerWidth)x=ev.clientX-310;
+    if(y+90>window.innerHeight)y=ev.clientY-90;
+    tip.style.left=x+'px'; tip.style.top=y+'px';
+  }
+  function hideTip(){ if(tip) tip.style.display='none'; }
+
+  function load(){
+    err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
+    $('go').disabled=true; $('xl').disabled=true;
+    var q='/api/capex?branch='+encodeURIComponent($('branch').value)
+         +'&from='+encodeURIComponent($('from').value.trim())
+         +'&to='+encodeURIComponent($('to').value.trim())
+         +'&min='+encodeURIComponent($('min').value.trim()||'0');
+    fetch(q).then(function(r){return r.json();}).then(function(j){
+      $('go').disabled=false;
+      if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
+      loaded=j; $('xl').disabled=false; render(j);
+    }).catch(function(e){ $('go').disabled=false; out.innerHTML=''; err.textContent=e.message; });
+  }
+
+  // One series (spend per month), so no legend box: the heading names what is plotted.
+  function monthChart(byMonth){
+    var n=byMonth.length; if(!n) return '';
+    var W=Math.max(820, 76*n+70), H=230, L=62, R=16, T=26, B=32;
+    var pw=(W-L-R)/n, bw=Math.min(24, pw*0.5);
+    var ax=axisSteps(Math.max.apply(null,byMonth.map(function(m){return m.spend;}).concat([1]))), max=ax.top;
+    var y=function(v){return T+(H-T-B)*(1-v/max);};
+    var g='<svg viewBox="0 0 '+W+' '+H+'" style="max-width:'+W+'px" role="img" aria-label="Capex by month">';
+    for(var t=0;t<=4;t++){
+      var gv=ax.step*t, gy=y(gv);
+      g+='<line class="gl" x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'"/>'
+       + '<text class="ax" x="'+(L-7)+'" y="'+(gy+3)+'" text-anchor="end">'+esc(crShort(gv))+'</text>';
+    }
+    for(var i=0;i<n;i++){
+      var m=byMonth[i], cx=L+pw*i+pw/2, y1=y(m.spend), hh=Math.max(0,y(0)-y1);
+      if(m.spend>0){
+        g+='<rect x="'+(cx-bw/2)+'" y="'+y1+'" width="'+bw+'" height="'+hh+'" rx="4" fill="var(--bar)"'
+         + ' data-tip="'+esc(m.label+'&#10;'+rupees(m.spend)+'&#10;'+m.count+' item(s)')+'"/>'
+         + '<text class="vt" x="'+cx+'" y="'+(y1-7)+'" text-anchor="middle">'+esc(crShort(m.spend))+'</text>';
+      }
+      g+='<text class="ax" x="'+cx+'" y="'+(H-B+14)+'" text-anchor="middle">'+esc(m.label)+'</text>';
+    }
+    g+='<line class="gl" x1="'+L+'" y1="'+y(0)+'" x2="'+(W-R)+'" y2="'+y(0)+'"/></svg>';
+    return '<div class="viz scroll">'+g+'</div>';
+  }
+
+  function rollTable(rows,head,total){
+    var h='<div class="scroll"><table><thead><tr><th>'+esc(head)+'</th><th class="num">Items</th>'
+      + '<th class="num">Spend</th></tr></thead><tbody>';
+    for(var i=0;i<rows.length;i++){
+      if(!rows[i].spend&&!rows[i].disposal) continue;
+      h+='<tr><td>'+esc(rows[i].label)+'</td><td class="num">'+rows[i].count+'</td>'
+       + '<td class="num">'+money(rows[i].spend)+'</td></tr>';
+    }
+    h+='<tr class="tot"><td>Total</td><td class="num"></td><td class="num">'+money(total)+'</td></tr>';
+    return h+'</tbody></table></div>';
+  }
+
+  function render(j){
+    var h='';
+    if(!j.rows.length){
+      h+='<section><h2>NOTHING TO SHOW</h2><div class="body"><div class="note">'
+       + esc(j.note||'No fixed-asset purchase in this window.')+'</div></div></section>';
+      out.innerHTML=h; return;
+    }
+    var cash=0; for(var f=0;f<j.byFunding.length;f++) if(j.byFunding[f].key==='cash') cash=j.byFunding[f].spend;
+
+    h+='<section><h2>'+esc(fmt8(j.from))+' TO '+esc(fmt8(j.to))+' &middot; '
+     + j.rows.filter(function(r){return r.spend>0;}).length+' PURCHASE(S)</h2><div class="body">'
+     + '<div class="cards">'
+     + '<div class="card"><div class="k">Additions</div><div class="v">'+esc(rupees(j.additions))+'</div></div>'
+     + '<div class="card"><div class="k">Paid from bank / cash</div><div class="v">'+esc(rupees(cash))+'</div></div>'
+     + '<div class="card"><div class="k">Disposals</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
+     + '<div class="card"><div class="k">Net addition</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
+     + '</div>'
+     + '<div class="note">'+esc(j.scaleNote)+' <strong>Additions are not the same as cash out.</strong> '
+     + 'Only the <em>paid from bank / cash</em> figure left the bank on these dates; the rest sits in a creditor or '
+     + 'a loan and leaves later. The funding split below says which is which.</div>'
+     + '</div></section>';
+
+    h+='<section><h2>WHEN IT WAS SPENT</h2><div class="body">'+monthChart(j.byMonth)
+     + '<div class="note" style="margin-top:6px">Capitalised in each month. Hover a column for its items; every '
+     + 'figure is in the tables below.</div></div></section>';
+
+    h+='<section><h2>HOW IT WAS FUNDED</h2><div class="body">'
+     + rollTable(j.byFunding.filter(function(x){return x.key!=='disposal';})
+                 .map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend,disposal:0};}),
+                 'Funded by', j.additions)
+     + '<div class="note" style="margin-top:8px">Read off the voucher&rsquo;s own other legs. A loan leg wins over a '
+     + 'creditor leg, because a machine bought on term finance usually touches both and the loan is the thing worth '
+     + 'knowing.</div></div></section>';
+
+    h+='<section><h2>WHAT WAS BOUGHT</h2><div class="body">'+rollTable(j.byAsset,'Asset',j.additions)+'</div></section>';
+    h+='<section><h2>BY ASSET GROUP</h2><div class="body">'+rollTable(j.byGroup,'Group',j.additions)+'</div></section>';
+
+    h+='<section><h2>EVERY ENTRY, NEWEST FIRST</h2><div class="body"><div class="scroll"><table><thead><tr>'
+     + '<th>Date</th><th>Item</th><th>Group</th><th>Br</th><th>Voucher</th><th>From</th>'
+     + '<th class="num">Spend</th><th class="num">Disposal</th><th>Narration</th></tr></thead><tbody>';
+    for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
+      h+='<tr><td class="mono">'+esc(fmt8(r.date))+'</td>'
+       + '<td>'+esc(r.asset)+'<span class="pill f-'+esc(r.funded)+'">'+esc(FUND_LABEL[r.funded]||r.funded)+'</span></td>'
+       + '<td class="muted" style="font-size:11.5px">'+esc(r.group)+'</td>'
+       + '<td class="mono">'+esc(r.branch)+'</td>'
+       + '<td class="mono">'+esc(r.type)+(r.no?(' '+esc(r.no)):'')+'</td>'
+       + '<td>'+esc(r.party||'')+'</td>'
+       + '<td class="num">'+money(r.spend)+'</td>'
+       + '<td class="num">'+money(r.disposal)+'</td>'
+       + '<td class="muted" style="font-size:11.5px">'+esc(r.narration||'')+'</td></tr>';
+    }
+    h+='<tr class="tot"><td colspan="6">Total</td><td class="num">'+money(j.additions)+'</td>'
+     + '<td class="num">'+money(j.disposals)+'</td><td></td></tr>'
+     + '</tbody></table></div></div></section>';
+
+    out.innerHTML=h;
+    var marks=out.querySelectorAll('[data-tip]');
+    for(var m2=0;m2<marks.length;m2++){
+      marks[m2].addEventListener('mousemove',function(ev){
+        showTip(ev,esc(this.getAttribute('data-tip')).replace(/&amp;#10;|\n/g,'<br>'));});
+      marks[m2].addEventListener('mouseleave',hideTip);
+    }
+  }
+
+  function excel(){
+    if(!loaded||!window.XLSX) return;
+    var j=loaded, wb=XLSX.utils.book_new();
+    var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','From','Funded by','Spend','Disposal','Narration']];
+    for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
+      rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,FUND_LABEL[r.funded]||r.funded,
+                 r.spend,r.disposal,r.narration]); }
+    rows.push(['TOTAL','','','','','','','',j.additions,j.disposals,'']);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Every entry');
+    var mk=function(arr,head){var a=[[head,'Items','Spend']];
+      for(var k=0;k<arr.length;k++)a.push([arr[k].label,arr[k].count,arr[k].spend]);return a;};
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byMonth,'Month')),'By month');
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byAsset,'Asset')),'By asset');
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byGroup,'Group')),'By group');
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(
+      mk(j.byFunding.map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend};}),'Funded by')),'By funding');
+    XLSX.writeFile(wb,'CDC_Capex_'+j.branch+'_'+j.from+'_'+j.to+'_'+ymd(new Date())+'.xlsx');
+  }
+
+  $('go').addEventListener('click',load);
+  $('xl').addEventListener('click',excel);
+  load();
+})();
+</script>
+</body>
+</html>

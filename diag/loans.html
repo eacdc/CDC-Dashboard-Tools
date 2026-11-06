@@ -206,10 +206,15 @@
     return s+Math.round(a);
   }
   // A "nice" axis top, so gridlines land on numbers a person would choose.
-  function niceTop(v){
-    if(!(v>0)) return 1;
-    var p=Math.pow(10,Math.floor(Math.log10(v))), r=v/p;
-    return (r<=1?1:r<=2?2:r<=2.5?2.5:r<=5?5:10)*p;
+  // A gridline must be labelled with the value it actually sits on. Picking a "nice"
+  // TOP and quartering it gives steps like 1.25 Cr, which crShort then rounds to
+  // "1.3 Cr" -- a label a quarter-lakh away from its own line. So pick a nice STEP
+  // (1, 2 or 5 x 10^k) and let the top follow; the ticks are then exact at the
+  // precision they are printed in.
+  function axisSteps(maxv){
+    var v=Math.max(1,maxv||1), raw=v/4, p=Math.pow(10,Math.floor(Math.log10(raw))), r=raw/p;
+    var step=(r<=1?1:r<=2?2:r<=5?5:10)*p;
+    return {step:step, top:step*4};
   }
   var tip=null;
   function showTip(ev,html){
@@ -232,12 +237,12 @@
     var pw=(W-L-R)/n, bw=Math.min(24, pw*0.52);
     var tops=[];
     for(var i=0;i<n;i++){var s=0;for(var k=0;k<kinds.length;k++)s+=Math.max(0,kinds[k].periods[i].closing);tops.push(s);}
-    var max=niceTop(Math.max.apply(null,tops.concat([1])));
+    var ax=axisSteps(Math.max.apply(null,tops.concat([1]))), max=ax.top;
     var y=function(v){return T+(H-T-B)*(1-v/max);};
     var g='<svg viewBox="0 0 '+W+' '+H+'" style="max-width:'+W+'px" role="img"'
       + ' aria-label="Closing borrowing by kind, each period">';
     for(var t=0;t<=4;t++){
-      var gv=max*t/4, gy=y(gv);
+      var gv=ax.step*t, gy=y(gv);
       g+='<line class="gl" x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'"/>'
        + '<text class="ax" x="'+(L-7)+'" y="'+(gy+3)+'" text-anchor="end">'+esc(crShort(gv))+'</text>';
     }
@@ -268,7 +273,7 @@
     var n=periods.length; if(!n) return '';
     var span=0;
     for(var a=0;a<kinds.length;a++) for(var b=0;b<n;b++) span=Math.max(span, Math.abs(kinds[a].periods[b].netChange));
-    var max=niceTop(span||1);
+    var max=axisSteps(span||1).top;
     var out='<div class="sm">';
     for(var k=0;k<kinds.length;k++){
       var K=kinds[k], W=Math.max(300, 30*n+34), H=104, L=6, R=6, T=10, B=14;

@@ -2186,6 +2186,144 @@ app.get('/api/loans', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// GET /api/capex?branch=all|kol|ahm&from=YYYYMMDD&to=YYYYMMDD&min=0
+// What was spent on fixed assets: every posting that DEBITS a Fixed Asset (or capital
+// work in progress) ledger, as a dated list -- what was bought, when, for how much, on
+// which voucher, and from whom.
+//
+// THE ASSET LEG, NOT THE PAYMENT. An addition is recorded the day the asset is
+// capitalised; the money may have left earlier (advance) or not yet (creditor, or a term
+// loan drawn against the machine). So each row also says HOW IT WAS FUNDED, read off the
+// same voucher's other legs: paid from bank or cash, taken on credit, or financed by a
+// loan. "Capex in terms of cash flow" without that distinction reads a machine bought on
+// five-year finance as five crores of cash gone in a day.
+//
+// Credits to the same ledgers are disposals and are kept apart rather than netted: a year
+// that bought 2 Cr and sold 1 Cr of plant is not a year that spent 1 Cr.
+app.get('/api/capex', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : null;
+    const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : null;
+    if (!from || !to) return res.status(400).json({ ok: false, error: 'from and to are required as YYYYMMDD' });
+    if (to < from) return res.status(400).json({ ok: false, error: `to (${to}) is before from (${from})` });
+    const min = Math.max(0, Number(req.query.min) || 0);
+
+    const db = await getDb();
+    const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
+    // Per branch from its OWN master, for the same reason the loan page does it: one
+    // ledger name can be a fixed asset in one company and something else in the other.
+    const assetOf = {};                      // br -> { ledger: group }
+    const chainOf = {};                      // br -> { ledger: lowercased chain }
+    for (const br of branches) {
+      const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
+      const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
+      const lub = E.buildLookups(xdb);
+      const map = {};
+      const chains = {};
+      for (const ln of Object.keys(xdb.ledgers || {})) {
+        const chain = E.getChain(ln, xdb, lub);
+        const cs = chain.join('>').toLowerCase();
+        chains[ln] = cs;
+        // Fixed Assets, plus capital work in progress wherever it is filed. Depreciation
+        // is an expense and sits under Indirect Expenses, so it never reaches here; an
+        // accumulated-depreciation ledger filed UNDER Fixed Assets is excluded by name,
+        // because writing an asset down is not buying one.
+        const isAsset = cs.indexOf('fixed assets') >= 0
+          || cs.indexOf('capital work') >= 0 || cs.indexOf('capital-work') >= 0;
+        if (!isAsset) continue;
+        const nm = ln.toLowerCase();
+        if (nm.indexOf('depreciation') >= 0 || nm.indexOf('depriciation') >= 0
+          || nm.indexOf('amorti') >= 0) continue;
+        map[ln] = chain.join(' > ');
+      }
+      assetOf[br] = map;
+      chainOf[br] = chains;
+    }
+    const anyAssets = branches.some((br) => Object.keys(assetOf[br]).length);
+    if (!anyAssets) {
+      return res.json({ ok: true, branch, from, to, rows: [], additions: 0, disposals: 0, net: 0,
+        byGroup: [], byMonth: [], byFunding: [],
+        note: 'No ledger in either company sits under Fixed Assets. Either nothing is capitalised there, or the masters have not been pulled -- /api/meta says which.' });
+    }
+
+    const match = { date: { $gte: from, $lte: to }, ...LIVE_ONLY };
+    if (branch !== 'all') match.branch = branch;
+    const vs = await db.collection('vouchers').find(match)
+      .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, narration: 1, guid: 1,
+        ledgers: 1, party_ledgers: 1 })
+      .toArray();
+
+    // How the voucher paid for it, from its own other legs. Named rather than guessed:
+    // the order matters, because a machine bought on a term loan usually also touches a
+    // creditor, and the loan is the thing worth knowing.
+    const FUND = [
+      { kw: ['secured loans', 'unsecured loans', 'bank od', 'bank occ', 'loans (liability)'], as: 'loan' },
+      { kw: ['sundry creditors'], as: 'credit' },
+      { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
+    ];
+    const rows = [];
+    let additions = 0, disposals = 0;
+    for (const v of vs) {
+      const map = assetOf[v.branch] || {};
+      const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
+      const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
+      if (!hits.length) continue;
+      // Work out the funding once per voucher, off every OTHER leg.
+      let funded = 'other';
+      const chains = chainOf[v.branch] || {};
+      const others = Object.keys(all).filter((k) => !map[k]);
+      outer:
+      for (const f of FUND) {
+        for (const o of others) {
+          const c = chains[o] || '';
+          for (const kw of f.kw) if (c.indexOf(kw) >= 0) { funded = f.as; break outer; }
+        }
+      }
+      for (const ln of hits) {
+        const amt = all[ln];
+        // -ve = Dr = the asset went UP: that is the purchase. +ve = Cr = a disposal.
+        const spend = amt < 0 ? -amt : 0;
+        const sold = amt > 0 ? amt : 0;
+        if (spend && spend < min) continue;
+        if (spend) additions = Math.round((additions + spend) * 100) / 100;
+        if (sold) disposals = Math.round((disposals + sold) * 100) / 100;
+        rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln],
+          spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
+          no: v.no || '', type: v.type || '', party: v.party || '',
+          narration: (v.narration || '').slice(0, 300), guid: v.guid || '',
+          funded: spend ? funded : 'disposal' });
+      }
+    }
+    rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)
+      || (b.spend - a.spend) || a.asset.localeCompare(b.asset));
+
+    const roll = (keyOf, labelOf) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = keyOf(r);
+        const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
+        e.spend = Math.round((e.spend + r.spend) * 100) / 100;
+        e.disposal = Math.round((e.disposal + r.disposal) * 100) / 100;
+        if (r.spend) e.count++;
+        m.set(k, e);
+      }
+      return [...m.values()];
+    };
+    const byGroup = roll((r) => r.group, (r) => r.group).sort((a, b) => b.spend - a.spend);
+    const byMonth = roll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
+      .sort((a, b) => (a.key < b.key ? -1 : 1));
+    const byAsset = roll((r) => r.branch + '|' + r.asset, (r) => r.asset).sort((a, b) => b.spend - a.spend);
+    const byFunding = roll((r) => r.funded, (r) => r.funded).sort((a, b) => b.spend - a.spend);
+
+    res.json({ ok: true, branch, from, to, min,
+      scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted.',
+      rows, count: rows.length,
+      additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
+      byGroup, byMonth, byAsset, byFunding });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ---- shared input files (bill-wise CSVs + stock template) ------------------
 // These change rarely (opening bills once a year; stock ~monthly). Store them
 // once in Mongo so every user shares the same inputs instead of each browser
