@@ -30,6 +30,7 @@ npm run test:yoy               # year-on-year fold, its API, the drill-down tree
 npm run test:proj              # what a party still owes: the receivables engine,
                                # lifted out of the portal (projEngine.js) and run in Node
 npm run test:loans             # loan movement arithmetic, and /api/loans end to end
+npm run test:capex             # fixed-asset additions: what, when, and how funded
 npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
@@ -341,6 +342,29 @@ Accrued interest is NOT a borrowing however its ledger reads -- `liability for e
 and `provisions` are never-borrowing groups, and the name path also refuses `interest`,
 `subvention`, `receivable`, `provision`, `charges`, `commission`, `penalty`. Those block
 only the NAME path, so a facility the GROUP says is a loan is untouched.
+
+`/diag/capex.html` (`GET /api/capex`) is what was spent on fixed assets: every posting
+that DEBITS a Fixed Asset or capital-work-in-progress ledger, dated, with the item, the
+voucher, the supplier and the narration, plus rollups by month / asset / group / funding.
+Assets are classified per branch from that branch's own master, as loans are. Depreciation
+and repairs are expenses, not capex, and an accumulated-depreciation ledger filed UNDER
+the asset group is excluded by name -- writing an asset down is not buying one.
+
+**An addition is not cash out.** It is recorded the day the asset is capitalised; the
+money may have left earlier, later, or over five years. So each row carries `funded`
+(cash / credit / loan / other), read off that voucher's OTHER legs, with a loan leg
+winning over a creditor leg because a machine on term finance usually touches both. The
+header shows additions and paid-from-bank separately for that reason. Disposals are
+reported apart and NEVER netted into spend. `npm run test:capex`.
+
+**Charts are inline SVG, light-only, and capped at their natural width.** No chart
+library: a CDN this office cannot reach is how a page ends up blank. Categorical hues are
+the dataviz reference palette's first five in its FIXED order (colour follows the
+category, never its size), validated against the page surface; the legend and the table
+view relieve the three slots under 3:1 contrast. Gridlines pick a nice STEP (1/2/5 x
+10^k) and let the top follow -- picking a nice top and quartering it labelled a line
+"1.3 Cr" that sat at 1.25 Cr. Render the page in Chromium and LOOK at it before shipping:
+both of those defects were invisible to every validator and obvious on screen.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
