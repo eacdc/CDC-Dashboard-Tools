@@ -127,9 +127,20 @@ applies. `processData` reports what it dropped as `stats.ibInvoices` /
 
 **A posting to a Sundry Debtor moves that debtor's balance, and the posting's own sign
 says which way.** Cr (+ve) settles a bill; Dr (−ve) raises one. Creditors, mirrored.
-Nothing asks what the *other* leg of the voucher was. This is the rule, and the named
-voucher types below are only refinements of it (which allocation type to read, and
-whether the figure is labelled an invoice or a settlement).
+Nothing asks what the *other* leg of the voucher was, and nothing takes `Math.abs()` of
+a posting.
+
+| | Cr (+ve) | Dr (−ve) |
+|---|---|---|
+| Sundry Debtor | settles a bill (`dRct`) | raises one (`dInv`) |
+| Sundry Creditor | raises a bill (`cInv`) | settles one (`cPay`) |
+
+The voucher type decides exactly **one** thing: a sale or a purchase opens its bill as a
+`New Ref`, so that is all that is read when one of those *raises* a bill. Every other
+type may carry either kind of reference, so all are read. Seven per-type collection
+branches (sales, purchases, receipts by name, payments by name, journals, credit notes,
+debit notes) are deliberately collapsed into this one rule — there is no longer a
+per-type assumption about direction that can be wrong.
 
 That is also exactly what `/api/bills/audit` does on the server — it nets every
 allocation on a bill reference with no voucher-type filter at all. The two now agree by
@@ -146,6 +157,12 @@ by PCFC defeats that four different ways at once:
 | The ledger is called **"PCFC Loan 0012"** | The loan keywords were matched against the **group chain**, and `getChain` never includes the ledger's own name — `Loans (Liability) > Bank OD A/c` matches none of them |
 | The voucher type is **"Journal - Export"** | The test was `vt === 'Journal'` exactly, while every other type in the file is matched by prefix |
 | The other leg is **exchange difference**, or a bad debt written off | No loan and no branch anywhere in the voucher |
+
+The second figure came from `Math.abs()`. A **return** booked on a `Purchase ...` or
+`Sales ...` voucher type lost its direction and was filed as a *fresh invoice* instead of
+reducing the balance — wrong by **twice** the returned value, once for not subtracting it
+and once for adding it. A paper supplier read **6.29 Cr** payable against Tally's
+**1.62 Cr**. Tally's own reports never ask the voucher type which way a posting goes.
 
 Each one left the invoice open for ever at full value while Tally showed it settled —
 reported as **17.45 lakh against Tally's 6.74** on one export customer. Double entry

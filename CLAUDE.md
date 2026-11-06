@@ -80,9 +80,17 @@ expenses negative, and nothing calls `Math.abs()` on a monthly figure — revers
 entries must net out. Growth % therefore reads cost lines by size and value lines
 signed (see the year-on-year section of `CDC_Dashboard_Logic_Reference.md`).
 
-**What a party owes is decided by the SIGN of its own posting, never by the other leg
-of the voucher.** Cr a Sundry Debtor settles a bill, Dr raises one, on every voucher
-type except the non-posting ones listed in `NOPOST`. The engine used to try to
+**What a party owes is decided by the SIGN of its own posting — never by the other leg
+of the voucher, and never through `Math.abs()`.** Cr a Sundry Debtor settles a bill, Dr
+raises one (creditors mirrored), on every voucher type except the non-posting ones listed
+in `NOPOST`. The voucher type decides exactly one thing: a sale or purchase opens its bill
+as a `New Ref`, so that is all that is read when one of those *raises* a bill. Two
+separate wrong figures came from breaking this, both reported as "the portal disagrees
+with Tally": the PCFC journal below, and a **return** booked on a `Sales ...` /
+`Purchase ...` type, which `Math.abs()` turned into a fresh invoice — wrong by *twice* the
+returned value, and the reason a paper supplier read 6.29 Cr against Tally's 1.62. Seven
+per-type collection branches are deliberately collapsed into one; do not re-split them.
+The engine used to try to
 recognise a settlement by its contra leg — a journal counted only when a *loan* ledger
 was debited, or the other branch appeared — and an export invoice knocked off against a
 PCFC loan defeated that in four ways at once (the loan sits under Bank OD, so the

@@ -1,6 +1,41 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.61 (portal) — November 2026 — A return is not an invoice
+
+**A return booked on a `Sales ...` or `Purchase ...` voucher type was added as a fresh
+invoice instead of reducing the balance.** One paper supplier read **6.29 Cr** payable
+against Tally's **1.62 Cr** in Kolkata (and nothing in Ahmedabad). The sale and purchase
+paths read the party's posting through `Math.abs()`, so a posting that went the *other*
+way — a purchase return, a rate adjustment, a reversal booked on the same voucher type —
+lost its direction and was filed as another bill. That is wrong by **twice** the returned
+value: once for failing to subtract it, once for adding it.
+
+So the sign rule introduced in v2.59 for journals now governs **every** voucher type, and
+nothing takes `Math.abs()` of a posting any more:
+
+| | Cr (+ve) | Dr (−ve) |
+|---|---|---|
+| Sundry Debtor | settles a bill | raises one |
+| Sundry Creditor | raises a bill | settles one |
+
+The voucher type decides exactly one thing: a sale or a purchase opens its bill as a
+`New Ref`, so that is all that is read when one of those *raises* a bill. Everything else
+may carry either kind of reference. Seven separate collection branches — sales, purchases,
+receipts by exact name, payments by exact name, journals, credit notes, debit notes —
+collapse into one, which is the point: there is no longer a per-type assumption about
+direction that can be wrong. Credit and debit notes now also carry their **allocations**,
+so a credit note reverses the bill it *names* rather than the oldest open one.
+
+**Pred vs Actual held a third copy of the same inference** — Receipt types by exact name,
+a journal recognised by its loan or branch leg, credit notes — so a PCFC knock-off was
+collection that *neither* side of that tab could see, and an export customer showed a
+permanent shortfall against a projection that now expects it. It uses the same sign rule,
+less sale and purchase types, because a return is a reduction and not a collection.
+
+Four new assertions in `npm run test:proj`, including the partial return that read
+6,00,000 where Tally said 4,00,000.
+
 ## v2.60 (portal) — November 2026 — The uploaded bills file was being counted twice
 
 **An uploaded bills CSV was added on top of the vouchers that already held those same
