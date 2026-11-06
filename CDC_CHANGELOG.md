@@ -1,6 +1,26 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.71 (diag) — November 2026 — Every long table filters and sorts
+
+Nobody reads 600 capex entries or 133 loan accounts top to bottom. Four tables — capex's
+*Every entry*, *Cash out*, *Moved between asset accounts*, and the loan page's *Account by
+account* — now take a search box, dropdowns built from the data itself (asset group, how it
+was booked, branch, bought/sold; kind of payment; kind of borrowing, in-debit, sweeping,
+moved-in-this-window), sortable headings with a direction arrow, a "showing N of M" count
+and a one-click **clear**.
+
+**A filtered total is recomputed from the rows on screen**, and says so — *Total of these 5
+row(s)*. A total still showing the unfiltered figure beside a filtered list is read as the
+answer to the question just asked, which is how a page starts lying quietly. On the loan
+page the unfiltered total is still Tally's own, covering the nil accounts hidden from the
+list; the moment a filter is on it is recomputed and relabelled.
+
+Two things that had to work and now do: typing in the search box keeps the cursor (only the
+table body and the count are rebuilt per keystroke, not the toolbar), and expanding a loan
+account still works after sorting or filtering — the toggle is delegated on the container and
+bound once, rather than re-bound on every render.
+
 ## v2.70 (server, diag) — November 2026 — Capex from the cash side, advances included
 
 **"What is my cash out because of capex" was a question the page could not answer.** It

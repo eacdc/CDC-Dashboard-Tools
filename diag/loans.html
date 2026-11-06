@@ -74,6 +74,18 @@
   .smc{border:1px solid var(--line);border-radius:9px;padding:10px 12px}
   .smc .t{font-size:11.5px;font-weight:700;display:flex;align-items:center;gap:6px;margin-bottom:2px}
   .smc .n{font-size:10.5px;color:var(--dim);font-family:ui-monospace,monospace;margin-bottom:6px}
+  .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .tools input[type=text]{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
+    font-family:ui-monospace,monospace;min-width:210px}
+  .tools select{padding:6px 8px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
+    font-family:ui-monospace,monospace;max-width:320px}
+  .tools .cnt{font-size:11.5px;color:#64748b;font-family:ui-monospace,monospace}
+  .tools button{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;
+    font-size:11.5px;cursor:pointer;color:#475569}
+  .tools button:hover{background:#f1f5f9}
+  th[data-sort]{cursor:pointer;user-select:none;white-space:nowrap}
+  th[data-sort]:hover{color:#0f172a;text-decoration:underline}
+  th .ar{color:#0d9488}
   .tip{position:fixed;z-index:9;pointer-events:none;background:#0f172a;color:#fff;font-size:11.5px;
        padding:6px 9px;border-radius:7px;max-width:280px;line-height:1.45;display:none;
        font-family:ui-monospace,monospace;box-shadow:0 4px 14px rgba(0,0,0,.25)}
@@ -311,6 +323,101 @@
   // `sweep` means an OD/CC account, whose gross in and out are the company's turnover
   // passing through rather than borrowing decisions. Those columns are suppressed unless
   // asked for, and the net change stands in their place.
+  // ---- FILTERABLE, SORTABLE TABLES -----------------------------------------
+  // A list of 600 capex entries is not something anybody reads top to bottom; the
+  // question is always "what did we spend on X" or "what are the big ones". So every
+  // long table takes a search box, its own dropdowns and sortable headings, and the
+  // TOTAL follows the filter -- a total that still showed the unfiltered figure would
+  // be read as the answer to the filtered question.
+  var TSPEC={}, TST={};
+  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{}}); }
+  function cmp(a,b){
+    if(typeof a==='number'&&typeof b==='number') return a-b;
+    return String(a==null?'':a).localeCompare(String(b==null?'':b));
+  }
+  function tRows(id){
+    var sp=TSPEC[id], st=tState(id), rows=sp.rows.slice();
+    var q=(st.q||'').toLowerCase().trim();
+    if(q) rows=rows.filter(function(r){return sp.search(r).toLowerCase().indexOf(q)>=0;});
+    (sp.filters||[]).forEach(function(f){
+      var v=st.sel[f.key]; if(v) rows=rows.filter(function(r){return f.match(r,v);});
+    });
+    if(st.sort){
+      var col=null;
+      for(var i=0;i<sp.cols.length;i++) if(sp.cols[i].key===st.sort) col=sp.cols[i];
+      if(col) rows.sort(function(a,b){return cmp(col.val(a),col.val(b))*st.dir;});
+    }
+    return rows;
+  }
+  function tBody(id){
+    var sp=TSPEC[id], st=tState(id), rows=tRows(id), h='';
+    h+='<div class="scroll"><table><thead><tr>';
+    for(var c=0;c<sp.cols.length;c++){ var col=sp.cols[c];
+      var ar=(st.sort===col.key)?(' <span class="ar">'+(st.dir>0?'&#9650;':'&#9660;')+'</span>'):'';
+      h+='<th'+(col.num?' class="num"':'')+' data-tbl="'+id+'" data-sort="'+esc(col.key)+'">'
+       + esc(col.label)+ar+'</th>';
+    }
+    h+='</tr></thead><tbody>';
+    if(!rows.length){
+      h+='<tr><td colspan="'+sp.cols.length+'" class="muted" style="padding:14px">'
+       + 'Nothing matches that filter.</td></tr>';
+    }
+    for(var r=0;r<rows.length;r++){
+      h+='<tr>';
+      for(var c2=0;c2<sp.cols.length;c2++){ var cl=sp.cols[c2];
+        h+='<td'+(cl.cls?(' class="'+cl.cls+'"'):'')+(cl.style?(' style="'+cl.style+'"'):'')+'>'
+         + cl.html(rows[r])+'</td>';
+      }
+      h+='</tr>';
+      // A row that opens into a detail row of its own (the loan page's per-account
+      // breakdown) emits it here, so expanding survives a sort or a filter.
+      if(sp.after) h+=sp.after(rows[r]);
+    }
+    if(sp.foot) h+=sp.foot(rows);
+    return h+'</tbody></table></div>';
+  }
+  function tCount(id){
+    var sp=TSPEC[id], n=tRows(id).length, m=sp.rows.length;
+    return n===m?(m+' row'+(m===1?'':'s')):('showing '+n+' of '+m);
+  }
+  // Only the table body and the count are rebuilt as the user types, so the cursor stays
+  // where it is -- replacing the whole toolbar on every keystroke loses focus after one
+  // character, which makes a search box unusable.
+  function tRefresh(id){
+    var b=$('tb_'+id); if(b) b.innerHTML=tBody(id);
+    var c=$('tc_'+id); if(c) c.textContent=tCount(id);
+  }
+  function tHtml(id,spec){
+    TSPEC[id]=spec; tState(id);
+    if(spec.defSort&&!TST[id].sort){ TST[id].sort=spec.defSort; TST[id].dir=spec.defDir||-1; }
+    var st=TST[id], h='<div class="tools">'
+     + '<input type="text" data-tbl="'+id+'" data-act="q" placeholder="'+esc(spec.placeholder||'search')
+     +   '" value="'+esc(st.q||'')+'">';
+    (spec.filters||[]).forEach(function(f){
+      h+='<select data-tbl="'+id+'" data-act="sel" data-key="'+esc(f.key)+'">'
+       + '<option value="">'+esc(f.all)+'</option>';
+      f.options.forEach(function(o){
+        h+='<option value="'+esc(o.v)+'"'+(st.sel[f.key]===o.v?' selected':'')+'>'+esc(o.label)+'</option>';
+      });
+      h+='</select>';
+    });
+    h+='<button data-tbl="'+id+'" data-act="clear">clear</button>'
+     + '<span class="cnt" id="tc_'+id+'">'+esc(tCount(id))+'</span></div>'
+     + '<div id="tb_'+id+'">'+tBody(id)+'</div>';
+    return h;
+  }
+  // Distinct values of a field, for a dropdown, commonest first.
+  function distinct(rows,get){
+    var m={};
+    for(var i=0;i<rows.length;i++){var v=get(rows[i]); if(v==null||v==='')continue; m[v]=(m[v]||0)+1;}
+    return Object.keys(m).sort(function(a,b){return m[b]-m[a]||a.localeCompare(b);});
+  }
+  function vcell(r){
+    var lab=esc(r.type)+(r.no?(' '+esc(r.no)):'');
+    return r.guid?('<a href="../voucher/?branch='+encodeURIComponent(r.branch)+'&amp;id='
+      +encodeURIComponent(r.guid)+'" target="_blank" rel="noopener">'+lab+'</a>'):lab;
+  }
+
   function periodTable(periods, ledger, sweep, br){
     var gross=$('gross').checked, hideGross=(sweep&&!gross);
     var h='<div class="scroll"><table><thead><tr><th>Period</th><th class="num">Opening</th>';
@@ -342,6 +449,8 @@
   }
 
   function render(j){
+    // A new window or a toggled view is a new question: last one's filters do not carry.
+    TST={}; TSPEC={};
     var h='';
     // What the figures rest on, before any figure is shown. An opening that is really
     // just "the movement we hold" must not be read as a balance.
@@ -530,49 +639,91 @@
        + 'window &mdash; lenders long repaid, car loans closed. Tick &ldquo;show accounts with no balance&rdquo; above '
        + 'to list them.</div>';
     }
-    h+='<div class="scroll"><table><thead><tr>'
-     + '<th>Account</th><th>Kind</th><th>Group</th><th>Branch</th><th class="num">Opening</th>';
-    h+=gross?'<th class="num">Drawn</th><th class="num">Repaid</th>'
-            :'<th class="num">Drawn</th><th class="num">Repaid</th>';
-    h+='<th class="num">Net</th><th class="num">Closing</th><th></th></tr></thead><tbody>';
-    for(var i=0;i<live.length;i++){ var l=live[i].l, idx=live[i].i;
-      var hid=(l.sweep&&!gross);
-      h+='<tr'+(l.moved||Math.abs(l.closing)>=0.5?'':' class="quiet"')+'>'
-       + '<td><span class="ex" data-i="'+idx+'">&#9656; '+esc(l.ledger)+'</span>'
-       + (l.inDebit?' <span class="pill" style="background:#fef3c7;color:#78350f">in debit</span>':'')
-       + (hid?' <span class="pill">sweeps</span>':'')+'</td>'
-       + '<td>'+esc(l.kindLabel)+'</td><td class="muted" style="font-size:11.5px">'+esc(l.group)+'</td>'
-       + '<td class="mono">'+esc((l.branches||[]).join(', ')||'&mdash;')+'</td>'
-       + '<td class="num">'+money(l.opening)+'</td>'
-       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(l.drawn))+'</td>'
-       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(l.repaid))+'</td>'
-       + '<td class="num">'+chg(l.netChange)+'</td>'
-       + '<td class="num"><strong>'+money(l.closing)+'</strong></td>'
-       + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to,l.branch))+'">vouchers</a></td></tr>'
-       + '<tr id="ex'+idx+'" style="display:none"><td colspan="10" style="background:#fbfdfe">'
-       + '<div class="note" style="margin-bottom:8px">Opening '+esc(rupees(l.opening))+' = Tally&rsquo;s own opening '
-       + '<strong>'+esc(rupees(l.openingParts.tally))+'</strong>'
+    h+=tHtml('acct',{
+        placeholder:'search account, kind or group',
+        rows:live, defSort:'closing', defDir:-1,
+        search:function(r){return [r.l.ledger,r.l.kindLabel,r.l.group,(r.l.branches||[]).join(' ')].join(' ');},
+        filters:[
+          {key:'kind',all:'every kind of borrowing',
+           options:distinct(live,function(r){return r.l.kindLabel;}).map(function(v){return {v:v,label:v};}),
+           match:function(r,v){return r.l.kindLabel===v;}},
+          {key:'branch',all:'both companies',
+           options:distinct(live,function(r){return (r.l.branches||[]).join(', ');})
+             .map(function(v){return {v:v,label:v.toUpperCase()};}),
+           match:function(r,v){return (r.l.branches||[]).join(', ')===v;}},
+          {key:'flag',all:'everything',
+           options:[{v:'moved',label:'moved in this window'},{v:'debit',label:'in debit'},
+                    {v:'sweep',label:'sweeping (OD / CC)'}],
+           match:function(r,v){return v==='moved'?!!r.l.moved:(v==='debit'?!!r.l.inDebit:!!r.l.sweep);}}
+        ],
+        cols:[
+          {key:'ledger',label:'Account',val:function(r){return r.l.ledger;},
+           html:function(r){var l=r.l, hid=(l.sweep&&!gross);
+             return '<span class="ex" data-i="'+r.i+'">&#9656; '+esc(l.ledger)+'</span>'
+               + (l.inDebit?' <span class="pill" style="background:#fef3c7;color:#78350f">in debit</span>':'')
+               + (hid?' <span class="pill">sweeps</span>':'');}},
+          {key:'kindLabel',label:'Kind',val:function(r){return r.l.kindLabel;},
+           html:function(r){return esc(r.l.kindLabel);}},
+          {key:'group',label:'Group',cls:'muted',style:'font-size:11.5px',val:function(r){return r.l.group;},
+           html:function(r){return esc(r.l.group);}},
+          {key:'branch',label:'Branch',cls:'mono',val:function(r){return (r.l.branches||[]).join(', ');},
+           html:function(r){return esc((r.l.branches||[]).join(', ')||'&mdash;');}},
+          {key:'opening',label:'Opening',num:true,cls:'num',val:function(r){return r.l.opening;},
+           html:function(r){return money(r.l.opening);}},
+          {key:'drawn',label:'Drawn',num:true,cls:'num',val:function(r){return r.l.drawn;},
+           html:function(r){return (r.l.sweep&&!gross)?'<span class="zero">&mdash;</span>':money(r.l.drawn);}},
+          {key:'repaid',label:'Repaid',num:true,cls:'num',val:function(r){return r.l.repaid;},
+           html:function(r){return (r.l.sweep&&!gross)?'<span class="zero">&mdash;</span>':money(r.l.repaid);}},
+          {key:'netChange',label:'Net',num:true,cls:'num',val:function(r){return r.l.netChange;},
+           html:function(r){return chg(r.l.netChange);}},
+          {key:'closing',label:'Closing',num:true,cls:'num',val:function(r){return r.l.closing;},
+           html:function(r){return '<strong>'+money(r.l.closing)+'</strong>';}},
+          {key:'vch',label:'',val:function(){return '';},
+           html:function(r){return '<a target="_blank" href="'+esc(vchLink(r.l.ledger,j.from,j.to,r.l.branch))
+             +'">vouchers</a>';}}
+        ],
+        after:function(r){ var L=r.l, idx=r.i;
+      return '<tr id="ex'+idx+'" style="display:none"><td colspan="10" style="background:#fbfdfe">'
+       + '<div class="note" style="margin-bottom:8px">Opening '+esc(rupees(L.opening))+' = Tally&rsquo;s own opening '
+       + '<strong>'+esc(rupees(L.openingParts.tally))+'</strong>'
        + (function(bb){var ks=Object.keys(bb||{});
            return ks.length?(' (from '+ks.map(function(k){return k+' '+rupees(bb[k]);}).join(' + ')
-             +(ks.length>1?', SUMMED &mdash; if both companies carry the same balance for this one account, that is a double count':'')+')'):'';})(l.openingParts.byBranch)
-       + ' plus <strong>'+esc(rupees(l.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
+             +(ks.length>1?', SUMMED &mdash; if both companies carry the same balance for this one account, that is a double count':'')+')'):'';})(L.openingParts.byBranch)
+       + ' plus <strong>'+esc(rupees(L.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
        + '. Disagrees with Tally? The half that is wrong says where to look: the Tally half means the master, the '
        + 'postings half means vouchers we do not hold.</div>'
-       + (l.tally&&l.tally.comparable
-           ? ('<div class="note" style="margin-bottom:8px">Tally\u2019s own closing at '+esc(fmt8(l.tally.asOn))
-              +': <strong>'+esc(rupees(l.tally.closing))+'</strong> &middot; ours '+esc(rupees(l.closing))
-              +' &middot; difference '+(Math.abs(l.tally.diff)<1?'<span style="color:var(--green)">none</span>'
-                :('<strong style="color:var(--red)">'+esc(rupees(l.tally.diff))+'</strong>'))+'</div>')
+       + (L.tally&&L.tally.comparable
+           ? ('<div class="note" style="margin-bottom:8px">Tally\u2019s own closing at '+esc(fmt8(L.tally.asOn))
+              +': <strong>'+esc(rupees(L.tally.closing))+'</strong> &middot; ours '+esc(rupees(L.closing))
+              +' &middot; difference '+(Math.abs(L.tally.diff)<1?'<span style="color:var(--green)">none</span>'
+                :('<strong style="color:var(--red)">'+esc(rupees(L.tally.diff))+'</strong>'))+'</div>')
            : '')
-       + periodTable(l.periods,l.ledger,l.sweep,l.branch)+'</td></tr>';
-    }
-    h+='<tr class="tot"><td colspan="4">All borrowings'+(nil&&!showNil?' (including the '+nil+' nil ones)':'')+'</td>'
-     + '<td class="num">'+money(t.opening)+'</td>'
-     + '<td class="num">'+money(gross?t.drawn:t.drawnFacility)+'</td>'
-     + '<td class="num">'+money(gross?t.repaid:t.repaidFacility)+'</td>'
-     + '<td class="num">'+chg(t.netChange)+'</td>'
-     + '<td class="num">'+money(t.closing)+'</td><td></td></tr>'
-     + '</tbody></table></div></div></section>';
+       + periodTable(L.periods,L.ledger,L.sweep,L.branch)+'</td></tr>';
+        },
+        foot:function(rs){
+          // The API total covers every account, including the nil ones hidden above, so it
+          // stands as it is while nothing is filtered. Once a filter is on, a total still
+          // reading "all borrowings" would be taken as the answer to the question just
+          // asked, so it is recomputed from exactly the rows on screen.
+          if(rs.length===live.length){
+            return '<tr class="tot"><td colspan="4">All borrowings'
+              +(nil&&!showNil?' (including the '+nil+' nil ones)':'')+'</td>'
+              + '<td class="num">'+money(t.opening)+'</td>'
+              + '<td class="num">'+money(gross?t.drawn:t.drawnFacility)+'</td>'
+              + '<td class="num">'+money(gross?t.repaid:t.repaidFacility)+'</td>'
+              + '<td class="num">'+chg(t.netChange)+'</td>'
+              + '<td class="num">'+money(t.closing)+'</td><td></td></tr>';
+          }
+          var o=0,d=0,rp=0,n=0,c=0;
+          for(var i=0;i<rs.length;i++){var L2=rs[i].l;
+            o+=L2.opening; d+=L2.drawn; rp+=L2.repaid; n+=L2.netChange; c+=L2.closing;}
+          return '<tr class="tot"><td colspan="4">Total of these '+rs.length+' account(s)</td>'
+            + '<td class="num">'+money(o)+'</td><td class="num">'+money(d)+'</td>'
+            + '<td class="num">'+money(rp)+'</td><td class="num">'+chg(n)+'</td>'
+            + '<td class="num">'+money(c)+'</td><td></td></tr>';
+        }
+      })
+     + '</div></section>';
 
     if(j.nearMisses&&j.nearMisses.length){
       h+='<section><h2>NAMED LIKE A BORROWING, BUT NOT COUNTED</h2><div class="body">'
@@ -594,15 +745,7 @@
         showTip(ev,esc(this.getAttribute('data-tip')).replace(/&amp;#10;|\n/g,'<br>'));});
       segs[s2].addEventListener('mouseleave',hideTip);
     }
-    var exs=out.querySelectorAll('.ex');
-    for(var e2=0;e2<exs.length;e2++){
-      exs[e2].addEventListener('click',function(){
-        var i=this.getAttribute('data-i'), row=$('ex'+i);
-        var on=row.style.display==='none';
-        row.style.display=on?'':'none';
-        this.innerHTML=(on?'&#9662; ':'&#9656; ')+esc(loaded.loans[+i].ledger);
-      });
-    }
+    // The expand toggle is delegated on `out` and bound once -- see below.
   }
 
   // The workbook: one sheet per view, so a statement can be mailed to a bank or put
@@ -634,6 +777,49 @@
     XLSX.writeFile(wb,'CDC_Loans_'+j.branch+'_'+j.bucket+'_'+j.from+'_'+j.to+'_'
       +ymd(d)+'.xlsx');
   }
+
+  // Bound ONCE on the container, which outlives every re-render. Binding per render
+  // stacked a handler on each load, and would stop working the moment a sort or a filter
+  // rebuilt the rows under it.
+  out.addEventListener('click',function(ev){
+    var ex=ev.target.closest&&ev.target.closest('.ex');
+    if(ex){
+      var i=ex.getAttribute('data-i'), row=$('ex'+i);
+      if(row){ var on=row.style.display==='none';
+        row.style.display=on?'':'none';
+        ex.innerHTML=(on?'&#9662; ':'&#9656; ')+esc(loaded.loans[+i].ledger); }
+      return;
+    }
+    var th=ev.target.closest&&ev.target.closest('th[data-sort]');
+    if(th){
+      var id=th.getAttribute('data-tbl'), k=th.getAttribute('data-sort'), st=tState(id);
+      if(st.sort===k) st.dir=-st.dir; else { st.sort=k; st.dir=-1; }
+      tRefresh(id); return;
+    }
+    var bt=ev.target.closest&&ev.target.closest('button[data-act="clear"]');
+    if(bt){
+      var bid=bt.getAttribute('data-tbl'), bs=tState(bid);
+      bs.q=''; bs.sel={};
+      var inp=document.querySelector('input[data-tbl="'+bid+'"][data-act="q"]');
+      if(inp) inp.value='';
+      var sels=document.querySelectorAll('select[data-tbl="'+bid+'"]');
+      for(var si=0;si<sels.length;si++) sels[si].value='';
+      tRefresh(bid);
+    }
+  });
+  out.addEventListener('input',function(ev){
+    var t2=ev.target;
+    if(t2.getAttribute&&t2.getAttribute('data-act')==='q'){
+      tState(t2.getAttribute('data-tbl')).q=t2.value; tRefresh(t2.getAttribute('data-tbl'));
+    }
+  });
+  out.addEventListener('change',function(ev){
+    var t2=ev.target;
+    if(t2.getAttribute&&t2.getAttribute('data-act')==='sel'){
+      var id2=t2.getAttribute('data-tbl');
+      tState(id2).sel[t2.getAttribute('data-key')]=t2.value; tRefresh(id2);
+    }
+  });
 
   $('go').addEventListener('click',load);
   $('xl').addEventListener('click',excel);
