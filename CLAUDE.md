@@ -399,6 +399,29 @@ winning over a creditor leg because a machine on term finance usually touches bo
 header shows additions and paid-from-bank separately for that reason. Disposals are
 reported apart and NEVER netted into spend. `npm run test:capex`.
 
+**Cash out on capex is a different question, followed on the PAYMENT voucher.** An asset is
+capitalised the day it is ready and paid for on its own vouchers, often months earlier, so
+the asset ledger is the wrong place to look for money. `cashRows` is built from every
+voucher that CREDITS a bank, cash or OD ledger, taking the part of it DEBITED to an asset,
+to a machinery creditor, or to a capital advance -- the debits rather than the bank total,
+so a payment run settling one machine and three paper bills contributes only the machine.
+An **advance against a machine that has not arrived** is capex cash the day it is paid; that
+is most of what the user wanted and it never touches a fixed-asset ledger. Selling an asset
+is NOT negative cash out (that netted a disposal into spend, which the page refuses
+everywhere else), but a refund from a machinery creditor or advance IS. `capexPartyKind`
+recognises those accounts from the GROUP (Kolkata's is `Sundry Creditor - Fixed Assets`) and
+is deliberately narrow: a general `Advance to Suppliers` holding paper and machinery cannot
+be split by any rule here, so it is left out and said so. What it matched is returned as
+`capexPartyGroups` and listed on the page, because a missing account is money left out in
+silence.
+
+**`byFunding` describes how the entry was BOOKED, not when money moved.** "Booked to supplier
+account" is simply the ledger the purchase was entered against -- it does NOT mean the
+machine was taken on credit, and the payment has usually gone out earlier against a proforma.
+The old labels ("on supplier credit", "financed by a loan") read as statements about funding
+and were disbelieved on sight, correctly. The section is named for what it is and points at
+the cash section for the money.
+
 **Charts are inline SVG, light-only, and capped at their natural width.** No chart
 library: a CDN this office cannot reach is how a page ends up blank. Categorical hues are
 the dataviz reference palette's first five in its FIXED order (colour follows the

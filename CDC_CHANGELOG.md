@@ -1,6 +1,36 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.70 (server, diag) — November 2026 — Capex from the cash side, advances included
+
+**"What is my cash out because of capex" was a question the page could not answer.** It
+reported what was capitalised, and an asset is capitalised the day it is ready — the money
+left on its own vouchers, often months earlier, and never through the asset ledger at all.
+So the payments are now followed directly: every voucher that credits a bank, cash or OD
+account, counting the part of it that went to an asset, to a supplier of machinery, or as an
+**advance against a machine that has not arrived yet**. The debits are read rather than the
+bank total, so a payment run settling one machine and three paper bills contributes only the
+machine. It has its own section, a card in the header, a month chart, and a sheet in the
+workbook.
+
+Selling an asset is not negative capex spend: proceeds from scrapping old laptops came back
+as cash out of −₹3,00,000, quietly netting a disposal into the money gone out. An asset leg
+counts only when it is debited. A refund from a machinery supplier does count, because that
+is capex cash coming back.
+
+The accounts the cash is followed through are recognised from the group Tally files them in
+— Kolkata's is literally `Sundry Creditor - Fixed Assets` — and the rule is deliberately
+narrow. A general `Advance to Suppliers` account holding both paper and machinery cannot be
+split by any rule here, so it is left out rather than guessed at. What *was* matched is
+listed on the page, because a machinery account missing from that list is money silently
+absent from the figure.
+
+**And "how it was funded" was describing the wrong thing.** *On supplier credit* is not a
+statement about funding — it was simply the account the purchase was entered against, which
+is how every machine is booked in Tally whether or not it had already been paid for against
+a proforma. The section is renamed **How the entry was booked — not when it was paid**, its
+labels say what they mean, and it points at the cash section for the money.
+
 ## v2.69 (server, diag) — November 2026 — Capitalising the Ahmedabad factory was not a 44 Cr disposal
 
 **Nothing was sold.** When the Ahmedabad factory was finished, journals 274, 415 and 418–421

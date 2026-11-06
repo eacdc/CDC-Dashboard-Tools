@@ -83,6 +83,8 @@ const V = (branch, date, pl, ld, extra) => {
       // The trap: Kolkata files the SUPPLIERS of its machines under a creditor sub-group
       // whose own name says "Fixed Assets". It is a payable, not an asset.
       'Robotjet Co.Ltd.': 'Sundry Creditor - Fixed Assets',
+      'Advance for Capital Goods - Komori': 'Capital Advances',
+      'Advance to Suppliers': 'Loans & Advances',
       'Digital Book Edge Printer': 'Plant & Machinery',
       // The Ahmedabad factory: accumulated in WIP while it was built, then capitalised.
       'WIP - Factory Building': 'Preoperating Block',
@@ -99,6 +101,7 @@ const V = (branch, date, pl, ld, extra) => {
       'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account',
       'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
       'Sundry Creditor - Fixed Assets': 'Sundry Creditors',
+      'Capital Advances': 'Current Assets', 'Loans & Advances': 'Current Assets',
       'Secured Loans': 'Loans (Liability)', 'Loans (Liability)': 'Capital Account',
       'Indirect Expenses': 'Revenue Account', 'Purchase Accounts': 'Revenue Account',
       'Capital Account': null, 'Revenue Account': null,
@@ -144,6 +147,15 @@ const V = (branch, date, pl, ld, extra) => {
     { 'Ahmedabad Factory Building': -70000000,
       'WIP - Factory Building': 60000000, 'WIP - Plant & Machinary': 10000000 },
     { type: 'Journal', narration: 'Being the Factory Building under Construction now Capitalised' }));
+
+  // AN ADVANCE AGAINST A MACHINE IS CASH OUT ON CAPEX, months before the asset exists.
+  vs.push(V('kol', '20260505', { 'HDFC Current A/c': 15000000, 'Advance for Capital Goods - Komori': -15000000 },
+    {}, { type: 'Bank Payments', narration: '30pc advance, Komori proforma' }));
+  // A payment run that settles ONE machinery bill and one paper bill contributes only
+  // the machine -- which is why the DEBITS are read, not the bank total.
+  vs.push(V('kol', '20260828', { 'HDFC Current A/c': 2600000, 'Robotjet Co.Ltd.': -2110443.65,
+    'Machine Supplier': -0.01, 'Advance to Suppliers': -489556.34 },
+    {}, { type: 'Bank Payments', narration: 'Robotjet + paper advance' }));
 
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
@@ -217,7 +229,38 @@ const V = (branch, date, pl, ld, extra) => {
   assert(!j.byAsset.some((x) => /^WIP/.test(x.label) && x.spend),
     'and no work-in-progress account appears in what was bought');
 
-  // HOW IT WAS FUNDED -- the distinction the whole report rests on.
+  // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
+  // that matters for a cash-flow view.
+  const cash = j.cashRows || [];
+  const adv = cash.find((r) => /Komori/.test(r.paidFor));
+  assert(adv && adv.amount === 15000000 && adv.kind === 'advance',
+    'an ADVANCE against a machine is cash out on capex the day it is paid, months before the'
+    + ' asset exists -- it does not wait for the machine to be capitalised');
+  const settle = cash.find((r) => r.date === '20260828');
+  assert(settle && near(settle.amount, 2110443.65),
+    'a payment run that settles one machinery bill and one paper advance contributes ONLY the'
+    + ' machine, because the capex DEBITS are read rather than the bank total (got '
+    + (settle && settle.amount) + ')');
+  const direct = cash.find((r) => r.paidFor === 'Computers');
+  assert(direct && direct.amount === 500000 && direct.kind === 'asset',
+    'and an asset paid for straight out of the bank is cash out on the day it is paid');
+  assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000),
+    'the total is every one of those and nothing else -- no capitalisation journal, no'
+    + ' supplier bill that has not been paid, and no disposal netted off (got ' + j.cashOut + ')');
+  assert(!cash.some((r) => r.amount < 0),
+    'and SELLING an asset is not negative capex spend: proceeds from scrapping old laptops'
+    + ' do not quietly net a disposal into the money gone out');
+  assert(!cash.some((r) => r.date === '20260515'),
+    'the day a press is CAPITALISED against a term loan no money moves, so it is not cash out');
+  assert(j.capexPartyGroups.some((x) => /Sundry Creditor - Fixed Assets/.test(x.group) && x.kind === 'capital_creditor')
+    && j.capexPartyGroups.some((x) => /Capital Advances/.test(x.group) && x.kind === 'advance'),
+    'and the accounts the cash is followed through are NAMED, because this rests entirely on'
+    + ' how the chart of accounts is laid out and a missing one is money left out in silence');
+  assert(!j.capexPartyGroups.some((x) => /Loans & Advances/.test(x.group)),
+    'a general supplier-advance account is NOT guessed at: it carries paper as well as'
+    + ' machinery, and no rule here can split it');
+
+  // HOW THE ENTRY WAS BOOKED -- which says nothing about when the money moved.
   const press = j.rows.find((r) => r.asset === 'Heidelberg CD102 Press');
   assert(press && press.funded === 'loan',
     'a press capitalised against a term loan is marked as LOAN funded, not as cash gone that day');
@@ -228,8 +271,8 @@ const V = (branch, date, pl, ld, extra) => {
   const fundMap = {};
   for (const f of j.byFunding) fundMap[f.key] = f.spend;
   assert(near(fundMap.loan, 50000000) && near(fundMap.cash, 2000000) && near(fundMap.credit, 4132900),
-    'and the funding split totals back: 5 Cr on loan, 20L cash, 20L + the printer on credit (got '
-    + JSON.stringify(fundMap) + ')');
+    'and the booking split totals back: 5 Cr against a loan leg, 20L against a bank leg, 20L +'
+    + ' the printer against a supplier account (got ' + JSON.stringify(fundMap) + ')');
 
   // The rollups.
   const grp = {};
