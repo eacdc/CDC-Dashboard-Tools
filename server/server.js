@@ -2127,7 +2127,17 @@ app.get('/api/loans', async (req, res) => {
       firstOf[br] = f.length ? f[0].date : null;
       const asOn = openings[br].asOn;
       if (asOn && firstOf[br] && firstOf[br] > asOn) {
-        notes.push(`${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. Everything posted in between is in neither half, so every balance on this page is wrong by whatever happened in that gap -- and on an OD or CC account that is the whole difference, because a sweeping account is paid down by postings we do not hold. Back-fill ${br} from ${asOn} (pipeline: -From ${asOn} -To ${firstOf[br]}) and ask again.`);
+        // How WIDE the gap is decides whether it can explain anything, so it is counted
+        // rather than left to be eyeballed off two dates. And a day on which nothing was
+        // posted leaves nothing out -- the guard cannot tell an empty day from a missing
+        // one, so it must not claim the balances are wrong, only that this much is
+        // unaccounted for. Overstating it is how a page stops being believed.
+        const days = Math.max(1, Math.round((Date.UTC(+firstOf[br].slice(0, 4), +firstOf[br].slice(4, 6) - 1, +firstOf[br].slice(6, 8))
+          - Date.UTC(+asOn.slice(0, 4), +asOn.slice(4, 6) - 1, +asOn.slice(6, 8))) / 86400000));
+        const scale = days <= 3
+          ? `That is ${days} day(s). If nothing was posted in them this is fine and changes no figure here; if something was, it is missing from every balance below.`
+          : `That is ${days} days of postings in neither half, so every balance below is out by whatever happened in them -- and on an OD or CC account that can be the whole difference, because a sweeping account is paid down by postings we do not hold.`;
+        notes.push(`${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. ${scale} Settle it by back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}), which is cheap and removes the question.`);
       }
     }
     if (nearMisses.length) {

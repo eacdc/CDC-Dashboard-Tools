@@ -238,10 +238,25 @@ const V = (branch, date, pl, ld, extra) => ({
   assert(gap.ok === true, 'the endpoint still answers when the openings predate the vouchers');
   assert((gap.notes || []).some((s) => /20230401/.test(s) && /20260415/.test(s) && /neither half/.test(s)),
     'and it SAYS the opening stands on a day older than the oldest voucher held, naming both days');
+  assert((gap.notes || []).some((s) => /\b1110 days\b/.test(s)),
+    'and counts the gap in days, because two dates do not say whether it can explain anything');
   assert((gap.notes || []).some((s) => /-From 20230401/.test(s)),
     'with the back-fill that would close it, because a warning nobody can act on is noise');
   assert(gap.firstVoucher && gap.firstVoucher.ahm === '20260415',
     'the oldest voucher held per branch comes back, so a caller can check the span itself');
+
+  // A ONE-DAY gap must not be reported as if every figure were wrong. The guard cannot
+  // tell a day on which nothing was posted from a day whose entries are missing, and the
+  // live books threw exactly this: openings on 20250401, oldest voucher 20250402. Saying
+  // "every balance on this page is wrong" over one possibly-empty day is how a page stops
+  // being believed.
+  fakeDb.collection('masters').docs.find((d) => d.branch === 'ahm').openingAsOn = '20260414';
+  const oneDay = await get('/api/loans?branch=ahm&from=20260401&to=20260430&bucket=month');
+  assert((oneDay.notes || []).some((s) => /1 day\(s\)/.test(s) && /this is fine/.test(s)),
+    'a one-day gap says it changes nothing if that day was empty, instead of condemning every figure');
+  assert(!(oneDay.notes || []).some((s) => /every balance below is out/.test(s)),
+    'and it does not claim the balances are out, because the guard cannot know that');
+  fakeDb.collection('masters').docs.find((d) => d.branch === 'ahm').openingAsOn = '20230401';
 
   // ---- a quiet window still carries the balance ----------------------------
   const quiet = await get('/api/loans?branch=kol&from=20260801&to=20261031&bucket=month');
