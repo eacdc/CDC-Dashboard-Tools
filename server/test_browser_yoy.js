@@ -149,6 +149,18 @@ const V = (branch, date, sales, salary) => ({
   await page.waitForSelector('text=Year on Year');
   assert(true, 'the Year on Year button is on the landing page, before anything is loaded');
 
+  // The version badge is the only thing telling anybody whether a deploy landed, and the
+  // landing badge used to be a HARDCODED string in a scope of its own: it read v1.1 for
+  // months while the other two moved, and was then taken as proof that a fix had not
+  // deployed. So it has to be the real version, and it has to be the SAME one.
+  const badge = await page.evaluate(() => {
+    const want = window.CDC_VER + ' · ' + window.CDC_BUILD;
+    const hit = [...document.querySelectorAll('div')].some((d) => d.textContent.trim() === want);
+    return { want: want, shown: hit, body: /v\d+\.\d+ · \d{2}-[A-Z][a-z]{2}-\d{4}/.test(document.body.innerText) };
+  });
+  assert(badge.shown, `the landing badge shows the page's real version, not a literal somebody forgot (${badge.want})`);
+  assert(badge.body, 'and it is a version followed by a build date, so a blank or undefined badge fails here');
+
   // Point the panel at the test server (the page is on file://, so relative would fail).
   await page.evaluate((b) => { window.__testApiBase = b; }, base);
   await page.fill('input[placeholder^="e.g. https"]', base);
