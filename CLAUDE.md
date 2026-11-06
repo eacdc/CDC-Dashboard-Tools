@@ -280,7 +280,17 @@ Which ledgers count is decided by the GROUP Tally put them in (Secured Loans, Un
 Loans, Bank OD/OCC, Loans (Liability)), plus a ledger under Current Liabilities whose
 **name** says packing credit, PCFC, cash credit, bill discounting, WCDL, term loan or
 buyer's credit -- the group chain never contains the ledger's own name, which is how every
-PCFC account hid from the cashflow tab for a year. `Loans & Advances (Asset)` is money WE
+PCFC account hid from the cashflow tab for a year.
+
+**Export credit is a kind of its own, split out of Secured Loans.** The group picks the
+family (`od_cc` / `unsecured` / secured / other) and then `EXPORT_KW` (pcfc, pcre, packing
+credit, bill discount, pre/post-shipment, export credit/finance) splits secured and other
+into `export` vs `term`, read from the sub-group AND the ledger name. Tally files PCFC and
+PCRE under Secured Loans because they are secured, but a packing credit drawn per shipment
+is not a seven-year loan on a press and one total answers neither question. `Buyer's
+credit` is NOT export credit -- it finances imports. An `od_cc` account keeps its kind
+whatever facility it funds, since a sweeping account is reported by its balance.
+`KIND_ORDER` fixes the display order short-term first; do not sort by size. `Loans & Advances (Asset)` is money WE
 lent and is never counted; a ledger named like a loan but grouped elsewhere ("Term Loan
 Interest") is listed as a **near miss** rather than silently dropped. Note that
 `'unsecured loans'` CONTAINS `'secured loans'`, so the group keywords are ordered and must

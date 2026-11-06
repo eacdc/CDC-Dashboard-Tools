@@ -32,19 +32,28 @@ const GROUP_KINDS = [
   { kw: 'secured loans', kind: 'secured' },
   { kw: 'loans (liability)', kind: 'other' },
 ];
+// EXPORT CREDIT IS ITS OWN KIND, not a flavour of secured debt. Tally files PCFC and
+// PCRE under Secured Loans because they are secured -- but a packing credit drawn against
+// one shipment and repaid when that shipment is realised answers a different question
+// from a seven-year term loan on a printing press, and summing them tells you neither.
+// The books already separate them by sub-group ("Secured Loans > PCRE Loan Citi Bank"),
+// so the chain usually says so; the ledger NAME is read as well, because getChain never
+// includes it and an account filed straight under Secured Loans still says PCFC in its
+// name.
+//
+// Buyer's credit is deliberately NOT here: it finances imports, not exports.
+const EXPORT_KW = ['pcfc', 'pcre', 'packing credit', 'bill discount', 'bill discounting',
+  'export credit', 'preshipment', 'pre-shipment', 'post shipment', 'post-shipment',
+  'export finance', 'export packing'];
 // By NAME, for an instrument somebody filed straight under Current Liabilities instead
 // of a loan group. These words name a facility and never a trading account. They are
 // read from the LEDGER NAME, which the group chain never contains -- the mistake that
 // hid every PCFC account from the cashflow tab for a year.
 const NAME_KINDS = [
-  { kw: 'packing credit', kind: 'od_cc' },
   { kw: 'cash credit', kind: 'od_cc' },
   { kw: 'overdraft', kind: 'od_cc' },
-  { kw: 'bill discount', kind: 'od_cc' },
-  { kw: 'pcfc', kind: 'od_cc' },
-  { kw: 'pcre', kind: 'od_cc' },
   { kw: 'wcdl', kind: 'other' },
-  { kw: 'term loan', kind: 'secured' },
+  { kw: 'term loan', kind: 'term' },
   { kw: 'buyers credit', kind: 'other' },
   { kw: "buyer's credit", kind: 'other' },
 ];
@@ -65,21 +74,44 @@ const NOT_BORROWING = ['loans & advances', 'loans and advances', 'current assets
 const NOT_BORROWING_NAME = ['interest', 'subvention', 'receivable', 'provision',
   'charges', 'commission', 'penalty'];
 
-const KIND_LABELS = { secured: 'Secured loans', unsecured: 'Unsecured loans',
-  od_cc: 'OD / CC / packing credit', other: 'Other borrowings' };
+const KIND_LABELS = {
+  od_cc: 'OD / CC (working capital)',
+  export: 'Export credit (PCFC / PCRE / packing credit)',
+  term: 'Term loans',
+  unsecured: 'Unsecured loans',
+  other: 'Other borrowings',
+};
+// Short-term first, long-term last. A fixed order, because a summary whose sections
+// reorder themselves between loads is a summary nobody learns to read.
+const KIND_ORDER = ['od_cc', 'export', 'term', 'unsecured', 'other'];
+
+function isExportCredit(hay) {
+  for (const k of EXPORT_KW) if (hay.indexOf(k) >= 0) return true;
+  return false;
+}
 
 // Returns the kind of borrowing this ledger is, or null if it is not one.
 // `chain` is the group chain, top group first, as getChain gives it.
+//
+// The GROUP picks the family, then export credit is split out of it by sub-group or by
+// name. An OD/CC account keeps its family whatever it is called: an account that sweeps
+// is reported by its balance, and that matters more than which facility it funds.
 function loanKind(name, chain) {
   const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
+  const nm = String(name || '').toLowerCase();
   for (const bad of NOT_BORROWING) if (cs.indexOf(bad) >= 0) return null;
-  for (const g of GROUP_KINDS) if (cs.indexOf(g.kw) >= 0) return g.kind;
+  let family = null;
+  for (const g of GROUP_KINDS) if (cs.indexOf(g.kw) >= 0) { family = g.kind; break; }
+  if (family === 'od_cc' || family === 'unsecured') return family;
+  if (family === 'secured' || family === 'other') {
+    return isExportCredit(cs + '>' + nm) ? 'export' : (family === 'secured' ? 'term' : 'other');
+  }
   // A name match is allowed only where the ledger is at least a liability: the words
   // below are specific, but "Term Loan Interest" under Indirect Expenses is an expense,
   // not a borrowing, and this report must not turn one into the other.
   if (cs.indexOf('current liabilities') >= 0 || cs.indexOf('liabilit') >= 0) {
-    const nm = String(name || '').toLowerCase();
     for (const bad of NOT_BORROWING_NAME) if (nm.indexOf(bad) >= 0) return null;
+    if (isExportCredit(nm)) return 'export';
     for (const n of NAME_KINDS) if (nm.indexOf(n.kw) >= 0) return n.kind;
   }
   return null;
@@ -100,7 +132,9 @@ function isSweep(kind) { return !!SWEEP_KINDS[kind]; }
 function nearMiss(name, chain) {
   if (loanKind(name, chain)) return false;
   const nm = String(name || '').toLowerCase();
-  return NAME_KINDS.some((n) => nm.indexOf(n.kw) >= 0);
+  // The export words count here too: a real PCFC account filed outside every loan group
+  // is exactly the kind of thing that must be named rather than quietly dropped.
+  return isExportCredit(nm) || NAME_KINDS.some((n) => nm.indexOf(n.kw) >= 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -360,9 +394,10 @@ function buildLoanMovement(opts) {
     diffTotal: r2(disagree.reduce((s2, d) => s2 + d.diff, 0)), worst: disagree.slice(0, 20) };
   const dormant = loans.filter((l) => !l.moved && Math.abs(l.closing) < 0.5).length;
   return { bucket, from, to, buckets: keys.length, loans, periods,
-    byKind: Object.values(byKind).sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing)),
+    byKind: Object.values(byKind).sort((a, b) =>
+      (KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)) || (Math.abs(b.closing) - Math.abs(a.closing))),
     total, openingAsOn, openingKnown, ignoredRows: ignored, inDebit, dormant, tallyCheck };
 }
 
-module.exports = { loanKind, nearMiss, bucketKeyOf, bucketLabel, bucketsBetween,
-  weekStart, buildLoanMovement, KIND_LABELS, GROUP_KINDS, NAME_KINDS, NOT_BORROWING };
+module.exports = { loanKind, nearMiss, isExportCredit, bucketKeyOf, bucketLabel, bucketsBetween,
+  weekStart, buildLoanMovement, KIND_LABELS, KIND_ORDER, GROUP_KINDS, NAME_KINDS, EXPORT_KW, NOT_BORROWING };

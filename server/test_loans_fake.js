@@ -28,7 +28,7 @@ const kind = (n) => LM.loanKind(n, chainOf[n]);
 assert(kind('PCFC Loan 0012') === 'od_cc',
   'a packing-credit account under Bank OD A/c IS a borrowing, which is where Tally puts one');
 assert(kind('HDFC CC A/c') === 'od_cc', 'and so is a cash-credit account under Bank OCC');
-assert(kind('HDFC Term Loan') === 'secured', 'a term loan under Secured Loans is a secured borrowing');
+assert(kind('HDFC Term Loan') === 'term', 'a term loan under Secured Loans is a TERM loan');
 assert(kind('Director Loan') === 'unsecured', 'a director loan under Unsecured Loans is an unsecured one');
 assert(kind('Buyers Credit SBI') === 'other',
   'a facility filed straight under Current Liabilities is still counted, by its name');
@@ -59,7 +59,7 @@ assert(LM.bucketsBetween('20260401', '20260407', 'day').length === 7, 'a day buc
 // ---------------------------------------------------------------------------
 const meta = {
   'PCFC Loan 0012': { kind: 'od_cc', group: 'Loans (Liability) > Bank OD A/c', branches: ['kol'] },
-  'HDFC Term Loan': { kind: 'secured', group: 'Loans (Liability) > Secured Loans', branches: ['kol'] },
+  'HDFC Term Loan': { kind: 'term', group: 'Loans (Liability) > Secured Loans', branches: ['kol'] },
 };
 // Tally's openings stand on 1 Apr 2025: PCFC 40 lakh drawn, term loan 1 crore.
 // Cr-positive, as masters.opening stores a liability.
@@ -201,7 +201,7 @@ assert(LM.loanKind('Interest Receivable on PCRE Loan', ['Capital Account', 'Curr
   'interest RECEIVABLE is not a borrowing either, it is the other way round entirely');
 // The name exclusions must only ever block the NAME path -- a ledger the GROUP says is a
 // loan stays one, whatever words are in it.
-assert(LM.loanKind('L/C Payable to Muller Martini', ['Capital Account', 'Loans (Liability)', 'Secured Loans']) === 'secured',
+assert(LM.loanKind('L/C Payable to Muller Martini', ['Capital Account', 'Loans (Liability)', 'Secured Loans']) === 'term',
   'but a real facility under Secured Loans is untouched by the word "payable" in its name');
 assert(LM.loanKind('Loan From Director - Manu Choudhury',
   ['Capital Account', 'Loans (Liability)', 'Unsecured Loans', 'Loan From Director']) === 'unsecured',
@@ -217,7 +217,7 @@ assert(LM.loanKind('Loan From Director - Manu Choudhury',
 const sw = LM.buildLoanMovement({
   ledgerMeta: {
     'Citi Bank OD': { kind: 'od_cc', group: 'Bank OD A/c', branches: ['kol'] },
-    'Term Loan A': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] },
+    'Term Loan A': { kind: 'term', group: 'Secured Loans', branches: ['kol'] },
   },
   openings: { kol: { asOn: '20260401', amounts: { 'Citi Bank OD': 50000000, 'Term Loan A': 20000000 } } },
   rows: [
@@ -259,7 +259,7 @@ assert(!swBroke, 'every period reconciles on the split too (' + (swBroke || 'hel
 // this scale means more was repaid than the account held -- which is usually a gap in the
 // vouchers between the opening's own day and the window start, not a fact about the loan.
 const debit = LM.buildLoanMovement({
-  ledgerMeta: { 'Term Loan 221780001': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] } },
+  ledgerMeta: { 'Term Loan 221780001': { kind: 'term', group: 'Secured Loans', branches: ['kol'] } },
   openings: { kol: { asOn: '20260401', amounts: { 'Term Loan 221780001': 1034482.55 } } },
   rows: [{ ledger: 'Term Loan 221780001', branch: 'kol', date: '20260610', drawn: 0, repaid: 2413793.13 }],
   from: '20260401', to: '20260630', bucket: 'month',
@@ -274,7 +274,7 @@ assert(debit.loans[0].inDebit === true, 'and the row carries the flag for the pa
 // live books carry 133 borrowing ledgers of which about 120 are long closed.
 const dorm = LM.buildLoanMovement({
   ledgerMeta: {
-    'Live Loan': { kind: 'secured', group: 'Secured Loans', branches: ['kol'] },
+    'Live Loan': { kind: 'term', group: 'Secured Loans', branches: ['kol'] },
     'Closed Lender A': { kind: 'unsecured', group: 'Unsecured Loans', branches: [] },
     'Closed Lender B': { kind: 'unsecured', group: 'Unsecured Loans', branches: [] },
   },
@@ -313,6 +313,48 @@ assert(near(hp.tally + hp.postings, halves.loans[0].opening),
   'and the two halves are exactly the opening, so neither is a separate estimate');
 assert(near(halves.total.openingParts.tally, 10000000) && near(halves.total.openingParts.postings, 30000000),
   'the totals carry the same split, so a headline that disagrees with Tally can be read the same way');
+
+// ---------------------------------------------------------------------------
+// Export credit is its own kind, not a flavour of secured debt
+// ---------------------------------------------------------------------------
+// Tally files PCFC and PCRE under Secured Loans because they ARE secured -- but a packing
+// credit drawn against one shipment and repaid when that shipment realises answers a
+// different question from a seven-year loan on a printing press, and adding them up
+// answers neither. These are the real chains out of the live chart of accounts.
+const EX = (n, g) => LM.loanKind(n, g.split('>'));
+assert(EX('PCRE Loan with Citi Bank - A/c No.R0226A1904', 'Loans (Liability)>Secured Loans>PCRE Loan Citi Bank') === 'export',
+  'a PCRE account under its own sub-group is EXPORT credit, not a term loan');
+assert(EX('PCFC Loan with ICICI Bank - A/c No.000653000231', 'Loans (Liability)>Secured Loans>PCFC Loan ICICI Bank') === 'export',
+  'and so is a PCFC account');
+assert(EX('PCFC Loan 9912', 'Loans (Liability)>Secured Loans') === 'export',
+  'and so is one filed straight under Secured Loans, because the NAME says PCFC and the group chain never carries it');
+assert(EX('Term Loan with Citi Bank - A/c No 242060001', 'Loans (Liability)>Secured Loans') === 'term',
+  'while a term loan under the same group stays a TERM loan -- which is the whole point of splitting them');
+assert(EX('Packing Credit SBI', 'Capital Account>Current Liabilities') === 'export',
+  'a packing credit filed loosely under Current Liabilities is still export credit');
+assert(EX("Buyer's Credit SBI", 'Capital Account>Current Liabilities') === 'other',
+  "but buyer's credit finances IMPORTS, so it is not export credit");
+assert(EX('Citi Bank, (Kolkata)', 'Loans (Liability)>Bank OD A/c') === 'od_cc',
+  'an OD account keeps its own kind whatever facility it funds, because it is reported by its balance');
+assert(LM.nearMiss('PCFC Settlement Suspense', ['Capital Account', 'Suspense A/c']) === true,
+  'and a PCFC-named ledger outside every loan group is a NEAR MISS, named rather than dropped');
+
+// The sections come back in a fixed order, short-term first.
+const ordered = LM.buildLoanMovement({
+  ledgerMeta: {
+    'T': { kind: 'term', group: 'Secured Loans', branches: ['kol'] },
+    'E': { kind: 'export', group: 'Secured Loans > PCRE', branches: ['kol'] },
+    'O': { kind: 'od_cc', group: 'Bank OD A/c', branches: ['kol'] },
+    'U': { kind: 'unsecured', group: 'Unsecured Loans', branches: ['kol'] },
+  },
+  openings: { kol: { asOn: '20260401', amounts: { T: 100, E: 9999999, O: 50, U: 10 } } },
+  rows: [], from: '20260401', to: '20260430', bucket: 'month',
+});
+assert(ordered.byKind.map((k) => k.kind).join(',') === 'od_cc,export,term,unsecured',
+  'kinds are listed short-term first in a FIXED order, not by size -- a summary that reorders itself'
+  + ' between loads is one nobody learns to read (got ' + ordered.byKind.map((k) => k.kind).join(',') + ')');
+assert(ordered.byKind.every((k) => k.kindLabel && k.kindLabel !== k.kind),
+  'and every kind carries a label written for a human, not its internal name');
 
 console.log(fails ? `\n${fails} FAILED` : '\nall good');
 process.exit(fails ? 1 : 0);
