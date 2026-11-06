@@ -473,6 +473,16 @@ says every rupee through it is capital, so those still count in full. What is dr
 totalled as `unmatchedSupplier` and stated on the page, because money deliberately left out
 of a figure has to be visible. Requires `bills` in the voucher projection.
 
+**AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP.** The label was written the day
+the money left and never revisited, so payments for presses long since installed still read
+"machine not here yet". Every posting to an advance ledger is collected (`advPost`) and run
+FIFO in date order: a credit releases the OLDEST money sitting in the account, which is how
+an advance account actually behaves -- the first proforma paid is the first machine to
+arrive. A payment whose own money has been released becomes kind `advance_done`; part-
+released counts as still open, because the machine is not here until all of it is. The two
+total apart on the cards, so "still out against machines not here" is readable rather than
+worked out by hand. `capexFlow` is untouched by this -- it never counted payments.
+
 **WHAT a payment is and HOW we knew are two columns, not one.** The cash list had
 "paid a machinery supplier" and "paid a supplier who sold us an asset" as if they were two
 kinds of payment; they are the SAME kind -- settling a machine supplier's bill -- recognised

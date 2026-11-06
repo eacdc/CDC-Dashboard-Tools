@@ -512,6 +512,58 @@ const V = (branch, date, pl, ld, extra) => {
     'and one window covering all three answers the same, because the advance and the bill'
     + ' both open and close inside it');
 
+  // ==========================================================================
+  // AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP. The label was written the day
+  // the money left and never revisited, so payments for presses long since installed
+  // still read "machine not here yet". Two advances to the same supplier, one machine
+  // delivered: FIFO has to say which payment is still out.
+  // ==========================================================================
+  fakeDb.collection('masters').docs.length = 0;
+  fakeDb.collection('vouchers').docs.length = 0;
+  fakeDb.collection('masters').docs.push({
+    branch: 'kol',
+    ledgers: { 'Stahl Folder': 'Plant & Machinery',
+      'Advance for Machinery - Heidelberg': 'Capital Advances',
+      'HDFC Current A/c': 'Bank Accounts' },
+    groups: { 'Plant & Machinery': 'Fixed Assets', 'Fixed Assets': 'Capital Account',
+      'Capital Advances': 'Current Assets', 'Current Assets': 'Capital Account',
+      'Bank Accounts': 'Current Assets', 'Capital Account': null },
+    ids: {},
+  });
+  const V3 = fakeDb.collection('vouchers').docs;
+  const ADV = 'Advance for Machinery - Heidelberg';
+  // Two proformas paid: 40 L in April, 60 L in May.
+  V3.push(V('kol', '20260405', { 'HDFC Current A/c': 4000000, [ADV]: -4000000 }, {},
+    { type: 'Bank Payments', narration: 'advance, folder' }));
+  V3.push(V('kol', '20260510', { 'HDFC Current A/c': 6000000, [ADV]: -6000000 }, {},
+    { type: 'Bank Payments', narration: 'advance, second machine' }));
+  // The FIRST machine lands in July: 40 L of the advance is capitalised into it.
+  V3.push(V('kol', '20260715', { [ADV]: 4000000 }, { 'Stahl Folder': -4000000 },
+    { type: 'Journal', narration: 'folder capitalised against advance' }));
+
+  const advJ = await get('/api/capex?branch=kol&from=20260401&to=20260930');
+  const advRows = (advJ.cashRows || []).filter((r) => /Advance for Machinery/.test(r.paidFor));
+  const apr = advRows.find((r) => r.date === '20260405');
+  const may = advRows.find((r) => r.date === '20260510');
+  assert(apr && apr.kind === 'advance_done',
+    'the April advance is no longer an advance: its machine arrived in July, and a payment'
+    + ' for a press now running must not still read "machine not here yet"');
+  assert(may && may.kind === 'advance',
+    'while the May advance IS still one -- that machine has not come (got ' + (may && may.kind) + ')');
+  assert(advJ.cashByKind.find((k) => k.key === 'advance').spend === 6000000
+    && advJ.cashByKind.find((k) => k.key === 'advance_done').spend === 4000000,
+    'so the two are totalled apart, and "still out against machines not here" is a figure'
+    + ' that can be read off the page rather than worked out by hand');
+  assert(near(advJ.capexFlow.advanceNet, 6000000),
+    'and the period figure is unaffected, because it was never counting payments: 1 Cr paid'
+    + ' in, 40 L released, 60 L of advances still standing (got ' + advJ.capexFlow.advanceNet + ')');
+
+  // The release takes the OLDEST money first, which is what an advance account does --
+  // the first proforma paid is the first machine to arrive.
+  const half = await get('/api/capex?branch=kol&from=20260401&to=20260630');
+  assert((half.cashRows || []).every((r) => r.kind !== 'advance_done'),
+    'and in a window that ENDS before the machine arrived, neither advance is settled yet');
+
   server.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall good');
   process.exit(fails ? 1 : 0);
