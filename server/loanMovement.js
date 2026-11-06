@@ -347,10 +347,32 @@ function buildLoanMovement(opts) {
       netChange: r2(din - dout), closing: runAll };
   });
 
+  // EACH KIND, PERIOD BY PERIOD. The dashboard's main question is not "what do we owe"
+  // but "which kind of borrowing is moving, and when" -- export credit turning over fast
+  // while term debt amortises is two different stories inside one total. Summed from the
+  // same per-loan cells as everything else, so no view can disagree with another.
+  const byKindPeriods = {};
+  for (const l of loans) {
+    const series = byKindPeriods[l.kind] || (byKindPeriods[l.kind] = keys.map((k, i) => ({
+      key: k, label: bucketLabel(k, bucket), opening: 0, drawn: 0, repaid: 0, closing: 0, netChange: 0,
+    })));
+    for (let i = 0; i < keys.length; i++) {
+      const p = l.periods[i];
+      series[i].opening = r2(series[i].opening + p.opening);
+      series[i].drawn = r2(series[i].drawn + p.drawn);
+      series[i].repaid = r2(series[i].repaid + p.repaid);
+      series[i].closing = r2(series[i].closing + p.closing);
+    }
+  }
+  for (const kind of Object.keys(byKindPeriods)) {
+    for (const p of byKindPeriods[kind]) p.netChange = r2(p.closing - p.opening);
+  }
+
   const byKind = {};
   for (const l of loans) {
     const e = byKind[l.kind] || (byKind[l.kind] = { kind: l.kind, kindLabel: l.kindLabel,
-      sweep: l.sweep, count: 0, opening: 0, drawn: 0, repaid: 0, netChange: 0, closing: 0 });
+      sweep: l.sweep, count: 0, opening: 0, drawn: 0, repaid: 0, netChange: 0, closing: 0,
+      periods: byKindPeriods[l.kind] || [] });
     e.count++;
     e.opening = r2(e.opening + l.opening); e.drawn = r2(e.drawn + l.drawn);
     e.repaid = r2(e.repaid + l.repaid); e.closing = r2(e.closing + l.closing);

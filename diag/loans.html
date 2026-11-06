@@ -48,6 +48,37 @@
         border-radius:999px;background:#f1f5f9;color:#475569;margin-left:5px}
   .ex{cursor:pointer;color:var(--teal);font-weight:600}
   a{color:var(--teal)}
+  /* ---- chart tokens -------------------------------------------------------
+     Light only, like every other page here, and `color-scheme` says so: a form
+     control auto-darkened by the browser against a light chart surface is worse
+     than no dark mode at all. The five categorical slots are the reference
+     palette's first five, in its fixed order, validated against this surface
+     (#fff): lightness band, chroma floor, CVD separation and normal-vision floor
+     all pass; three slots fall below 3:1 contrast, which the table view and the
+     always-present legend relieve. Colour follows the CATEGORY, never its size --
+     a kind that shrinks must not change hue. */
+  .viz{color-scheme:light;
+       --s-od:#2a78d6; --s-export:#eb6834; --s-term:#1baf7a; --s-unsecured:#eda100; --s-other:#e87ba4;
+       --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --axis:#c3c2b7; --surf:#fff}
+  .viz svg{display:block;width:100%;height:auto;overflow:visible}
+  .viz svg{margin:0 auto}
+  .viz .gl{stroke:var(--axis);stroke-width:1;shape-rendering:crispEdges}
+  .viz .ax{fill:var(--muted);font-size:9.5px;font-family:ui-monospace,monospace}
+  .viz .vt{fill:var(--ink);font-size:10px;font-family:ui-monospace,monospace;font-weight:700}
+  .viz .seg{cursor:pointer}
+  .viz .seg:hover{opacity:.82}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:2px 0 10px;font-size:11.5px;color:var(--ink2)}
+  .legend span.k{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .sm{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .smc{border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+  .smc .t{font-size:11.5px;font-weight:700;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+  .smc .n{font-size:10.5px;color:var(--dim);font-family:ui-monospace,monospace;margin-bottom:6px}
+  .tip{position:fixed;z-index:9;pointer-events:none;background:#0f172a;color:#fff;font-size:11.5px;
+       padding:6px 9px;border-radius:7px;max-width:280px;line-height:1.45;display:none;
+       font-family:ui-monospace,monospace;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  .matrix td.k{white-space:nowrap}
+  .up{color:var(--red)} .down{color:var(--green)}
   .zero{color:#cbd5e1}
 </style>
 </head>
@@ -160,6 +191,112 @@
   function vchLink(ledger,from,to,br){
     return '/api/yoy/vouchers?branch='+encodeURIComponent(br||$('branch').value)
          +'&ledger='+encodeURIComponent(ledger)+'&from='+from+'&to='+to;
+  }
+
+  // ---- charts: inline SVG, because a CDN this office cannot reach is how a page
+  // ---- ends up blank, and a chart library for two chart types is not worth it.
+  var KIND_VAR={od_cc:'--s-od',export:'--s-export',term:'--s-term',unsecured:'--s-unsecured',other:'--s-other'};
+  function kcol(kind){return 'var('+(KIND_VAR[kind]||'--s-other')+')';}
+  // Rupees at the scale a reader of these figures thinks in. Axis ticks only.
+  function crShort(n){
+    var a=Math.abs(n||0), s=(n<0?'-':'');
+    if(a>=1e7) return s+(a/1e7).toFixed(a>=1e8?0:1)+' Cr';
+    if(a>=1e5) return s+(a/1e5).toFixed(0)+' L';
+    if(a>=1e3) return s+Math.round(a/1e3)+' K';
+    return s+Math.round(a);
+  }
+  // A "nice" axis top, so gridlines land on numbers a person would choose.
+  function niceTop(v){
+    if(!(v>0)) return 1;
+    var p=Math.pow(10,Math.floor(Math.log10(v))), r=v/p;
+    return (r<=1?1:r<=2?2:r<=2.5?2.5:r<=5?5:10)*p;
+  }
+  var tip=null;
+  function showTip(ev,html){
+    if(!tip){tip=document.createElement('div');tip.className='tip';document.body.appendChild(tip);}
+    tip.innerHTML=html; tip.style.display='block';
+    var x=ev.clientX+14, y=ev.clientY+14;
+    if(x+290>window.innerWidth) x=ev.clientX-290;
+    if(y+90>window.innerHeight) y=ev.clientY-90;
+    tip.style.left=x+'px'; tip.style.top=y+'px';
+  }
+  function hideTip(){ if(tip) tip.style.display='none'; }
+
+  // STACKED COLUMNS: closing balance by kind, period by period. Total + composition
+  // in one read. Columns capped at 24px with the band's leftover left as air, a 2px
+  // surface gap between segments (white does the separating, not a stroke), and only
+  // the total labelled -- a number on every segment is chaos and goes unread.
+  function stackChart(kinds, periods){
+    var n=periods.length; if(!n) return '';
+    var W=Math.max(860, 74*n+70), H=270, L=62, R=16, T=28, B=34;
+    var pw=(W-L-R)/n, bw=Math.min(24, pw*0.52);
+    var tops=[];
+    for(var i=0;i<n;i++){var s=0;for(var k=0;k<kinds.length;k++)s+=Math.max(0,kinds[k].periods[i].closing);tops.push(s);}
+    var max=niceTop(Math.max.apply(null,tops.concat([1])));
+    var y=function(v){return T+(H-T-B)*(1-v/max);};
+    var g='<svg viewBox="0 0 '+W+' '+H+'" style="max-width:'+W+'px" role="img"'
+      + ' aria-label="Closing borrowing by kind, each period">';
+    for(var t=0;t<=4;t++){
+      var gv=max*t/4, gy=y(gv);
+      g+='<line class="gl" x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'"/>'
+       + '<text class="ax" x="'+(L-7)+'" y="'+(gy+3)+'" text-anchor="end">'+esc(crShort(gv))+'</text>';
+    }
+    for(var i2=0;i2<n;i2++){
+      var cx=L+pw*i2+pw/2, base=y(0), acc=0;
+      for(var k2=0;k2<kinds.length;k2++){
+        var v=Math.max(0,kinds[k2].periods[i2].closing); if(v<=0) continue;
+        var y0=y(acc), y1=y(acc+v), hh=Math.max(0, y0-y1-2);   // 2px surface gap
+        if(hh<=0.6){acc+=v;continue;}
+        var top=(acc+v>=tops[i2]-0.5);
+        g+='<rect class="seg" x="'+(cx-bw/2)+'" y="'+y1+'" width="'+bw+'" height="'+hh+'"'
+         + ' rx="'+(top?4:0)+'" fill="'+kcol(kinds[k2].kind)+'"'
+         + ' data-tip="'+esc(kinds[k2].kindLabel+'&#10;'+periods[i2].label+'&#10;closing '+rupees(v)
+             +'&#10;net '+(kinds[k2].periods[i2].netChange>=0?'+':'')+rupees(kinds[k2].periods[i2].netChange))+'"/>';
+        acc+=v;
+      }
+      g+='<text class="vt" x="'+cx+'" y="'+(y(tops[i2])-7)+'" text-anchor="middle">'+esc(crShort(tops[i2]))+'</text>'
+       + '<text class="ax" x="'+cx+'" y="'+(H-B+14)+'" text-anchor="middle">'+esc(periods[i2].label.replace('Week of ',''))+'</text>';
+    }
+    g+='<line class="gl" x1="'+L+'" y1="'+y(0)+'" x2="'+(W-R)+'" y2="'+y(0)+'"/></svg>';
+    return '<div class="viz scroll">'+g+'</div>';
+  }
+
+  // SMALL MULTIPLES: one panel per kind, its NET CHANGE each period. A stack answers
+  // "what is the total made of"; it cannot answer "is export credit growing while term
+  // debt amortises". One panel per kind, same baseline, can.
+  function smallMultiples(kinds, periods){
+    var n=periods.length; if(!n) return '';
+    var span=0;
+    for(var a=0;a<kinds.length;a++) for(var b=0;b<n;b++) span=Math.max(span, Math.abs(kinds[a].periods[b].netChange));
+    var max=niceTop(span||1);
+    var out='<div class="sm">';
+    for(var k=0;k<kinds.length;k++){
+      var K=kinds[k], W=Math.max(300, 30*n+34), H=104, L=6, R=6, T=10, B=14;
+      var pw=(W-L-R)/n, bw=Math.min(18, pw*0.56), mid=T+(H-T-B)/2;
+      var y=function(v){return mid-(H-T-B)/2*(v/max);};
+      var g='<svg viewBox="0 0 '+W+' '+H+'" style="max-width:'+W+'px" role="img"'
+        + ' aria-label="'+esc(K.kindLabel)+' net change by period">';
+      g+='<line class="gl" x1="'+L+'" y1="'+mid+'" x2="'+(W-R)+'" y2="'+mid+'"/>';
+      for(var i=0;i<n;i++){
+        var v=K.periods[i].netChange, cx=L+pw*i+pw/2;
+        if(Math.abs(v)>=1){
+          var yy=Math.min(mid,y(v)), hh=Math.max(2,Math.abs(mid-y(v)));
+          g+='<rect class="seg" x="'+(cx-bw/2)+'" y="'+yy+'" width="'+bw+'" height="'+hh+'" rx="3"'
+           + ' fill="'+kcol(K.kind)+'" fill-opacity="'+(v>=0?1:0.42)+'"'
+           + ' data-tip="'+esc(K.kindLabel+'&#10;'+K.periods[i].label+'&#10;'+(v>=0?'drew ':'repaid ')
+               +rupees(Math.abs(v))+'&#10;closing '+rupees(K.periods[i].closing))+'"/>';
+        }
+      }
+      g+='</svg>';
+      out+='<div class="smc"><div class="t"><i style="background:'+kcol(K.kind)+';width:11px;height:11px;'
+        + 'border-radius:3px;display:inline-block"></i>'+esc(K.kindLabel)+'</div>'
+        + '<div class="n">'+esc(rupees(K.opening))+' &rarr; <strong>'+esc(rupees(K.closing))+'</strong>'
+        + ' &middot; '+(K.netChange>=0?'<span class="up">+':'<span class="down">')+esc(rupees(K.netChange))+'</span>'
+        + ' &middot; '+K.count+' a/c</div>'
+        + '<div class="viz">'+g+'</div></div>';
+    }
+    return out+'</div><div class="note" style="margin-top:6px">Solid is drawn, pale is repaid. All five panels share '
+      + 'one scale, so a tall bar is a big move wherever it appears &mdash; the point of small multiples.</div>';
   }
 
   function chg(n){
@@ -294,6 +431,36 @@
      + '</div>'
      + '</div></section>';
 
+    // ---- the dashboard proper: every kind, period by period ----------------
+    var kinds=(j.byKind||[]).filter(function(b){return b.count&&(Math.abs(b.closing)>=1||Math.abs(b.opening)>=1||b.drawn||b.repaid);});
+    if(kinds.length&&j.periods.length){
+      var leg='<div class="legend">'+kinds.map(function(b){
+        return '<span class="k"><i style="background:'+kcol(b.kind)+'"></i>'+esc(b.kindLabel)+'</span>';}).join('')+'</div>';
+      h+='<section><h2>WHAT WE OWE, AND WHAT IT IS MADE OF</h2><div class="body">'
+       + leg + stackChart(kinds,j.periods)
+       + '<div class="note" style="margin-top:6px">Closing balance at the end of each '+esc(j.bucket)
+       + '. The number above each column is the total; the segments are the kinds, in the same order every time. '
+       + 'Hover any segment for its own figures, or read the table below &mdash; every value on this page is in it.</div>'
+       + '</div></section>';
+      h+='<section><h2>HOW EACH KIND MOVED</h2><div class="body">'+smallMultiples(kinds,j.periods)+'</div></section>';
+
+      // The matrix. The chart shows the shape; this is where the figures live, which is
+      // also what relieves the three palette slots that sit under 3:1 on white.
+      h+='<section><h2>CLOSING BALANCE BY KIND, PERIOD BY PERIOD</h2><div class="body"><div class="scroll">'
+       + '<table class="matrix"><thead><tr><th>Kind</th>';
+      for(var pz=0;pz<j.periods.length;pz++) h+='<th class="num">'+esc(j.periods[pz].label.replace('Week of ',''))+'</th>';
+      h+='<th class="num">Net change</th></tr></thead><tbody>';
+      for(var kz=0;kz<kinds.length;kz++){ var KK=kinds[kz];
+        h+='<tr><td class="k"><i style="background:'+kcol(KK.kind)+';width:10px;height:10px;border-radius:3px;'
+         + 'display:inline-block;margin-right:6px"></i>'+esc(KK.kindLabel)+'</td>';
+        for(var pq=0;pq<j.periods.length;pq++) h+='<td class="num">'+money(KK.periods[pq].closing)+'</td>';
+        h+='<td class="num">'+chg(KK.netChange)+'</td></tr>';
+      }
+      h+='<tr class="tot"><td>All borrowings</td>';
+      for(var pr=0;pr<j.periods.length;pr++) h+='<td class="num">'+money(j.periods[pr].closing)+'</td>';
+      h+='<td class="num">'+chg(t.netChange)+'</td></tr></tbody></table></div></div></section>';
+    }
+
     // All borrowings together, period by period. The facility columns and the OD net are
     // kept apart unless the gross is asked for: added together they are the company's
     // turnover, and the real 54 Cr of new facilities disappears inside 277 Cr of sweep.
@@ -414,6 +581,14 @@
     }
 
     out.innerHTML=h;
+    // One hover layer for every chart mark. An SVG chart IS interactive; a reader who
+    // cannot ask a segment what it is has to guess from its height.
+    var segs=out.querySelectorAll('[data-tip]');
+    for(var s2=0;s2<segs.length;s2++){
+      segs[s2].addEventListener('mousemove',function(ev){
+        showTip(ev,esc(this.getAttribute('data-tip')).replace(/&amp;#10;|\n/g,'<br>'));});
+      segs[s2].addEventListener('mouseleave',hideTip);
+    }
     var exs=out.querySelectorAll('.ex');
     for(var e2=0;e2<exs.length;e2++){
       exs[e2].addEventListener('click',function(){
