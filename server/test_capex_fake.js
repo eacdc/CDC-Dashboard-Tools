@@ -94,6 +94,13 @@ const V = (branch, date, pl, ld, extra) => {
       // A FREIGHT FORWARDER. Its charges on one import were capitalised into a machine,
       // which is correct accounting -- and is NOT a reason to call its every invoice capex.
       'Emirates Logistics India Private Limited': 'Sundry Creditors',
+      // A BINDING-MACHINE MAKER under the ordinary creditors group. Nothing but its own
+      // name says what it sells, and its machine is still being paid for in instalments,
+      // so no purchase voucher exists to learn from either.
+      'Pinghu Bindex Machinery Co.,Ltd.': 'Sundry Creditors',
+      // The two things the name rule must NOT sweep in with it.
+      'Machinery Spare Parts Co': 'Sundry Creditors',
+      'Machine Oil & Lubricants Ltd': 'Sundry Creditors',
       'Advance to Suppliers': 'Loans & Advances',
       'Digital Book Edge Printer': 'Plant & Machinery',
       // The Ahmedabad factory: accumulated in WIP while it was built, then capitalised.
@@ -212,6 +219,17 @@ const V = (branch, date, pl, ld, extra) => {
       'Emirates Logistics India Private Limited': -2915864 }, {},
     { type: 'Payment', narration: 'Ref Bill No.Mention In Voucher' }));
 
+  // Instalments on a machine that has not arrived, to a supplier in no capex group and
+  // with no purchase voucher anywhere. Only the company's own name says what it sells.
+  vs.push(V('kol', '20260520', { 'HDFC Current A/c': 9000000,
+    'Pinghu Bindex Machinery Co.,Ltd.': -9000000 }, {},
+    { type: 'Bank Payments', narration: '2nd instalment, perfect binder' }));
+  // Spares and oil from suppliers whose names also say machine. Not capex.
+  vs.push(V('kol', '20260521', { 'HDFC Current A/c': 125000,
+    'Machinery Spare Parts Co': -125000 }, {}, { type: 'Bank Payments' }));
+  vs.push(V('kol', '20260522', { 'HDFC Current A/c': 64000,
+    'Machine Oil & Lubricants Ltd': -64000 }, {}, { type: 'Bank Payments' }));
+
   // Drafts reach no figure here either.
   vs.push(V('kol', '20260818', {}, { 'Computers': -7777777, 'HDFC Term Loan': 7777777 }, { cancelled: true }));
   vs.push(V('kol', '20260819', {}, { 'Computers': -8888888, 'HDFC Term Loan': 8888888 }, { optional: true }));
@@ -327,6 +345,25 @@ const V = (branch, date, pl, ld, extra) => {
     'a supplier that really did sell us a machine is still counted, because the payment'
     + ' settles the very bill the machine was bought on');
 
+  // A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME. Refusing to read creditor names
+  // left a binding-machine maker, and every instalment paid to it, off the page entirely
+  // -- there is no purchase to learn from while the machine is still being paid for.
+  const png = (j.cashRows || []).find((r) => /Pinghu/.test(r.paidFor));
+  assert(png && png.amount === 9000000 && png.kind === 'capital_creditor',
+    'an instalment to a machine maker in the ORDINARY creditors group is capex cash, because'
+    + ' its own name says machinery and nothing else was ever going to say so');
+  assert(j.capexPartyGroups.some((x) => /Pinghu/.test(x.group) && x.via === 'name'),
+    'and it is listed as itself, recognised by its NAME -- the one rule here that guesses'
+    + ' from English says so rather than hiding inside a count of Sundry Creditors');
+  // The two it must not sweep in with it.
+  assert(!(j.cashRows || []).some((r) => /Spare Parts|Lubricants/.test(r.paidFor)),
+    'while spares and oil from suppliers whose names also say machine are NOT capex -- what'
+    + ' goes into a machine is not a machine');
+  assert((j.nameNearMiss || []).length === 2
+    && (j.nameNearMiss || []).every((x) => /Spare Parts|Lubricants/.test(x.ledger)),
+    'and both are NAMED as refused, because the refusal is a judgement about words and a'
+    + ' wrong one would otherwise take a real machine supplier off the page in silence');
+
   // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
   // that matters for a cash-flow view.
   const cash = j.cashRows || [];
@@ -343,7 +380,7 @@ const V = (branch, date, pl, ld, extra) => {
   assert(direct && direct.amount === 500000 && direct.kind === 'asset',
     'and an asset paid for straight out of the bank is cash out on the day it is paid');
   assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000
-      + 28200000 + 6926000 + 4000000 + 150000),
+      + 28200000 + 6926000 + 4000000 + 150000 + 9000000),
     'the total is every one of those and nothing else -- no capitalisation journal, no'
     + ' supplier bill that has not been paid, and no disposal netted off (got ' + j.cashOut + ')');
   assert(!cash.some((r) => r.amount < 0),

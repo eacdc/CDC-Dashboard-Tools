@@ -1,6 +1,30 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.75 (server, diag) — November 2026 — A machine maker's own name counts, and the purchase is looked for further back
+
+**`Pinghu Bindex Machinery Co.,Ltd.` was nowhere on the page.** It is a binding-machine
+maker filed under ordinary Sundry Creditors, still being paid in instalments — so no group
+said machinery, and no purchase voucher existed yet to learn from. Matching creditors on
+their group alone was too strict in the direction opposite to the Emirates problem.
+
+A creditor is now matched on **its own name** as well, with the consumables and services
+that ride in on the same words refused by hand — spares, oil, lubricants, repairs, service,
+hire, freight, clearing, insurance. *Machinery Spare Parts Co* and *Machine Oil & Lubricants
+Ltd* stay out; what goes into a machine is not a machine.
+
+This is the one rule on the page that guesses from English, so it says so. Every matched
+account now shows **how** it was recognised — by the group it is filed in, by its own name,
+or by having actually sold us an asset — and a name match is listed as that one company
+rather than counted into a total for "Sundry Creditors". What the refusal list threw out is
+listed too, under *Names that say machinery but were refused*: a wrong word there would
+otherwise take a real machine supplier off the page in silence.
+
+**And the purchase is now looked for three years behind the window.** The supplier pass only
+ever read the dates on screen, so a machine bought in March and paid in April taught it
+nothing — yet the purchase is the thing that identifies the supplier and names the bill. A
+second narrow query covers a machine being paid in instalments without scanning the decade.
+
 ## v2.74 (server, diag) — November 2026 — A freight forwarder is not a machinery supplier
 
 Ten payments to **Emirates Logistics India Private Limited** — ₹1.76 Cr of ordinary import

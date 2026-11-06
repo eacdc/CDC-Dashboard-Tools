@@ -252,6 +252,7 @@
     out.excludedGroups=brOnly(j.excludedGroups);
     out.capexPartyGroups=brOnly(j.capexPartyGroups);
     out.advanceGroups=brOnly(j.advanceGroups);
+    out.nameNearMiss=brOnly(j.nameNearMiss);
     out.sliceWarn=null;
     if(br==='all'){
       var bad=[];
@@ -554,21 +555,34 @@
     // What was matched, because this rests on how the chart of accounts is laid out.
     if(j.capexPartyGroups&&j.capexPartyGroups.length){
       h+='<div class="note" style="margin-top:10px">Cash is followed through these accounts, recognised from '
-       + 'the group Tally files them in. If a machinery supplier or a capital advance is missing from this list, '
-       + 'its payments are not in the figure above &mdash; say so and the rule will be widened. A ledger that '
-       + '<strong>actually sold us an asset</strong> in this window is included whatever its group is called, on '
-       + 'the evidence of the purchase itself rather than on its name. An advance sitting in a general '
-       + '<em>Advance to Suppliers</em> account that also carries paper cannot be told apart by any rule here, '
-       + 'and is deliberately not guessed at.</div>'
+       + 'the group Tally files them in, from their own name where the group says nothing, or from having '
+       + 'actually sold us an asset. <strong>If a machinery supplier or a capital advance is missing from this '
+       + 'list, its payments are not in the figure above &mdash; say so and it will be added.</strong> The '
+       + '<em>name</em> rows are the one place this guesses from English, which is why each is listed as itself '
+       + 'rather than counted into a group. An advance sitting in a general <em>Advance to Suppliers</em> '
+       + 'account that also carries paper cannot be told apart by any rule here, and is not guessed at.</div>'
        + '<div class="scroll"><table><thead><tr><th>Group</th><th>Treated as</th><th>Recognised by</th>'
        + '<th>Br</th><th class="num">Ledgers</th></tr></thead><tbody>';
       for(var g2=0;g2<j.capexPartyGroups.length;g2++){var p2=j.capexPartyGroups[g2];
         h+='<tr><td class="muted" style="font-size:11.5px">'+esc(p2.group)+'</td>'
          + '<td>'+esc(CASH_LABEL[p2.kind]||p2.kind)+'</td>'
          + '<td class="muted" style="font-size:11.5px">'
-         +   (p2.kind==='supplier'?'it sold us an asset in this window':'the group it is filed in')+'</td>'
+         +   (p2.via==='sold'?'it sold us an asset'
+             :(p2.via==='name'?'<strong>its own name</strong> says machinery':'the group it is filed in'))+'</td>'
          + '<td class="mono">'+esc(p2.branch)+'</td>'
          + '<td class="num">'+p2.ledgers+'</td></tr>';}
+      h+='</tbody></table></div>';
+    }
+    var nm=(j.nameNearMiss||[]);
+    if(nm.length){
+      h+='<div class="note" style="margin-top:10px"><strong>Names that say machinery but were refused.</strong> '
+       + 'These read like spares, service, freight or insurance rather than a machine, so they are not counted. '
+       + 'If one of them really does sell us machines, say so.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Ledger</th><th>Group</th><th>Br</th></tr></thead><tbody>';
+      for(var n2=0;n2<nm.length;n2++){
+        h+='<tr><td>'+esc(nm[n2].ledger)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(nm[n2].group)+'</td>'
+         + '<td class="mono">'+esc(nm[n2].branch)+'</td></tr>';}
       h+='</tbody></table></div>';
     }
     var ag=(j.advanceGroups||[]).filter(function(x){return !x.counted;});
@@ -755,9 +769,9 @@
      + '<strong>4. What counts as capex CASH.</strong> Followed on the payment voucher, never the '
      + 'capitalisation, because a machine is paid for long before it is capitalised. Any voucher that '
      + 'credits a bank, cash or OD account contributes whatever it debited to: an asset; an account kept '
-     + 'for machinery suppliers or capital advances (recognised from its group, listed above); or a party '
-     + 'that sold us an asset &mdash; and for that last one, <strong>only against the bill the asset was '
-     + 'bought on</strong>. The debits are read, not the bank total, so a payment run settling one machine '
+     + 'for machinery suppliers or capital advances (recognised from its group, or from its own name where '
+     + 'the group says nothing &mdash; all listed above); or a party that sold us an asset &mdash; and for '
+     + 'that last one, <strong>only against the bill the asset was bought on</strong>. The debits are read, not the bank total, so a payment run settling one machine '
      + 'and three paper bills contributes only the machine.<br>'
      + '<strong>5. What is never cash.</strong> Selling an asset (that is a disposal, not negative spend), '
      + 'a capitalisation journal (no money moves), and a bill that has not been paid yet.'

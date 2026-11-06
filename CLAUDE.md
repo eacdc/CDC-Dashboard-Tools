@@ -427,6 +427,25 @@ filed in the ordinary creditors group is still counted. The page says which way 
 was recognised, and `advanceGroups` lists every group with "advance" in it WITH a counted
 flag, so an advance account the rule still misses is visible instead of silently absent.
 
+**A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME.** Matching creditors on their GROUP
+alone was too strict in the other direction: `Pinghu Bindex Machinery Co.,Ltd.` is a
+binding-machine maker filed under ordinary Sundry Creditors, still being paid in
+instalments, so no group said machinery, no purchase voucher existed to learn from, and it
+was absent from the page entirely. A creditor is therefore matched on its NAME too, with
+the consumables and services that ride in on the same words refused by hand
+(`NOT_CAPITAL_NAME`: spare, parts, oil, lubric, repair, service, hire, rental, freight,
+clearing, insurance...). This is the one rule here that guesses from English, so
+`capexPartyKind` returns `{kind, via}` and the page says per account whether it was
+recognised by its GROUP (a fact about the books), its NAME (an inference) or by having SOLD
+us an asset -- and a name match is listed as that one company rather than counted into
+"Sundry Creditors". `capexNameNearMiss` names what the refusal list threw out, because a
+wrong word in that list would take a real machine supplier off the page in silence.
+
+**The supplier pass looks THREE YEARS BEHIND the window.** It only ever read the window on
+screen, so a machine bought in March and paid in April taught it nothing -- the purchase is
+what identifies the supplier and names the bill. A second, narrow query (`lookFrom`,
+projecting only ledgers/bills) covers a machine on instalments without scanning the decade.
+
 **A PARTY IS NOT A CATEGORY, so an evidence-recognised supplier counts only on the BILL the
 asset was bought on.** `Emirates Logistics` is a freight forwarder; its clearing charges on
 one import were capitalised into a machine, which is correct accounting -- and made it a
