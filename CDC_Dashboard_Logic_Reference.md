@@ -123,20 +123,63 @@ applies. `processData` reports what it dropped as `stats.ibInvoices` /
   party's total outstanding must be identical in both modes. Only which bills stay
   open, the ageing buckets and the payment cycle may differ.
 
+### What moves a party's outstanding — the sign rule
+
+**A posting to a Sundry Debtor moves that debtor's balance, and the posting's own sign
+says which way.** Cr (+ve) settles a bill; Dr (−ve) raises one. Creditors, mirrored.
+Nothing asks what the *other* leg of the voucher was. This is the rule, and the named
+voucher types below are only refinements of it (which allocation type to read, and
+whether the figure is labelled an invoice or a settlement).
+
+That is also exactly what `/api/bills/audit` does on the server — it nets every
+allocation on a bill reference with no voucher-type filter at all. The two now agree by
+construction; they did not before, and the server was the one that was right.
+
+**Why the rule is stated this way, and not as a list.** The engine used to try to
+*recognise* a settlement from its contra leg: a journal counted only if a **loan**
+ledger was debited, or if the other branch appeared in it. An export invoice financed
+by PCFC defeats that four different ways at once:
+
+| What the books do | Why the old test missed it |
+|---|---|
+| Packing credit sits under **Bank OD A/c** | The extractor files every Bank-OD ledger under `party_ledgers`; the test only read `ledgers` |
+| The ledger is called **"PCFC Loan 0012"** | The loan keywords were matched against the **group chain**, and `getChain` never includes the ledger's own name — `Loans (Liability) > Bank OD A/c` matches none of them |
+| The voucher type is **"Journal - Export"** | The test was `vt === 'Journal'` exactly, while every other type in the file is matched by prefix |
+| The other leg is **exchange difference**, or a bad debt written off | No loan and no branch anywhere in the voucher |
+
+Each one left the invoice open for ever at full value while Tally showed it settled —
+reported as **17.45 lakh against Tally's 6.74** on one export customer. Double entry
+needs none of that inference: the party's own leg already says what happened.
+
+Pinned by `server/test_proj_fake.js` (`npm run test:proj`), which holds every shape
+above — including a bill written off, a journal that *debits* the customer, and a
+journal that must settle the bill it **names** rather than the oldest one.
+
+**Non-posting voucher types** are the one exception, and the only thing standing between
+an order and the receivables: memos, reversing journals (which post nothing until
+applied), and the order/inventory vouchers, whose figures are stock values. They are
+listed in `NOPOST` in `portal/index.html` and matched by prefix. Cancelled and optional
+vouchers never reach the browser at all — `/api/dataset` drops them.
+
 ### Receipt Sources (Debtor)
-1. Bank Receipt / Receipt vouchers (direct)
-2. PCFC Journals (loan Cr + debtor Dr)
-3. Branch Settlement Journals (debtor Dr + branch Cr)
-4. **Credit Notes** (debtor Dr/positive = cancels invoice → treated as receipt)
+1. Bank Receipt / Receipt vouchers (direct, read "Agst Ref")
+2. **Credit Notes** (debtor Dr/positive = cancels invoice → treated as receipt)
+3. Any other voucher type that credits the debtor — a journal under any name, a contra,
+   a renamed receipt type — by the sign rule above, carrying whatever bill allocations
+   it holds. PCFC/loan knock-offs, branch settlements, exchange differences and
+   write-offs all arrive here, and none of them is special-cased any more.
 
 ### Payment Sources (Creditor)
 1. Bank Payment / Payment vouchers (direct)
-2. Creditor Journals (creditor Cr/negative = agent payments, salary, utilities)
-3. Debit Notes (creditor Cr/negative = invoice cancellation)
+2. Debit Notes (creditor Cr/negative = invoice cancellation)
+3. Any other voucher type that debits the creditor, by the sign rule.
 
 ### Invoice Sources (Debtor)
-1. Sales / Export Sale vouchers
+1. Sales / Export Sale vouchers (read "New Ref")
 2. Debit Notes on debtors (debtor Cr/negative = additional charge)
+3. Any other voucher type that **debits** the debtor, by the sign rule — interest
+   charged, a balance transferred in. Reading every journal as a settlement would hide
+   money genuinely owed, which is why the sign decides and not the voucher type.
 
 ### FIFO Timeline Algorithm
 - Events (invoices + receipts) merged and sorted by date
