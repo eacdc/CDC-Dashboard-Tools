@@ -240,6 +240,18 @@
      + '<div class="v">'+(net>0?'+':'')+esc(rupees(net))+'</div></div>'
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)
+     + (function(ao){
+         var ks=Object.keys(ao||{}).filter(function(k){return ao[k];});
+         if(!ks.length) return '';
+         var parts=ks.map(function(k){return k+' '+fmt8(ao[k]);}).join(', ');
+         var old=ks.some(function(k){return ao[k]<j.from;});
+         return ' <strong>Tally&rsquo;s openings stand on '+esc(parts)+'</strong>'
+           + (old?(' &mdash; so the balance at '+esc(fmt8(j.from))+' is that figure plus EVERY posting since, '
+             + 'accumulated out of the vouchers. On a sweeping OD that is hundreds of crores each way per year, '
+             + 'and any gap in voucher coverage lands straight in the balance. An account with no postings '
+             + '(a dormant director loan) is Tally&rsquo;s figure untouched and is the control: if those match '
+             + 'and the sweeping ones do not, the coverage is the problem, not the arithmetic.'):'.');
+       })(j.openingAsOn)
      + ' <strong>Opening is in two halves:</strong> Tally&rsquo;s own opening balance of '
      + esc(rupees(t.openingParts.tally))+' on the day it stands, plus '+esc(rupees(t.openingParts.postings))
      + ' of postings between that day and '+esc(fmt8(j.from))+'. If an opening disagrees with Tally, which half is '
