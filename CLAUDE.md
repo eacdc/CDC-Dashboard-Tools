@@ -350,6 +350,15 @@ Assets are classified per branch from that branch's own master, as loans are. De
 and repairs are expenses, not capex, and an accumulated-depreciation ledger filed UNDER
 the asset group is excluded by name -- writing an asset down is not buying one.
 
+**A voucher's narration is at `details.narration`, never at the top level.** The extractor's
+voucher object is `{date, party, no, type, ledgers, party_ledgers, details, guid}` -- the
+narration, reference, GSTIN and the rest live inside `details`, whitelisted there by
+`DETAIL_SCALARS` in `ingest.js`. A Mongo projection of `narration: 1` therefore asks for a
+field no voucher has and hands back `undefined` for every row, which renders as an empty
+column rather than as an error. Both `/api/capex` and `/api/yoy/vouchers` shipped that way;
+the capex test's fixture now writes narration where the real pull writes it, so reading the
+wrong field fails by name.
+
 **An addition is not cash out.** It is recorded the day the asset is capitalised; the
 money may have left earlier, later, or over five years. So each row carries `funded`
 (cash / credit / loan / other), read off that voucher's OTHER legs, with a loan leg
@@ -365,6 +374,13 @@ view relieve the three slots under 3:1 contrast. Gridlines pick a nice STEP (1/2
 10^k) and let the top follow -- picking a nice top and quartering it labelled a line
 "1.3 Cr" that sat at 1.25 Cr. Render the page in Chromium and LOOK at it before shipping:
 both of those defects were invisible to every validator and obvious on screen.
+
+**Loan movement and Capex are reached from the portal's own top bar**, beside Consolidated
+and Projected, and from the landing page before any upload. The portal embeds
+`/diag/loans.html` and `/diag/capex.html` in place rather than re-implementing them: a second
+copy of the loan arithmetic in `portal/index.html` is the drift `plEngine.js` /
+`projEngine.js` exist to prevent. Both pages fetch `/api/...` at an absolute path, which is
+what lets them work equally standalone and embedded.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance

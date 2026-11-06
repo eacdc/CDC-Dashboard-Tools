@@ -1,6 +1,67 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.67 (portal, server, diag) — November 2026 — Loans and Capex move onto the main page, and the narration comes back
+
+**The narration column was blank on every capex row, and always had been.** The extractor
+stores a voucher's narration inside `details` (`details.narration`), but `/api/capex`
+asked MongoDB for a top-level `narration` field — which no voucher has — so every row came
+back `undefined` and the column rendered empty. `/api/yoy/vouchers` carried the identical
+mistake, which is why the year-on-year drill-down's `party || narration` fallback had never
+once shown a narration. Both now read it from where it is actually kept, and the capex rows
+carry the voucher reference as a second-best when Tally itself typed no narration. A test
+holds it: the fixture writes narration where the real extractor writes it, so code reading
+a field no voucher has fails by name.
+
+**"Spend" and "Disposal" are accounting words.** The capex page now says **Assets bought**,
+**Of that, paid from bank**, **Assets sold or scrapped** and **Net increase in assets** on
+the cards, and **Bought for** / **Sold off** / **Note from Tally** on the table — with a line
+above the table saying a row carries a figure in one column or the other, never both. The
+page also says how many entries carry no narration in Tally, rather than leaving the reader
+to wonder whether the column is broken. Every voucher number in the list is now a link
+straight to that entry at `/voucher/`.
+
+**Loan movement and Capex are on the portal's own top bar.** They used to be reachable only
+by typing a `/diag/` URL. The two existing buttons lost their parenthetical contents lists —
+now plain **📘 Consolidated** and **📈 Projected**, with the full list in the tooltip — and
+**🏦 Loans** and **🏭 Capex** sit beside them, shown in place. Both pages answer from the
+database and need no upload, so the landing page links them too, before anything is loaded.
+They are embedded rather than re-implemented: a second copy of the loan arithmetic inside
+`portal/index.html` is exactly the drift the engine-lifting exists to prevent.
+
+## v2.66 (server, diag) — November 2026 — Capex gets its own page
+
+`/diag/capex.html` (`GET /api/capex`): every posting that DEBITS a fixed-asset or
+capital-work-in-progress ledger, dated, with the item, the voucher, the supplier and the
+narration, plus rollups by month, asset, group and funding. Assets are classified per
+branch from that branch's own master, as loans are. Depreciation and repairs are expenses,
+not capex, and an accumulated-depreciation ledger filed UNDER the asset group is excluded
+by name — writing an asset down is not buying one.
+
+**An addition is not cash out.** It is recorded the day the asset is capitalised; the money
+may have left earlier, later, or over five years. Each row says how it was funded (cash /
+credit / loan / other), read off that voucher's OTHER legs, with a loan leg winning over a
+creditor leg because a machine on term finance usually touches both. Disposals are reported
+apart and never netted into spend. `npm run test:capex`.
+
+The loan page became a dashboard in the same pass: stacked closing-balance columns by kind
+per period, one small-multiple panel per kind on a shared scale, and a kind × period matrix.
+Two chart defects showed up only on screen and nowhere in any validator — a 520px chart
+stretched to 1300px, and a gridline labelled "1.3 Cr" sitting at 1.25 Cr. Charts are now
+capped at their natural width and gridlines pick a nice STEP (1/2/5 x 10^k) and let the top
+follow.
+
+## v2.65 (server, diag) — November 2026 — Export credit is its own kind, not a flavour of secured debt
+
+Tally files PCFC and PCRE under Secured Loans because they are secured. But a packing credit
+drawn per shipment and repaid when the export proceeds land is not a seven-year loan on a
+press, and one total answers neither question. The group now picks the family
+(`od_cc` / `unsecured` / secured / other) and `EXPORT_KW` (pcfc, pcre, packing credit, bill
+discount, pre/post-shipment, export credit/finance) then splits secured and other into
+**export** and **term**, read from the sub-group AND the ledger name. `Buyer's credit` is
+NOT export credit — it finances imports. An `od_cc` account keeps its kind whatever facility
+it funds, since a sweeping account is reported by its balance.
+
 ## v2.64 (server, diag) — November 2026 — An OD's churn is not borrowing, and an opening has two halves
 
 Three changes from reading the first real run of the loan page over the live books.

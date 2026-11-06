@@ -66,7 +66,7 @@
     list: the item, the amount, the voucher it is on, and who it was bought from. Each row also says <strong>how it was
     funded</strong>, because an addition is recorded the day the asset is capitalised and the money may have left
     earlier, later, or over five years &mdash; a press bought on term finance is not crores of cash gone in a day.
-    Disposals are shown apart and never netted against purchases
+    Assets sold or scrapped are shown apart and never netted against what was bought
     &middot; <a href="./">the party explainer</a> &middot; <a href="./loans.html">loan movement</a></div>
 </header>
 <main>
@@ -199,7 +199,7 @@
 
   function rollTable(rows,head,total){
     var h='<div class="scroll"><table><thead><tr><th>'+esc(head)+'</th><th class="num">Items</th>'
-      + '<th class="num">Spend</th></tr></thead><tbody>';
+      + '<th class="num">Bought for</th></tr></thead><tbody>';
     for(var i=0;i<rows.length;i++){
       if(!rows[i].spend&&!rows[i].disposal) continue;
       h+='<tr><td>'+esc(rows[i].label)+'</td><td class="num">'+rows[i].count+'</td>'
@@ -221,14 +221,15 @@
     h+='<section><h2>'+esc(fmt8(j.from))+' TO '+esc(fmt8(j.to))+' &middot; '
      + j.rows.filter(function(r){return r.spend>0;}).length+' PURCHASE(S)</h2><div class="body">'
      + '<div class="cards">'
-     + '<div class="card"><div class="k">Additions</div><div class="v">'+esc(rupees(j.additions))+'</div></div>'
-     + '<div class="card"><div class="k">Paid from bank / cash</div><div class="v">'+esc(rupees(cash))+'</div></div>'
-     + '<div class="card"><div class="k">Disposals</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
-     + '<div class="card"><div class="k">Net addition</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
+     + '<div class="card"><div class="k">Assets bought</div><div class="v">'+esc(rupees(j.additions))+'</div></div>'
+     + '<div class="card"><div class="k">Of that, paid from bank</div><div class="v">'+esc(rupees(cash))+'</div></div>'
+     + '<div class="card"><div class="k">Assets sold or scrapped</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
+     + '<div class="card"><div class="k">Net increase in assets</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
      + '</div>'
-     + '<div class="note">'+esc(j.scaleNote)+' <strong>Additions are not the same as cash out.</strong> '
-     + 'Only the <em>paid from bank / cash</em> figure left the bank on these dates; the rest sits in a creditor or '
-     + 'a loan and leaves later. The funding split below says which is which.</div>'
+     + '<div class="note">'+esc(j.scaleNote)+' <strong>Buying an asset is not the same as paying for it.</strong> '
+     + 'Only the <em>paid from bank</em> figure left the bank on these dates; the rest sits in a supplier bill or '
+     + 'a loan and leaves later. The funding split below says which is which. '
+     + '<em>Net increase in assets</em> is bought minus sold &mdash; the two are never mixed before that.</div>'
      + '</div></section>';
 
     h+='<section><h2>WHEN IT WAS SPENT</h2><div class="body">'+monthChart(j.byMonth)
@@ -246,19 +247,37 @@
     h+='<section><h2>WHAT WAS BOUGHT</h2><div class="body">'+rollTable(j.byAsset,'Asset',j.additions)+'</div></section>';
     h+='<section><h2>BY ASSET GROUP</h2><div class="body">'+rollTable(j.byGroup,'Group',j.additions)+'</div></section>';
 
-    h+='<section><h2>EVERY ENTRY, NEWEST FIRST</h2><div class="body"><div class="scroll"><table><thead><tr>'
-     + '<th>Date</th><th>Item</th><th>Group</th><th>Br</th><th>Voucher</th><th>From</th>'
-     + '<th class="num">Spend</th><th class="num">Disposal</th><th>Narration</th></tr></thead><tbody>';
+    var noNarr=0;
+    for(var q=0;q<j.rows.length;q++) if(!j.rows[q].narration) noNarr++;
+    h+='<section><h2>EVERY ENTRY, NEWEST FIRST</h2><div class="body">'
+     + '<div class="note" style="margin-bottom:8px"><strong>Bought for</strong> is money spent on an asset; '
+     + '<strong>Sold off</strong> is an asset leaving the books (sold or scrapped). A row has a figure in one '
+     + 'column or the other, never both. <strong>Note from Tally</strong> is the narration typed on that voucher &mdash; '
+     + 'Tally leaves it blank on plenty of entries, so the voucher number beside it is the thing to go by. '
+     + 'Click a voucher number to open the entry itself.</div>'
+     + (noNarr?('<div class="note" style="margin-bottom:8px">'+noNarr+' of '+j.rows.length
+        +' entries carry no narration in Tally; where the voucher has a reference instead it is '
+        +'shown as <em>ref &hellip;</em>, and where it has neither the column is a dash.</div>'):'')
+     + '<div class="scroll"><table><thead><tr>'
+     + '<th>Date</th><th>Item</th><th>Group</th><th>Br</th><th>Voucher</th><th>Bought from</th>'
+     + '<th class="num">Bought for</th><th class="num">Sold off</th><th>Note from Tally</th></tr></thead><tbody>';
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
+      var vlab=esc(r.type)+(r.no?(' '+esc(r.no)):'');
+      var vcell=r.guid
+        ? ('<a href="../voucher/?branch='+encodeURIComponent(r.branch)+'&amp;id='+encodeURIComponent(r.guid)
+           + '" target="_blank" rel="noopener">'+vlab+'</a>')
+        : vlab;
       h+='<tr><td class="mono">'+esc(fmt8(r.date))+'</td>'
        + '<td>'+esc(r.asset)+'<span class="pill f-'+esc(r.funded)+'">'+esc(FUND_LABEL[r.funded]||r.funded)+'</span></td>'
        + '<td class="muted" style="font-size:11.5px">'+esc(r.group)+'</td>'
        + '<td class="mono">'+esc(r.branch)+'</td>'
-       + '<td class="mono">'+esc(r.type)+(r.no?(' '+esc(r.no)):'')+'</td>'
+       + '<td class="mono" style="white-space:nowrap">'+vcell+'</td>'
        + '<td>'+esc(r.party||'')+'</td>'
        + '<td class="num">'+money(r.spend)+'</td>'
        + '<td class="num">'+money(r.disposal)+'</td>'
-       + '<td class="muted" style="font-size:11.5px">'+esc(r.narration||'')+'</td></tr>';
+       + '<td class="muted" style="font-size:11.5px">'
+       +   (r.narration?esc(r.narration):(r.reference?('ref '+esc(r.reference)):'<span style="color:#cbd5e1">&mdash;</span>'))
+       + '</td></tr>';
     }
     h+='<tr class="tot"><td colspan="6">Total</td><td class="num">'+money(j.additions)+'</td>'
      + '<td class="num">'+money(j.disposals)+'</td><td></td></tr>'
@@ -276,13 +295,14 @@
   function excel(){
     if(!loaded||!window.XLSX) return;
     var j=loaded, wb=XLSX.utils.book_new();
-    var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','From','Funded by','Spend','Disposal','Narration']];
+    var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from','Funded by',
+               'Bought for','Sold off','Note from Tally']];
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
       rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,FUND_LABEL[r.funded]||r.funded,
                  r.spend,r.disposal,r.narration]); }
     rows.push(['TOTAL','','','','','','','',j.additions,j.disposals,'']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Every entry');
-    var mk=function(arr,head){var a=[[head,'Items','Spend']];
+    var mk=function(arr,head){var a=[[head,'Items','Bought for']];
       for(var k=0;k<arr.length;k++)a.push([arr[k].label,arr[k].count,arr[k].spend]);return a;};
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byMonth,'Month')),'By month');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byAsset,'Asset')),'By asset');

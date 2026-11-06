@@ -52,10 +52,20 @@ const assert = (c, m) => { if (!c) { console.error('FAIL:', m); fails++; } else 
 const near = (a, b) => Math.abs((a || 0) - (b || 0)) <= 0.5;
 
 let n = 0;
-const V = (branch, date, pl, ld, extra) => ({
-  _id: branch + ':' + (++n), guid: 'g' + n, branch, date, no: 'V' + n,
-  type: 'Purchase', party: '', narration: '', party_ledgers: pl || {}, ledgers: ld || {}, ...(extra || {}),
-});
+// The extractor stores the narration inside `details`, NOT at the top level of the
+// voucher -- so a fixture that sets a top-level `narration` would pass against code
+// that reads a field no real voucher has. It is written where Tally's own pull puts it.
+const V = (branch, date, pl, ld, extra) => {
+  const ex = { ...(extra || {}) };
+  const narr = ex.narration; delete ex.narration;
+  const ref = ex.reference; delete ex.reference;
+  return {
+    _id: branch + ':' + (++n), guid: 'g' + n, branch, date, no: 'V' + n,
+    type: 'Purchase', party: '',
+    details: { narration: narr || '', reference: ref || '' },
+    party_ledgers: pl || {}, ledgers: ld || {}, ...ex,
+  };
+};
 
 (async () => {
   fakeDb.collection('masters').docs.push({
@@ -169,6 +179,16 @@ const V = (branch, date, pl, ld, extra) => ({
   // Each row carries what it takes to find the entry in Tally.
   assert(press.date === '20260515' && press.no && press.type === 'Journal' && /CD102/.test(press.narration),
     'each row carries the date, voucher number, type and narration -- enough to open it in Tally');
+  assert(press.guid === 'g2',
+    'and the voucher guid, so the row can link straight at the entry');
+  // The narration lives at details.narration. Reading a top-level `narration` returned
+  // undefined for every voucher ever stored, so the column shipped blank on every row.
+  assert(j.rows.filter((r) => r.narration).length === 3,
+    'the narration is read from where the extractor puts it (details.narration), not from a'
+    + ' top-level field no voucher has -- got ' + j.rows.filter((r) => r.narration).length + ' of 3');
+  const cwip = j.rows.find((r) => r.asset === 'New Line CWIP');
+  assert(cwip && cwip.narration === '',
+    'and an entry Tally carries no narration for comes back empty rather than undefined');
 
   // A floor, for a year of small tools nobody wants listed.
   const big = await get('/api/capex?branch=kol&from=20260401&to=20260831&min=1000000');
