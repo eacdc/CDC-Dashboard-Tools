@@ -2248,14 +2248,28 @@ const MENTIONS_ASSET = ['fixed assets', 'capital work', 'capital-work'];
 // "Advance to Suppliers" holding both paper and machinery cannot be split by any rule
 // here, and guessing would put raw-material money in a capex figure. What it DID match
 // is returned in `capexPartyGroups` and listed on the page, so it can be corrected.
-const CAPITAL_PARTY = ['fixed asset', 'capital goods', 'capital work', 'capital expenditure',
-  'capex', 'plant & machinery', 'plant and machinery'];
+// NEVER MATCH BARE 'capital': `Capital Account` is the ROOT of every group chain in
+// Tally, so it would make every ledger in the company a capex account.
+// 'machinary' is in the list because that is how the Ahmedabad masters spell it.
+const CAPITAL_KW = ['fixed asset', 'capital goods', 'capital work', 'capital expenditure',
+  'capital advance', 'capex', 'machinery', 'machinary', 'machine', 'equipment',
+  'plant &', 'plant and'];
+function hasCapitalWord(hay) { for (const k of CAPITAL_KW) if (hay.indexOf(k) >= 0) return true; return false; }
 function capexPartyKind(name, chain) {
   const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
-  const hay = cs + '>' + String(name || '').toLowerCase();
-  if (!CAPITAL_PARTY.some((k) => hay.indexOf(k) >= 0)) return null;
-  if (hay.indexOf('advance') >= 0) return 'advance';
-  if (cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0) return 'capital_creditor';
+  const nm = String(name || '').toLowerCase();
+  // AN ADVANCE is recognised from the group OR the ledger name, because it is filed both
+  // ways -- a group called `Advance for Machinery` holding one ledger per supplier, or a
+  // ledger called `Advance - Heidelberg Machine` under a general advances group. Requiring
+  // the exact words `plant & machinery` missed `Advance for Machinery` entirely, and with
+  // it every rupee paid against a proforma -- which on these books is nearly all of the
+  // capex cash, since the machine is paid for long before any creditor is touched.
+  if ((cs + '>' + nm).indexOf('advance') >= 0 && hasCapitalWord(cs + '>' + nm)) return 'advance';
+  // A CREDITOR is recognised from the GROUP only. The ledger name here is a company's
+  // name, and matching on it would make "Machine Oil Suppliers" under ordinary Sundry
+  // Creditors a capex account; the signal is a group kept for machinery suppliers.
+  if ((cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0)
+    && hasCapitalWord(cs)) return 'capital_creditor';
   return null;
 }
 const BANKISH = ['bank accounts', 'cash-in-hand', 'cash in hand', 'bank od', 'bank occ'];
@@ -2331,6 +2345,7 @@ app.get('/api/capex', async (req, res) => {
     // kept apart because an advance is cash gone on a machine that has not arrived.
     const partyOf = {};                      // br -> { ledger: {kind, group} }
     const partyGroups = new Map();
+    const advGroups = new Map();             // every group saying "advance", counted or not
     for (const br of branches) {
       const chains = chainOf[br] || {};
       const amap = assetOf[br] || {};
@@ -2344,10 +2359,20 @@ app.get('/api/capex', async (req, res) => {
         partyGroups.set(k, (partyGroups.get(k) || 0) + 1);
       }
       partyOf[br] = pm;
+      for (const ln of Object.keys(chains)) {
+        if (amap[ln]) continue;
+        if (chains[ln].indexOf('advance') < 0 && String(ln).toLowerCase().indexOf('advance') < 0) continue;
+        const g = (dispOf[br] || {})[ln] || chains[ln];
+        const k = br + '|' + g;
+        const e = advGroups.get(k) || { branch: br, group: g, ledgers: 0, counted: false };
+        e.ledgers++; if (pm[ln]) e.counted = true;
+        advGroups.set(k, e);
+      }
     }
     const capexPartyGroups = [...partyGroups.entries()]
       .map(([k, n]) => { const p = k.split('|'); return { branch: p[0], kind: p[1], group: p.slice(2).join('|'), ledgers: n }; })
       .sort((a, b) => b.ledgers - a.ledgers);
+    const advanceGroups = [...advGroups.values()].sort((a, b) => b.ledgers - a.ledgers);
 
     const excludedGroups = [...excluded.entries()]
       .map(([k, n]) => ({ branch: k.split('|')[0], group: k.slice(k.indexOf('|') + 1), ledgers: n }))
@@ -2381,6 +2406,33 @@ app.get('/api/capex', async (req, res) => {
     const rows = [];
     const cashRows = [];
     let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0;
+    // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
+    // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
+    // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
+    // a company that files neither would have its payments silently missing. So the
+    // purchases themselves are read first, and every ledger CREDITED on a voucher that
+    // DEBITS a fixed asset is taken as a supplier of that asset -- evidence rather than
+    // vocabulary. Collected here, used by the cash pass below.
+    const seenSupplier = {};                 // 'br|ledger' -> group, learned from purchases
+    for (const v of vs) {
+      const map = assetOf[v.branch] || {};
+      const chs = chainOf[v.branch] || {};
+      const dsp = dispOf[v.branch] || {};
+      const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
+      const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
+      if (!hits.length) continue;
+      let assetDrHere = 0;
+      for (const ln of hits) if (all[ln] < 0) assetDrHere -= all[ln];
+      if (assetDrHere < 1) continue;         // nothing was bought on this voucher
+      for (const k of Object.keys(all)) {
+        if (map[k] || all[k] <= 0) continue;              // not a credit, or the asset itself
+        const c = chs[k] || '';
+        // Only a payable. A loan or a bank leg funds the purchase; it does not supply it.
+        if (c.indexOf('sundry creditors') < 0 && c.indexOf('sundry debtors') < 0) continue;
+        seenSupplier[v.branch + '|' + k] = dsp[k] || c;
+      }
+    }
+
     for (const v of vs) {
       const map = assetOf[v.branch] || {};
       const pm = partyOf[v.branch] || {};
@@ -2398,7 +2450,8 @@ app.get('/api/capex', async (req, res) => {
       if (Math.abs(bankOut) >= 1) {
         let capexDr = 0; const legs = [];
         for (const k of Object.keys(all)) {
-          const kind = map[k] ? 'asset' : (pm[k] && pm[k].kind);
+          const kind = map[k] ? 'asset'
+            : ((pm[k] && pm[k].kind) || (seenSupplier[v.branch + '|' + k] ? 'supplier' : null));
           if (!kind) continue;
           const dr = -all[k];                     // Dr positive: money applied to capex
           // SELLING AN ASSET IS NOT NEGATIVE CAPEX SPEND. Proceeds from scrapping old
@@ -2508,6 +2561,20 @@ app.get('/api/capex', async (req, res) => {
     const byFunding = roll((r) => r.funded, (r) => r.funded)
       .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
 
+    const supG = new Map();
+    for (const k of Object.keys(seenSupplier)) {
+      const br = k.slice(0, k.indexOf('|'));
+      const kk = br + '|supplier|' + seenSupplier[k];
+      supG.set(kk, (supG.get(kk) || 0) + 1);
+    }
+    for (const [k, n] of supG.entries()) {
+      const p = k.split('|');
+      const g = p.slice(2).join('|');
+      if (capexPartyGroups.some((x) => x.branch === p[0] && x.group === g)) continue;
+      capexPartyGroups.push({ branch: p[0], kind: 'supplier', group: g, ledgers: n });
+    }
+    capexPartyGroups.sort((a, b) => b.ledgers - a.ledgers);
+
     cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
     const cashRoll = (keyOf, labelOf) => {
       const m = new Map();
@@ -2529,7 +2596,7 @@ app.get('/api/capex', async (req, res) => {
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal,
-      cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups,
+      cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });

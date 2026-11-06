@@ -1,6 +1,37 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.72 (server, diag) — November 2026 — "Advance for Machinery" was not matching, and the capex cash was nearly all of it
+
+Cash out on capex read **₹83.62 L against ₹13.01 Cr of assets bought**. It looked merely
+small; it was broken.
+
+**The rule required the words `plant & machinery`.** Ahmedabad's advances sit in a group
+called **`Advance for Machinery`** — one ledger per supplier, named after the supplier
+(`Heidelberger Druckmaschinen Aktiengesellschaft`, `Gaiapac Middle East FZ-LLC`), so neither
+the group nor the ledger matched the phrase. Every rupee paid against a proforma was missing,
+which on these books is most of the capex cash: a machine is paid for long before any
+creditor is touched. The rule now recognises machinery, machine, equipment and plant — and
+`machinary`, which is how the Ahmedabad masters spell it. It still never matches a bare
+`capital`, because `Capital Account` is the root of every group chain in Tally and would make
+the whole company capex.
+
+**And because vocabulary always runs out, the suppliers are now learned from the data.**
+Every payable credited on a voucher that debits a fixed asset is, by the evidence of that
+purchase, a supplier of fixed assets — so payments to it are capex cash whatever its group is
+called. A machinery supplier filed under ordinary Sundry Creditors is now counted, and the
+page says which accounts were recognised by their group and which by having actually sold us
+something.
+
+**Every advance account is listed with whether it counted.** The ones that did not are shown
+under *Advance accounts NOT counted as capex*, so money left out of the figure is visible
+rather than silently missing — which is exactly how `Advance for Machinery` went unnoticed.
+
+The misleading *Of that, paid from bank* card is gone. It read ₹0 because a machine is booked
+against a supplier or an advance and the purchase voucher touches no bank account, so it sat
+beside a real cash figure looking like a fault. The header now says plainly that none of the
+purchase figures is cash, and points at the cash section.
+
 ## v2.71 (diag) — November 2026 — Every long table filters and sorts
 
 Nobody reads 600 capex entries or 133 loan accounts top to bottom. Four tables — capex's
