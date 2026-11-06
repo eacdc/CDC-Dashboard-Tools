@@ -422,6 +422,21 @@ The old labels ("on supplier credit", "financed by a loan") read as statements a
 and were disbelieved on sight, correctly. The section is named for what it is and points at
 the cash section for the money.
 
+**Every long table filters and sorts, and the TOTAL follows the filter.** A list of 600
+capex entries or 133 loan accounts is never read top to bottom -- the question is always
+"what did we spend on X" or "what are the big ones". The same engine serves `diag/capex.html`
+and `diag/loans.html` (`tHtml` / `tRefresh` / `tRows`, byte-identical in both files; change
+one, change the other): a search box, per-table dropdowns built from the data itself
+(`distinct`), sortable headings, a "showing N of M" count and a `clear`. Two things it must
+keep doing. A filtered total is recomputed from the rows ON SCREEN and labelled "Total of
+these N" -- a total still showing the unfiltered figure is read as the answer to the question
+just asked. And only the table body and the count are rebuilt as the user types (`tRefresh`),
+because replacing the toolbar on every keystroke throws the cursor out of the search box
+after one character. Handlers are delegated on `out` and bound ONCE, outside `render`:
+per-render binding stacks a handler per load and dies the moment a sort rebuilds the rows
+under it -- which is why the loan page's expand toggle moved out of `render` too. `render`
+clears the filter state, since a new window is a new question.
+
 **Charts are inline SVG, light-only, and capped at their natural width.** No chart
 library: a CDN this office cannot reach is how a page ends up blank. Categorical hues are
 the dataviz reference palette's first five in its FIXED order (colour follows the

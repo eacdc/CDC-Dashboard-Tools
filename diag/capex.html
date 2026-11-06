@@ -54,6 +54,18 @@
   .viz .vt{fill:var(--ink);font-size:10px;font-family:ui-monospace,monospace;font-weight:700}
   .viz rect{cursor:pointer}
   .viz rect:hover{opacity:.82}
+  .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .tools input[type=text]{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
+    font-family:ui-monospace,monospace;min-width:210px}
+  .tools select{padding:6px 8px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;
+    font-family:ui-monospace,monospace;max-width:320px}
+  .tools .cnt{font-size:11.5px;color:#64748b;font-family:ui-monospace,monospace}
+  .tools button{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;
+    font-size:11.5px;cursor:pointer;color:#475569}
+  .tools button:hover{background:#f1f5f9}
+  th[data-sort]{cursor:pointer;user-select:none;white-space:nowrap}
+  th[data-sort]:hover{color:#0f172a;text-decoration:underline}
+  th .ar{color:#0d9488}
   .tip{position:fixed;z-index:9;pointer-events:none;background:#0f172a;color:#fff;font-size:11.5px;
        padding:6px 9px;border-radius:7px;max-width:300px;line-height:1.45;display:none;
        font-family:ui-monospace,monospace;box-shadow:0 4px 14px rgba(0,0,0,.25)}
@@ -206,6 +218,101 @@
     return '<div class="viz scroll">'+g+'</div>';
   }
 
+  // ---- FILTERABLE, SORTABLE TABLES -----------------------------------------
+  // A list of 600 capex entries is not something anybody reads top to bottom; the
+  // question is always "what did we spend on X" or "what are the big ones". So every
+  // long table takes a search box, its own dropdowns and sortable headings, and the
+  // TOTAL follows the filter -- a total that still showed the unfiltered figure would
+  // be read as the answer to the filtered question.
+  var TSPEC={}, TST={};
+  function tState(id){ return TST[id]||(TST[id]={sort:null,dir:-1,q:'',sel:{}}); }
+  function cmp(a,b){
+    if(typeof a==='number'&&typeof b==='number') return a-b;
+    return String(a==null?'':a).localeCompare(String(b==null?'':b));
+  }
+  function tRows(id){
+    var sp=TSPEC[id], st=tState(id), rows=sp.rows.slice();
+    var q=(st.q||'').toLowerCase().trim();
+    if(q) rows=rows.filter(function(r){return sp.search(r).toLowerCase().indexOf(q)>=0;});
+    (sp.filters||[]).forEach(function(f){
+      var v=st.sel[f.key]; if(v) rows=rows.filter(function(r){return f.match(r,v);});
+    });
+    if(st.sort){
+      var col=null;
+      for(var i=0;i<sp.cols.length;i++) if(sp.cols[i].key===st.sort) col=sp.cols[i];
+      if(col) rows.sort(function(a,b){return cmp(col.val(a),col.val(b))*st.dir;});
+    }
+    return rows;
+  }
+  function tBody(id){
+    var sp=TSPEC[id], st=tState(id), rows=tRows(id), h='';
+    h+='<div class="scroll"><table><thead><tr>';
+    for(var c=0;c<sp.cols.length;c++){ var col=sp.cols[c];
+      var ar=(st.sort===col.key)?(' <span class="ar">'+(st.dir>0?'&#9650;':'&#9660;')+'</span>'):'';
+      h+='<th'+(col.num?' class="num"':'')+' data-tbl="'+id+'" data-sort="'+esc(col.key)+'">'
+       + esc(col.label)+ar+'</th>';
+    }
+    h+='</tr></thead><tbody>';
+    if(!rows.length){
+      h+='<tr><td colspan="'+sp.cols.length+'" class="muted" style="padding:14px">'
+       + 'Nothing matches that filter.</td></tr>';
+    }
+    for(var r=0;r<rows.length;r++){
+      h+='<tr>';
+      for(var c2=0;c2<sp.cols.length;c2++){ var cl=sp.cols[c2];
+        h+='<td'+(cl.cls?(' class="'+cl.cls+'"'):'')+(cl.style?(' style="'+cl.style+'"'):'')+'>'
+         + cl.html(rows[r])+'</td>';
+      }
+      h+='</tr>';
+      // A row that opens into a detail row of its own (the loan page's per-account
+      // breakdown) emits it here, so expanding survives a sort or a filter.
+      if(sp.after) h+=sp.after(rows[r]);
+    }
+    if(sp.foot) h+=sp.foot(rows);
+    return h+'</tbody></table></div>';
+  }
+  function tCount(id){
+    var sp=TSPEC[id], n=tRows(id).length, m=sp.rows.length;
+    return n===m?(m+' row'+(m===1?'':'s')):('showing '+n+' of '+m);
+  }
+  // Only the table body and the count are rebuilt as the user types, so the cursor stays
+  // where it is -- replacing the whole toolbar on every keystroke loses focus after one
+  // character, which makes a search box unusable.
+  function tRefresh(id){
+    var b=$('tb_'+id); if(b) b.innerHTML=tBody(id);
+    var c=$('tc_'+id); if(c) c.textContent=tCount(id);
+  }
+  function tHtml(id,spec){
+    TSPEC[id]=spec; tState(id);
+    if(spec.defSort&&!TST[id].sort){ TST[id].sort=spec.defSort; TST[id].dir=spec.defDir||-1; }
+    var st=TST[id], h='<div class="tools">'
+     + '<input type="text" data-tbl="'+id+'" data-act="q" placeholder="'+esc(spec.placeholder||'search')
+     +   '" value="'+esc(st.q||'')+'">';
+    (spec.filters||[]).forEach(function(f){
+      h+='<select data-tbl="'+id+'" data-act="sel" data-key="'+esc(f.key)+'">'
+       + '<option value="">'+esc(f.all)+'</option>';
+      f.options.forEach(function(o){
+        h+='<option value="'+esc(o.v)+'"'+(st.sel[f.key]===o.v?' selected':'')+'>'+esc(o.label)+'</option>';
+      });
+      h+='</select>';
+    });
+    h+='<button data-tbl="'+id+'" data-act="clear">clear</button>'
+     + '<span class="cnt" id="tc_'+id+'">'+esc(tCount(id))+'</span></div>'
+     + '<div id="tb_'+id+'">'+tBody(id)+'</div>';
+    return h;
+  }
+  // Distinct values of a field, for a dropdown, commonest first.
+  function distinct(rows,get){
+    var m={};
+    for(var i=0;i<rows.length;i++){var v=get(rows[i]); if(v==null||v==='')continue; m[v]=(m[v]||0)+1;}
+    return Object.keys(m).sort(function(a,b){return m[b]-m[a]||a.localeCompare(b);});
+  }
+  function vcell(r){
+    var lab=esc(r.type)+(r.no?(' '+esc(r.no)):'');
+    return r.guid?('<a href="../voucher/?branch='+encodeURIComponent(r.branch)+'&amp;id='
+      +encodeURIComponent(r.guid)+'" target="_blank" rel="noopener">'+lab+'</a>'):lab;
+  }
+
   function rollTable(rows,head,total){
     var h='<div class="scroll"><table><thead><tr><th>'+esc(head)+'</th><th class="num">Items</th>'
       + '<th class="num">Bought for</th></tr></thead><tbody>';
@@ -219,6 +326,9 @@
   }
 
   function render(j){
+    // A new window is a new question: carrying the last one's filters forward would show
+    // an empty table for a group that is not in this period, with no sign of why.
+    TST={}; TSPEC={};
     var h='';
     if(!j.rows.length){
       h+='<section><h2>NOTHING TO SHOW</h2><div class="body"><div class="note">'
@@ -272,22 +382,43 @@
      + 'machine and three paper bills contributes only the machine.</div>';
     if(j.cashByMonth&&j.cashByMonth.length) h+=monthChart(j.cashByMonth);
     if(cr.length){
-      h+='<div class="scroll"><table><thead><tr><th>Date</th><th>Paid for</th><th>What kind</th><th>Br</th>'
-       + '<th>Voucher</th><th class="num">Cash out</th><th>Note from Tally</th></tr></thead><tbody>';
-      for(var c=0;c<cr.length;c++){ var q2=cr[c];
-        var vl3=esc(q2.type)+(q2.no?(' '+esc(q2.no)):'');
-        h+='<tr><td class="mono">'+esc(fmt8(q2.date))+'</td>'
-         + '<td>'+esc(q2.paidFor)+(q2.alsoLegs?('<span class="muted"> +'+q2.alsoLegs+' more</span>'):'')+'</td>'
-         + '<td class="muted" style="font-size:11.5px">'+esc(CASH_LABEL[q2.kind]||q2.kind)+'</td>'
-         + '<td class="mono">'+esc(q2.branch)+'</td>'
-         + '<td class="mono" style="white-space:nowrap">'
-         +   (q2.guid?('<a href="../voucher/?branch='+encodeURIComponent(q2.branch)+'&amp;id='
-               +encodeURIComponent(q2.guid)+'" target="_blank" rel="noopener">'+vl3+'</a>'):vl3)+'</td>'
-         + '<td class="num">'+money(q2.amount)+'</td>'
-         + '<td class="muted" style="font-size:11.5px">'+esc(q2.narration||'')+'</td></tr>';
-      }
-      h+='<tr class="tot"><td colspan="5">Total</td><td class="num">'+money(j.cashOut||0)+'</td><td></td></tr>'
-       + '</tbody></table></div>';
+      h+=tHtml('cash',{
+        placeholder:'search payee, voucher, note',
+        rows:cr, defSort:'amount', defDir:-1,
+        search:function(r){return [r.paidFor,r.party,r.no,r.type,r.narration].join(' ');},
+        filters:[
+          {key:'kind',all:'every kind of capex payment',
+           options:distinct(cr,function(r){return r.kind;})
+             .map(function(v){return {v:v,label:CASH_LABEL[v]||v};}),
+           match:function(r,v){return r.kind===v;}},
+          {key:'branch',all:'both companies',options:distinct(cr,function(r){return r.branch;})
+             .map(function(v){return {v:v,label:v.toUpperCase()};}),
+           match:function(r,v){return r.branch===v;}}
+        ],
+        cols:[
+          {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
+           html:function(r){return esc(fmt8(r.date));}},
+          {key:'paidFor',label:'Paid for',val:function(r){return r.paidFor;},
+           html:function(r){return esc(r.paidFor)
+             +(r.alsoLegs?('<span class="muted"> +'+r.alsoLegs+' more</span>'):'');}},
+          {key:'kind',label:'What kind',cls:'muted',style:'font-size:11.5px',val:function(r){return r.kind;},
+           html:function(r){return esc(CASH_LABEL[r.kind]||r.kind);}},
+          {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
+           html:function(r){return esc(r.branch);}},
+          {key:'no',label:'Voucher',cls:'mono',style:'white-space:nowrap',
+           val:function(r){return r.type+' '+r.no;},html:vcell},
+          {key:'amount',label:'Cash out',num:true,cls:'num',val:function(r){return r.amount;},
+           html:function(r){return money(r.amount);}},
+          {key:'narration',label:'Note from Tally',cls:'muted',style:'font-size:11.5px',
+           val:function(r){return r.narration||'';},html:function(r){return esc(r.narration||'');}}
+        ],
+        foot:function(rs){
+          var t2=0; for(var i5=0;i5<rs.length;i5++)t2+=rs[i5].amount;
+          var allc=rs.length===cr.length;
+          return '<tr class="tot"><td colspan="5">'+(allc?'Total':'Total of these '+rs.length+' row(s)')
+            +'</td><td class="num">'+money(t2)+'</td><td></td></tr>';
+        }
+      });
     } else {
       h+='<div class="note">No payment in this window reached an asset, a machinery supplier or a capital '
        + 'advance. If that is wrong, the accounts being looked at are listed below &mdash; the likely cause is '
@@ -351,33 +482,58 @@
      + 'column or the other, never both. <strong>Note from Tally</strong> is the narration typed on that voucher &mdash; '
      + 'Tally leaves it blank on plenty of entries, so the voucher number beside it is the thing to go by. '
      + 'Click a voucher number to open the entry itself.</div>'
-     + (noNarr?('<div class="note" style="margin-bottom:8px">'+noNarr+' of '+entry.length
-        +' of these entries carry no narration in Tally; where the voucher has a reference instead it is '
+     + (noNarr?('<div class="note" style="margin-bottom:8px">'+noNarr+' of these '+entry.length
+        +' entries carry no narration in Tally; where the voucher has a reference instead it is '
         +'shown as <em>ref &hellip;</em>, and where it has neither the column is a dash.</div>'):'')
-     + '<div class="scroll"><table><thead><tr>'
-     + '<th>Date</th><th>Item</th><th>Group</th><th>Br</th><th>Voucher</th><th>Bought from</th>'
-     + '<th class="num">Bought for</th><th class="num">Sold off</th><th>Note from Tally</th></tr></thead><tbody>';
-    for(var i=0;i<entry.length;i++){ var r=entry[i];
-      var vlab=esc(r.type)+(r.no?(' '+esc(r.no)):'');
-      var vcell=r.guid
-        ? ('<a href="../voucher/?branch='+encodeURIComponent(r.branch)+'&amp;id='+encodeURIComponent(r.guid)
-           + '" target="_blank" rel="noopener">'+vlab+'</a>')
-        : vlab;
-      h+='<tr><td class="mono">'+esc(fmt8(r.date))+'</td>'
-       + '<td>'+esc(r.asset)+'<span class="pill f-'+esc(r.funded)+'">'+esc(FUND_LABEL[r.funded]||r.funded)+'</span></td>'
-       + '<td class="muted" style="font-size:11.5px">'+esc(r.group)+'</td>'
-       + '<td class="mono">'+esc(r.branch)+'</td>'
-       + '<td class="mono" style="white-space:nowrap">'+vcell+'</td>'
-       + '<td>'+esc(r.party||'')+'</td>'
-       + '<td class="num">'+money(r.spend)+'</td>'
-       + '<td class="num">'+money(r.disposal)+'</td>'
-       + '<td class="muted" style="font-size:11.5px">'
-       +   (r.narration?esc(r.narration):(r.reference?('ref '+esc(r.reference)):'<span style="color:#cbd5e1">&mdash;</span>'))
-       + '</td></tr>';
-    }
-    h+='<tr class="tot"><td colspan="6">Total</td><td class="num">'+money(j.additions)+'</td>'
-     + '<td class="num">'+money(j.disposals)+'</td><td></td></tr>'
-     + '</tbody></table></div></div></section>';
+     + tHtml('entry',{
+         placeholder:'search item, group, supplier, voucher, note',
+         rows:entry, defSort:'date', defDir:-1,
+         search:function(r){return [r.asset,r.group,r.party,r.no,r.type,r.narration].join(' ');},
+         filters:[
+           {key:'group',all:'every asset group',options:distinct(entry,function(r){return r.group;})
+              .map(function(v){return {v:v,label:v};}),
+            match:function(r,v){return r.group===v;}},
+           {key:'funded',all:'booked against anything',
+            options:distinct(entry,function(r){return r.funded;})
+              .map(function(v){return {v:v,label:FUND_LABEL[v]||v};}),
+            match:function(r,v){return r.funded===v;}},
+           {key:'branch',all:'both companies',options:distinct(entry,function(r){return r.branch;})
+              .map(function(v){return {v:v,label:v.toUpperCase()};}),
+            match:function(r,v){return r.branch===v;}},
+           {key:'side',all:'bought and sold',options:[{v:'buy',label:'bought only'},{v:'sell',label:'sold only'}],
+            match:function(r,v){return v==='buy'?r.spend>0:r.disposal>0;}}
+         ],
+         cols:[
+           {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
+            html:function(r){return esc(fmt8(r.date));}},
+           {key:'asset',label:'Item',val:function(r){return r.asset;},
+            html:function(r){return esc(r.asset)+'<span class="pill f-'+esc(r.funded)+'">'
+              +esc(FUND_LABEL[r.funded]||r.funded)+'</span>';}},
+           {key:'group',label:'Group',cls:'muted',style:'font-size:11.5px',val:function(r){return r.group;},
+            html:function(r){return esc(r.group);}},
+           {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
+            html:function(r){return esc(r.branch);}},
+           {key:'no',label:'Voucher',cls:'mono',style:'white-space:nowrap',
+            val:function(r){return r.type+' '+r.no;},html:vcell},
+           {key:'party',label:'Bought from',val:function(r){return r.party||'';},
+            html:function(r){return esc(r.party||'');}},
+           {key:'spend',label:'Bought for',num:true,cls:'num',val:function(r){return r.spend;},
+            html:function(r){return money(r.spend);}},
+           {key:'disposal',label:'Sold off',num:true,cls:'num',val:function(r){return r.disposal;},
+            html:function(r){return money(r.disposal);}},
+           {key:'narration',label:'Note from Tally',cls:'muted',style:'font-size:11.5px',
+            val:function(r){return r.narration||'';},
+            html:function(r){return r.narration?esc(r.narration)
+              :(r.reference?('ref '+esc(r.reference)):'<span style="color:#cbd5e1">&mdash;</span>');}}
+         ],
+         foot:function(rs){
+           var a2=0,d2=0; for(var i4=0;i4<rs.length;i4++){a2+=rs[i4].spend;d2+=rs[i4].disposal;}
+           var allr=rs.length===entry.length;
+           return '<tr class="tot"><td colspan="6">'+(allr?'Total':'Total of these '+rs.length+' row(s)')
+             +'</td><td class="num">'+money(a2)+'</td><td class="num">'+money(d2)+'</td><td></td></tr>';
+         }
+       })
+     + '</div></section>';
 
     // Capitalisation: WIP credited, the finished asset debited, same voucher, same money.
     // Neither a purchase nor a sale, and shown apart so it cannot be mistaken for either.
@@ -392,26 +548,49 @@
        + 'was bought and nothing was sold, and none of this is in the figures above. '
        + 'Counting the legs separately would have shown the factory twice over: once as the WIP leaving, '
        + 'once as the building arriving.</div>'
-       + '<div class="scroll"><table><thead><tr><th>Date</th><th>Account</th><th>Group</th><th>Br</th>'
-       + '<th>Voucher</th><th class="num">Out of</th><th class="num">Into</th><th>Note from Tally</th>'
-       + '</tr></thead><tbody>';
-      var mo=0,mi=0;
-      for(var k2=0;k2<mv.length;k2++){ var r2=mv[k2];
-        if(r2.movedOut)mo+=r2.moved; else mi+=r2.moved;
-        var vl2=esc(r2.type)+(r2.no?(' '+esc(r2.no)):'');
-        h+='<tr><td class="mono">'+esc(fmt8(r2.date))+'</td><td>'+esc(r2.asset)+'</td>'
-         + '<td class="muted" style="font-size:11.5px">'+esc(r2.group)+'</td>'
-         + '<td class="mono">'+esc(r2.branch)+'</td>'
-         + '<td class="mono" style="white-space:nowrap">'
-         +   (r2.guid?('<a href="../voucher/?branch='+encodeURIComponent(r2.branch)+'&amp;id='
-               +encodeURIComponent(r2.guid)+'" target="_blank" rel="noopener">'+vl2+'</a>'):vl2)+'</td>'
-         + '<td class="num">'+(r2.movedOut?money(r2.moved):'<span style="color:#cbd5e1">&mdash;</span>')+'</td>'
-         + '<td class="num">'+(r2.movedOut?'<span style="color:#cbd5e1">&mdash;</span>':money(r2.moved))+'</td>'
-         + '<td class="muted" style="font-size:11.5px">'+esc(r2.narration||'')+'</td></tr>';
-      }
-      h+='<tr class="tot"><td colspan="5">Total &mdash; and the two sides match, which is why it nets to nothing</td>'
-       + '<td class="num">'+money(mo)+'</td><td class="num">'+money(mi)+'</td><td></td></tr>'
-       + '</tbody></table></div></div></section>';
+       + tHtml('moved',{
+          placeholder:'search account, group, voucher, note',
+          rows:mv, defSort:'moved', defDir:-1,
+          search:function(r){return [r.asset,r.group,r.no,r.type,r.narration].join(' ');},
+          filters:[
+            {key:'dir',all:'both directions',
+             options:[{v:'out',label:'out of an account'},{v:'in',label:'into an account'}],
+             match:function(r,v){return v==='out'?r.movedOut:!r.movedOut;}},
+            {key:'branch',all:'both companies',options:distinct(mv,function(r){return r.branch;})
+               .map(function(v){return {v:v,label:v.toUpperCase()};}),
+             match:function(r,v){return r.branch===v;}}
+          ],
+          cols:[
+            {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
+             html:function(r){return esc(fmt8(r.date));}},
+            {key:'asset',label:'Account',val:function(r){return r.asset;},
+             html:function(r){return esc(r.asset);}},
+            {key:'group',label:'Group',cls:'muted',style:'font-size:11.5px',val:function(r){return r.group;},
+             html:function(r){return esc(r.group);}},
+            {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
+             html:function(r){return esc(r.branch);}},
+            {key:'no',label:'Voucher',cls:'mono',style:'white-space:nowrap',
+             val:function(r){return r.type+' '+r.no;},html:vcell},
+            {key:'moved',label:'Out of',num:true,cls:'num',
+             val:function(r){return r.movedOut?r.moved:0;},
+             html:function(r){return r.movedOut?money(r.moved):'<span style="color:#cbd5e1">&mdash;</span>';}},
+            {key:'movedIn',label:'Into',num:true,cls:'num',
+             val:function(r){return r.movedOut?0:r.moved;},
+             html:function(r){return r.movedOut?'<span style="color:#cbd5e1">&mdash;</span>':money(r.moved);}},
+            {key:'narration',label:'Note from Tally',cls:'muted',style:'font-size:11.5px',
+             val:function(r){return r.narration||'';},html:function(r){return esc(r.narration||'');}}
+          ],
+          foot:function(rs){
+            var o2=0,n2=0;
+            for(var k3=0;k3<rs.length;k3++){ if(rs[k3].movedOut)o2+=rs[k3].moved; else n2+=rs[k3].moved; }
+            var lab=(rs.length===mv.length)
+              ? 'Total &mdash; and the two sides match, which is why it nets to nothing'
+              : 'Total of these '+rs.length+' row(s) &mdash; filtered, so the two sides need not match';
+            return '<tr class="tot"><td colspan="5">'+lab+'</td><td class="num">'+money(o2)
+              +'</td><td class="num">'+money(n2)+'</td><td></td></tr>';
+          }
+        })
+       + '</div></section>';
     }
 
     out.innerHTML=h;
@@ -448,6 +627,41 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cshR),'Cash out');
     XLSX.writeFile(wb,'CDC_Capex_'+j.branch+'_'+j.from+'_'+j.to+'_'+ymd(new Date())+'.xlsx');
   }
+
+  // Bound ONCE on the container, which survives every re-render. Binding them inside
+  // render() would stack a new handler on each load, and rebuilding the toolbar on every
+  // keystroke would throw the cursor out of the search box after one character.
+  out.addEventListener('click',function(ev){
+    var th=ev.target.closest&&ev.target.closest('th[data-sort]');
+    if(th){
+      var id=th.getAttribute('data-tbl'), k=th.getAttribute('data-sort'), st=tState(id);
+      if(st.sort===k) st.dir=-st.dir; else { st.sort=k; st.dir=-1; }
+      tRefresh(id); return;
+    }
+    var bt=ev.target.closest&&ev.target.closest('button[data-act="clear"]');
+    if(bt){
+      var bid=bt.getAttribute('data-tbl'), bs=tState(bid);
+      bs.q=''; bs.sel={};
+      var inp=document.querySelector('input[data-tbl="'+bid+'"][data-act="q"]');
+      if(inp) inp.value='';
+      var sels=document.querySelectorAll('select[data-tbl="'+bid+'"]');
+      for(var i=0;i<sels.length;i++) sels[i].value='';
+      tRefresh(bid);
+    }
+  });
+  out.addEventListener('input',function(ev){
+    var t=ev.target;
+    if(t.getAttribute&&t.getAttribute('data-act')==='q'){
+      tState(t.getAttribute('data-tbl')).q=t.value; tRefresh(t.getAttribute('data-tbl'));
+    }
+  });
+  out.addEventListener('change',function(ev){
+    var t=ev.target;
+    if(t.getAttribute&&t.getAttribute('data-act')==='sel'){
+      var id=t.getAttribute('data-tbl');
+      tState(id).sel[t.getAttribute('data-key')]=t.value; tRefresh(id);
+    }
+  });
 
   $('go').addEventListener('click',load);
   $('xl').addEventListener('click',excel);
