@@ -1,6 +1,37 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.60 (portal) — November 2026 — The uploaded bills file was being counted twice
+
+**An uploaded bills CSV was added on top of the vouchers that already held those same
+bills, doubling the party exactly 2×.** One paper supplier read **6.29 Cr** payable
+against roughly half that in Tally. No amount of name-merging touches this: nothing is
+misfiled, one bill is simply present twice.
+
+The CSV is what Tally showed **open on the day it was printed**. The vouchers now carry
+bill-wise allocations back to April 2015, so as soon as the loaded window reaches back
+past a bill's own date, the voucher that *raised* that bill is already in the set and the
+CSV's row is the same money again. It doubled whether or not the reference still matched,
+because Tally re-types references and two spellings of one bill simply became two bills.
+
+Two ordinary routes into it. Loading a window that starts before 1 April 2025 while a
+payable CSV sat in the browser's cache doubled that party — and the bills slots **are**
+cached between sessions, so a file uploaded months ago is still being applied. Worse,
+uploading a **fresh** CSV, which is the obvious thing to do when a figure is being
+checked, doubled every party on it: every bill on a current snapshot falls inside the
+loaded window.
+
+**A bill raised on a date the loaded window covers is now dropped from the openings** —
+the vouchers are the source once they reach it, which is already the standing rule for
+that file. Where the vouchers do *not* reach, the snapshot still stands and is still the
+only source, so an opening from before the window plus this window's own invoices adds up
+exactly as the design intends. What gets dropped is **counted and returned**
+(`openingsDropped`, and a console line naming the figure): openings quietly ceasing to
+count is not something anyone should have to infer from a number that moved.
+
+Six new assertions in `npm run test:proj` hold both sides of it, including the re-typed
+reference and the case where the CSV is the only source.
+
 ## v2.59 (portal) — November 2026 — An invoice paid through a loan is no longer outstanding for ever
 
 **Receivables was overstating what export customers owe.** One customer read **17.45

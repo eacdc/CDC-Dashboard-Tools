@@ -205,5 +205,65 @@ const crossBranch = [
 assert(near(owed(crossBranch, 'Alpha Exports'), 0),
   'a customer squared off against the other branch owes nothing here either');
 
+// ---------------------------------------------------------------------------
+// 9. The uploaded snapshot must not be counted on top of the vouchers that hold it.
+// ---------------------------------------------------------------------------
+// A bills CSV is what Tally showed open on the day it was printed. The vouchers carry
+// bill allocations back to April 2015, so once the loaded window reaches a bill's own
+// date, the voucher that RAISED it is in the set and the CSV copy is the same money a
+// second time. It doubled exactly 2x -- and doubled whether or not the reference still
+// matched, because Tally re-types references and two spellings became two bills.
+//
+// 6.29 Cr against Tally's ~3.1 on one paper supplier is what this looks like from the
+// outside, and no amount of name-merging touches it: nothing is misfiled, one bill is
+// simply there twice.
+const CREDITOR = 'Paper Supplier';
+const xdC = {
+  groups: Object.assign({}, xd.groups, { 'Purchase Accounts': 'Revenue Account' }),
+  ledgers: Object.assign({}, xd.ledgers, { 'Paper Supplier': 'Sundry Creditors', 'Paper Purchase': 'Purchase Accounts' }),
+  ids: {},
+};
+// A purchase: Cr the supplier (+ve), Dr Purchase, raising bill PUR/100.
+const purchase = { date: '20250301', type: 'Purchase', no: 'PUR/100',
+  party_ledgers: { [CREDITOR]: 5000000 }, ledgers: { 'Paper Purchase': -5000000 },
+  bills: [{ ledger: CREDITOR, ref: 'PUR/100', type: 'New Ref', amount: 5000000 }] };
+// The same bill as a 31-Mar-2025 snapshot row.
+const snapRow = { date: '20250301', refNo: 'PUR/100', party: CREDITOR, amount: 5000000,
+  dueDate: '20250331', overdueDays: 0, isAdvance: false };
+function owedC(vouchers, payBills) {
+  const o = eng.buildProjection(vouchers, xdC, eng.findIB(xdC), [], payBills, AS_ON);
+  const r = o.allCreditorBills[CREDITOR];
+  return { amt: r ? Math.round(r.outstanding) : null, dropped: o.openingsDropped };
+}
+assert(near(owedC([purchase], [snapRow]).amt, 5000000),
+  'a bill in BOTH the uploaded snapshot and the vouchers is owed ONCE, not twice'
+  + ' (got ' + owedC([purchase], [snapRow]).amt + ')');
+const retyped = Object.assign({}, snapRow, { refNo: 'AKT/100' });
+assert(near(owedC([purchase], [retyped]).amt, 5000000),
+  'and still once when Tally re-typed the reference, so the two spellings cannot become two bills');
+assert(owedC([purchase], [snapRow]).dropped.pay === 1,
+  'the snapshot row that the vouchers already held is COUNTED as dropped, not silently discarded');
+
+// Where the vouchers do NOT reach, the snapshot is still the only source and must stand.
+assert(near(owedC([], [snapRow]).amt, 5000000),
+  'with no vouchers at all the uploaded snapshot is still what the party owes');
+const laterPurchase = { date: '20250601', type: 'Purchase', no: 'PUR/200',
+  party_ledgers: { [CREDITOR]: 1000000 }, ledgers: { 'Paper Purchase': -1000000 },
+  bills: [{ ledger: CREDITOR, ref: 'PUR/200', type: 'New Ref', amount: 1000000 }] };
+assert(near(owedC([laterPurchase], [snapRow]).amt, 6000000),
+  'an opening from BEFORE the window plus this window own invoices adds up, which is the whole design'
+  + ' (got ' + owedC([laterPurchase], [snapRow]).amt + ')');
+assert(owedC([laterPurchase], [snapRow]).dropped.pay === 0,
+  'and nothing is dropped in that case, because the vouchers do not reach back to it');
+
+// The same trap on the receivable side, since both sides take a CSV.
+const saleOld = sale('Alpha Exports', 'EXP/900', '20250301', 2000000);
+const recvRow = { date: '20250301', refNo: 'EXP/900', party: 'Alpha Exports', amount: 2000000,
+  dueDate: '20250331', overdueDays: 0, isAdvance: false };
+const bothSides = eng.buildProjection([saleOld], xd, ib, [recvRow], [], AS_ON);
+assert(near(bothSides.allDebtorBills['Alpha Exports'].outstanding, 2000000),
+  'a receivable bill in both the snapshot and the vouchers is outstanding ONCE as well'
+  + ' (got ' + Math.round(bothSides.allDebtorBills['Alpha Exports'].outstanding) + ')');
+
 console.log(fails ? `\n${fails} FAILED` : '\nall good');
 process.exit(fails ? 1 : 0);
