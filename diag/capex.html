@@ -225,11 +225,19 @@
      + '<div class="card"><div class="k">Of that, paid from bank</div><div class="v">'+esc(rupees(cash))+'</div></div>'
      + '<div class="card"><div class="k">Assets sold or scrapped</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
      + '<div class="card"><div class="k">Net increase in assets</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
+     + (j.moved?('<div class="card"><div class="k">Moved between asset accounts</div><div class="v">'
+         +esc(rupees(j.moved))+'</div></div>'):'')
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)+' <strong>Buying an asset is not the same as paying for it.</strong> '
      + 'Only the <em>paid from bank</em> figure left the bank on these dates; the rest sits in a supplier bill or '
      + 'a loan and leaves later. The funding split below says which is which. '
-     + '<em>Net increase in assets</em> is bought minus sold &mdash; the two are never mixed before that.</div>'
+     + '<em>Net increase in assets</em> is bought minus sold &mdash; the two are never mixed before that.'
+     + (cash?'':' <strong>Paid from bank is nil here, and that is normal:</strong> a machine is booked against '
+       + 'its supplier on a <em>Purchase - Fixed Assets</em> voucher and paid on a separate voucher days or '
+       + 'months later, so the purchase itself touches no bank account. The payment is a settlement of the '
+       + 'bill, not a second purchase, and is deliberately not counted here.')
+     + (j.moved?(' <strong>'+esc(rupees(j.moved))+' moved between asset accounts</strong> and is in neither '
+       + 'figure &mdash; see the last section.'):'')+'</div>'
      + '</div></section>';
 
     h+='<section><h2>WHEN IT WAS SPENT</h2><div class="body">'+monthChart(j.byMonth)
@@ -264,21 +272,24 @@
     }
     h+='<section><h2>BY ASSET GROUP</h2><div class="body">'+rollTable(j.byGroup,'Group',j.additions)+'</div></section>';
 
+    // A row that is purely a transfer belongs in its own section below, not in the list of
+    // what was bought and sold -- it would otherwise sit there with a dash in both columns.
+    var entry=j.rows.filter(function(r){return r.spend>0||r.disposal>0;});
     var noNarr=0;
-    for(var q=0;q<j.rows.length;q++) if(!j.rows[q].narration) noNarr++;
+    for(var q=0;q<entry.length;q++) if(!entry[q].narration) noNarr++;
     h+='<section><h2>EVERY ENTRY, NEWEST FIRST</h2><div class="body">'
      + '<div class="note" style="margin-bottom:8px"><strong>Bought for</strong> is money spent on an asset; '
      + '<strong>Sold off</strong> is an asset leaving the books (sold or scrapped). A row has a figure in one '
      + 'column or the other, never both. <strong>Note from Tally</strong> is the narration typed on that voucher &mdash; '
      + 'Tally leaves it blank on plenty of entries, so the voucher number beside it is the thing to go by. '
      + 'Click a voucher number to open the entry itself.</div>'
-     + (noNarr?('<div class="note" style="margin-bottom:8px">'+noNarr+' of '+j.rows.length
-        +' entries carry no narration in Tally; where the voucher has a reference instead it is '
+     + (noNarr?('<div class="note" style="margin-bottom:8px">'+noNarr+' of '+entry.length
+        +' of these entries carry no narration in Tally; where the voucher has a reference instead it is '
         +'shown as <em>ref &hellip;</em>, and where it has neither the column is a dash.</div>'):'')
      + '<div class="scroll"><table><thead><tr>'
      + '<th>Date</th><th>Item</th><th>Group</th><th>Br</th><th>Voucher</th><th>Bought from</th>'
      + '<th class="num">Bought for</th><th class="num">Sold off</th><th>Note from Tally</th></tr></thead><tbody>';
-    for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
+    for(var i=0;i<entry.length;i++){ var r=entry[i];
       var vlab=esc(r.type)+(r.no?(' '+esc(r.no)):'');
       var vcell=r.guid
         ? ('<a href="../voucher/?branch='+encodeURIComponent(r.branch)+'&amp;id='+encodeURIComponent(r.guid)
@@ -300,6 +311,41 @@
      + '<td class="num">'+money(j.disposals)+'</td><td></td></tr>'
      + '</tbody></table></div></div></section>';
 
+    // Capitalisation: WIP credited, the finished asset debited, same voucher, same money.
+    // Neither a purchase nor a sale, and shown apart so it cannot be mistaken for either.
+    var mv=j.rows.filter(function(r){return r.moved>0;});
+    if(mv.length){
+      h+='<section><h2>MOVED BETWEEN ASSET ACCOUNTS &mdash; NOT BOUGHT, NOT SOLD</h2><div class="body">'
+       + '<div class="note">These entries take money <em>out of</em> one asset account and put the same '
+       + 'money <em>into</em> another on the same voucher. The usual case is <strong>capitalisation</strong>: '
+       + 'a building or a machine is accumulated in a work-in-progress account while it is being built or '
+       + 'installed, and on the day it is finished the whole balance is moved across to the finished asset. '
+       + 'The company owns exactly what it owned the day before, under a different name &mdash; so nothing '
+       + 'was bought and nothing was sold, and none of this is in the figures above. '
+       + 'Counting the legs separately would have shown the factory twice over: once as the WIP leaving, '
+       + 'once as the building arriving.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Date</th><th>Account</th><th>Group</th><th>Br</th>'
+       + '<th>Voucher</th><th class="num">Out of</th><th class="num">Into</th><th>Note from Tally</th>'
+       + '</tr></thead><tbody>';
+      var mo=0,mi=0;
+      for(var k2=0;k2<mv.length;k2++){ var r2=mv[k2];
+        if(r2.movedOut)mo+=r2.moved; else mi+=r2.moved;
+        var vl2=esc(r2.type)+(r2.no?(' '+esc(r2.no)):'');
+        h+='<tr><td class="mono">'+esc(fmt8(r2.date))+'</td><td>'+esc(r2.asset)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(r2.group)+'</td>'
+         + '<td class="mono">'+esc(r2.branch)+'</td>'
+         + '<td class="mono" style="white-space:nowrap">'
+         +   (r2.guid?('<a href="../voucher/?branch='+encodeURIComponent(r2.branch)+'&amp;id='
+               +encodeURIComponent(r2.guid)+'" target="_blank" rel="noopener">'+vl2+'</a>'):vl2)+'</td>'
+         + '<td class="num">'+(r2.movedOut?money(r2.moved):'<span style="color:#cbd5e1">&mdash;</span>')+'</td>'
+         + '<td class="num">'+(r2.movedOut?'<span style="color:#cbd5e1">&mdash;</span>':money(r2.moved))+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(r2.narration||'')+'</td></tr>';
+      }
+      h+='<tr class="tot"><td colspan="5">Total &mdash; and the two sides match, which is why it nets to nothing</td>'
+       + '<td class="num">'+money(mo)+'</td><td class="num">'+money(mi)+'</td><td></td></tr>'
+       + '</tbody></table></div></div></section>';
+    }
+
     out.innerHTML=h;
     var marks=out.querySelectorAll('[data-tip]');
     for(var m2=0;m2<marks.length;m2++){
@@ -313,11 +359,11 @@
     if(!loaded||!window.XLSX) return;
     var j=loaded, wb=XLSX.utils.book_new();
     var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from','Funded by',
-               'Bought for','Sold off','Note from Tally']];
+               'Bought for','Sold off','Moved between asset accounts','Note from Tally']];
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
       rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,FUND_LABEL[r.funded]||r.funded,
-                 r.spend,r.disposal,r.narration]); }
-    rows.push(['TOTAL','','','','','','','',j.additions,j.disposals,'']);
+                 r.spend,r.disposal,r.moved||0,r.narration]); }
+    rows.push(['TOTAL','','','','','','','',j.additions,j.disposals,j.moved||0,'']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Every entry');
     var mk=function(arr,head){var a=[[head,'Items','Bought for']];
       for(var k=0;k<arr.length;k++)a.push([arr[k].label,arr[k].count,arr[k].spend]);return a;};

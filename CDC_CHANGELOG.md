@@ -1,6 +1,28 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.69 (server, diag) — November 2026 — Capitalising the Ahmedabad factory was not a 44 Cr disposal
+
+**Nothing was sold.** When the Ahmedabad factory was finished, journals 274, 415 and 418–421
+credited every work-in-progress ledger the building and its machines had been accumulated in
+and debited the finished assets. `/api/capex` read each leg on its own: a credit to a fixed
+asset is a disposal, so it reported ₹44.30 Cr of machines nobody sold — and the matching
+debits counted the same ₹44.30 Cr a second time as assets bought. The factory appeared
+twice over, once as the WIP leaving and once as the building arriving.
+
+A voucher's asset legs are now weighed against each other first. Whatever is debited to one
+asset and credited out of another on the same voucher is a **transfer**: only the excess on
+either side is a real purchase or a real disposal. A capitalisation journal nets to exactly
+nothing, which is the correct answer — the company owns what it owned the day before, under
+a different name. The transfers are not hidden: they have their own section, *Moved between
+asset accounts — not bought, not sold*, with the two sides totalled so they can be seen to
+match, and a card in the header.
+
+**And "paid from bank ₹0" now explains itself.** A machine is booked against its supplier on
+a *Purchase - Fixed Assets* voucher and paid weeks later on a separate one, so the purchase
+touches no bank account and the payment is a settlement of a bill rather than a second
+purchase. Nil there is the normal case, not a missing figure, and the page says so.
+
 ## v2.68 (server, diag) — November 2026 — One printer was four capex rows, and two warnings that could not be acted on
 
 **A creditor group named "Sundry Creditor - Fixed Assets" was being read as a fixed-asset
