@@ -1,6 +1,44 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.64 (server, diag) — November 2026 — An OD's churn is not borrowing, and an opening has two halves
+
+Three changes from reading the first real run of the loan page over the live books.
+
+**An OD or CC account sweeps, so its gross flow is meaningless.** One Citi OD showed
+₹204 Cr drawn against ₹169 Cr repaid in seven months — every receipt pays an OD down and
+every payment draws it up, so that is the company's turnover passing through, not
+borrowing decisions. It was ₹222.97 Cr of the ₹276.97 Cr "drawn" headline and it buried
+the ₹54 Cr of genuinely new facilities. The headline now reads **facilities drawn /
+facilities repaid / OD-CC net**, the per-account rows show net rather than gross for
+sweeping accounts, and the gross is one checkbox away. The split reconciles to the same
+closing as the gross does — `opening + drawnFacility − repaidFacility + sweepNet` — and a
+test holds that for every period.
+
+**Accrued interest was being counted as borrowing.** `Interest on Term Loan Payable` and
+`Interest on PCRE Loan Payable` sit under `Current Liabilities > Liability for Expenses`,
+and the name rule caught them because they say "Term Loan" and "PCRE Loan". They are
+interest *owed*, not money borrowed. `liability for expenses` and `provisions` are now
+never-borrowing groups, and the name path additionally refuses `interest`, `subvention`,
+`receivable`, `provision`, `charges`, `commission` and `penalty`. Those exclusions block
+only the *name* path, so a real facility the GROUP says is a loan is untouched — "L/C
+Payable to Muller Martini" under Secured Loans still counts.
+
+**The opening now comes back in two halves**, and this is the one that matters for
+reconciling. `openingParts.tally` is the opening balance Tally itself carries on its own
+day; `openingParts.postings` is everything we added between that day and the window
+start. When an opening disagrees with Tally, **which half is wrong is the diagnosis** — a
+wrong Tally half means the master (openings never pulled, or pulled for the wrong
+company), a wrong postings half means vouchers we do not hold. One combined figure cannot
+say which, and on a sweeping OD the postings half is a year of turnover, so a small gap
+there moves the opening by crores. Shown in the header and per account on expansion.
+
+Also: accounts that close **in debit** (more repaid than the account ever held) are
+flagged by name in a warning box with their figures, since that is usually a gap in the
+vouchers rather than a fact about the loan; and the ~120 dormant accounts — lenders long
+repaid, car loans closed — are hidden behind a count by default instead of burying the
+dozen that are live.
+
 ## v2.63 (server, diag) — November 2026 — Loan movement: `/diag/loans.html`
 
 **A new page: what every borrowing did, period by period.** Opening, drawn, repaid and

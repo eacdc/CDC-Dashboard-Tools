@@ -83,6 +83,10 @@
       <button id="go">Load</button>
       <button id="xl" class="ghost" disabled>&#11015; Excel</button>
     </div>
+    <div class="row" style="margin-bottom:4px">
+      <label><input type="checkbox" id="gross"> show the OD/CC gross in and out</label>
+      <label><input type="checkbox" id="nil"> show accounts with no balance and no movement</label>
+    </div>
     <div class="note">Which ledgers count is decided by the group Tally itself put them in &mdash; Secured Loans,
       Unsecured Loans, Bank OD/OCC, Loans (Liability) &mdash; plus a ledger under Current Liabilities whose
       <em>name</em> says packing credit, PCFC, cash credit, bill discounting, WCDL, term loan or buyer&rsquo;s credit.
@@ -156,18 +160,25 @@
          +'&ledger='+encodeURIComponent(ledger)+'&from='+from+'&to='+to;
   }
 
-  function periodTable(periods, ledger){
-    var h='<div class="scroll"><table><thead><tr>'
-      + '<th>Period</th><th class="num">Opening</th><th class="num">Drawn (+)</th>'
-      + '<th class="num">Repaid (&minus;)</th><th class="num">Closing</th><th class="num">Change</th><th></th></tr></thead><tbody>';
+  function chg(n){
+    if(Math.abs(n||0)<0.5) return '<span class="zero">&mdash;</span>';
+    return (n>0?'<span style="color:var(--red)">+':'<span style="color:var(--green)">')+esc(rupees(n))+'</span>';
+  }
+  // `sweep` means an OD/CC account, whose gross in and out are the company's turnover
+  // passing through rather than borrowing decisions. Those columns are suppressed unless
+  // asked for, and the net change stands in their place.
+  function periodTable(periods, ledger, sweep){
+    var gross=$('gross').checked, hideGross=(sweep&&!gross);
+    var h='<div class="scroll"><table><thead><tr><th>Period</th><th class="num">Opening</th>';
+    if(!hideGross) h+='<th class="num">Drawn (+)</th><th class="num">Repaid (&minus;)</th>';
+    h+='<th class="num">Net change</th><th class="num">Closing</th><th></th></tr></thead><tbody>';
     for(var i=0;i<periods.length;i++){
       var p=periods[i], ch=p.closing-p.opening, quiet=(!p.drawn&&!p.repaid);
       h+='<tr'+(quiet?' class="quiet"':'')+'><td class="mono">'+esc(p.label)+'</td>'
-       + '<td class="num">'+money(p.opening)+'</td>'
-       + '<td class="num">'+money(p.drawn)+'</td>'
-       + '<td class="num">'+money(p.repaid)+'</td>'
+       + '<td class="num">'+money(p.opening)+'</td>';
+      if(!hideGross) h+='<td class="num">'+money(p.drawn)+'</td><td class="num">'+money(p.repaid)+'</td>';
+      h+='<td class="num">'+chg(ch)+'</td>'
        + '<td class="num"><strong>'+money(p.closing)+'</strong></td>'
-       + '<td class="num">'+(Math.abs(ch)<0.5?'<span class="zero">&mdash;</span>':(ch>0?'<span style="color:var(--red)">+':'<span style="color:var(--green)">')+esc(rupees(ch))+'</span>')+'</td>'
        + '<td>'+(ledger&&!quiet?('<a target="_blank" href="'+esc(vchLink(ledger,periodFrom(p),periodTo(p)))+'">vouchers</a>'):'')+'</td></tr>';
     }
     return h+'</tbody></table></div>';
@@ -198,62 +209,138 @@
       out.innerHTML=h; return;
     }
 
-    var t=j.total, net=t.closing-t.opening;
+    // A loan closing in DEBIT means more was repaid than the account ever held. Either
+    // Tally carries it that way or the opening is understated because vouchers between
+    // the opening's own day and the window start are missing -- which is a gap in the
+    // data, not a fact about the loan, and must not be left for somebody to spot.
+    if(j.inDebit&&j.inDebit.length){
+      var dsum=0; for(var q=0;q<j.inDebit.length;q++) dsum+=j.inDebit[q].closing;
+      h+='<div class="warn"><strong>'+j.inDebit.length+' account(s) close in DEBIT, '
+       + esc(rupees(dsum))+' in total.</strong> On this page that means more was repaid than the account '
+       + 'ever held. Either Tally really carries them that way, or their opening is understated because '
+       + 'vouchers between the opening&rsquo;s own day and '+esc(fmt8(j.from))+' are missing. Check these first: '
+       + j.inDebit.slice(0,6).map(function(x){return '<span class="mono">'+esc(x.ledger)+'</span> ('+esc(rupees(x.closing))+')';}).join(', ')
+       + '.</div>';
+    }
+
+    var t=j.total, net=t.closing-t.opening, gross=$('gross').checked;
     h+='<section><h2>'+esc(j.from)+' TO '+esc(j.to)+' &middot; '+esc(String(j.bucket).toUpperCase())
      + ' &middot; '+j.loans.length+' ACCOUNT(S)</h2><div class="body">'
      + '<div class="cards">'
      + '<div class="card"><div class="k">Opening</div><div class="v">'+esc(rupees(t.opening))+'</div></div>'
-     + '<div class="card up"><div class="k">Drawn</div><div class="v">+'+esc(rupees(t.drawn))+'</div></div>'
-     + '<div class="card down"><div class="k">Repaid</div><div class="v">&minus;'+esc(rupees(t.repaid))+'</div></div>'
+     + (gross
+        ? ('<div class="card up"><div class="k">Drawn (all, gross)</div><div class="v">+'+esc(rupees(t.drawn))+'</div></div>'
+         + '<div class="card down"><div class="k">Repaid (all, gross)</div><div class="v">&minus;'+esc(rupees(t.repaid))+'</div></div>')
+        : ('<div class="card up"><div class="k">Facilities drawn</div><div class="v">+'+esc(rupees(t.drawnFacility))+'</div></div>'
+         + '<div class="card down"><div class="k">Facilities repaid</div><div class="v">&minus;'+esc(rupees(t.repaidFacility))+'</div></div>'
+         + '<div class="card '+(t.sweepNet>0?'up':'down')+'"><div class="k">OD / CC net ('+t.sweepAccounts+' a/c)</div>'
+         + '<div class="v">'+(t.sweepNet>0?'+':'')+esc(rupees(t.sweepNet))+'</div></div>'))
      + '<div class="card"><div class="k">Closing</div><div class="v">'+esc(rupees(t.closing))+'</div></div>'
      + '<div class="card '+(net>0?'up':'down')+'"><div class="k">Net borrowing '+(net>0?'up':'down')+'</div>'
      + '<div class="v">'+(net>0?'+':'')+esc(rupees(net))+'</div></div>'
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)
-     + ' Opening is Tally&rsquo;s own opening balance plus every posting between the day it stands on and '
-     + esc(fmt8(j.from))+'.</div>'
+     + ' <strong>Opening is in two halves:</strong> Tally&rsquo;s own opening balance of '
+     + esc(rupees(t.openingParts.tally))+' on the day it stands, plus '+esc(rupees(t.openingParts.postings))
+     + ' of postings between that day and '+esc(fmt8(j.from))+'. If an opening disagrees with Tally, which half is '
+     + 'wrong IS the diagnosis &mdash; a wrong Tally half means the master, a wrong postings half means vouchers we '
+     + 'do not hold. Expand an account to see its two halves.'
+     + (gross?'':(' <strong>An OD or CC account sweeps</strong> &mdash; every receipt pays it down and every payment '
+       + 'draws it up &mdash; so its gross in and out are the turnover passing through, not borrowing decisions. For '
+       + 'the '+t.sweepAccounts+' of them here that was '+esc(rupees(t.drawn-t.drawnFacility))+' in and '
+       + esc(rupees(t.repaid-t.repaidFacility))+' out, which says nothing; what matters is that they moved from '
+       + esc(rupees(t.sweepOpening))+' to '+esc(rupees(t.sweepClosing))+'. Tick &ldquo;show the OD/CC gross&rdquo; '
+       + 'above to see it anyway.'))
+     + '</div>'
      + '</div></section>';
 
-    // All borrowings together, period by period.
-    h+='<section><h2>ALL BORROWINGS, PERIOD BY PERIOD</h2><div class="body">'
-     + periodTable(j.periods,null)
+    // All borrowings together, period by period. The facility columns and the OD net are
+    // kept apart unless the gross is asked for: added together they are the company's
+    // turnover, and the real 54 Cr of new facilities disappears inside 277 Cr of sweep.
+    h+='<section><h2>ALL BORROWINGS, PERIOD BY PERIOD</h2><div class="body"><div class="scroll"><table><thead><tr>'
+     + '<th>Period</th><th class="num">Opening</th>';
+    h+=gross?'<th class="num">Drawn (+)</th><th class="num">Repaid (&minus;)</th>'
+            :'<th class="num">Facilities drawn</th><th class="num">Facilities repaid</th><th class="num">OD/CC net</th>';
+    h+='<th class="num">Net change</th><th class="num">Closing</th></tr></thead><tbody>';
+    for(var pi=0;pi<j.periods.length;pi++){ var pp=j.periods[pi];
+      h+='<tr><td class="mono">'+esc(pp.label)+'</td><td class="num">'+money(pp.opening)+'</td>';
+      h+=gross?('<td class="num">'+money(pp.drawn)+'</td><td class="num">'+money(pp.repaid)+'</td>')
+              :('<td class="num">'+money(pp.drawnFacility)+'</td><td class="num">'+money(pp.repaidFacility)
+                +'</td><td class="num">'+chg(pp.sweepNet)+'</td>');
+      h+='<td class="num">'+chg(pp.netChange)+'</td>'
+       + '<td class="num"><strong>'+money(pp.closing)+'</strong></td></tr>';
+    }
+    h+='</tbody></table></div>'
      + '<div class="note" style="margin-top:8px">Each closing is the next row&rsquo;s opening. A period with no '
      + 'movement is still listed, carrying the balance &mdash; a statement that skipped a quiet month would read as if '
-     + 'the loan had gone away.</div></div></section>';
+     + 'the loan had gone away. The last period may be partial: it ends at '+esc(fmt8(j.to))+'.</div></div></section>';
 
     // By kind.
     h+='<section><h2>BY KIND OF BORROWING</h2><div class="body"><div class="scroll"><table><thead><tr>'
      + '<th>Kind</th><th class="num">Accounts</th><th class="num">Opening</th><th class="num">Drawn</th>'
      + '<th class="num">Repaid</th><th class="num">Closing</th></tr></thead><tbody>';
     for(var k=0;k<j.byKind.length;k++){ var b=j.byKind[k];
-      h+='<tr><td>'+esc(b.kindLabel)+'</td><td class="num">'+b.count+'</td>'
-       + '<td class="num">'+money(b.opening)+'</td><td class="num">'+money(b.drawn)+'</td>'
-       + '<td class="num">'+money(b.repaid)+'</td><td class="num"><strong>'+money(b.closing)+'</strong></td></tr>';
+      var hid=(b.sweep&&!gross);
+      h+='<tr><td>'+esc(b.kindLabel)+(hid?' <span class="pill">sweeps</span>':'')+'</td><td class="num">'+b.count+'</td>'
+       + '<td class="num">'+money(b.opening)+'</td>'
+       + '<td class="num">'+(hid?('<span class="muted" style="font-size:11px">net '+chg(b.netChange)+'</span>'):money(b.drawn))+'</td>'
+       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(b.repaid))+'</td>'
+       + '<td class="num"><strong>'+money(b.closing)+'</strong></td></tr>';
     }
     h+='<tr class="tot"><td>All borrowings</td><td class="num">'+j.loans.length+'</td>'
      + '<td class="num">'+money(t.opening)+'</td><td class="num">'+money(t.drawn)+'</td>'
      + '<td class="num">'+money(t.repaid)+'</td><td class="num">'+money(t.closing)+'</td></tr>'
      + '</tbody></table></div></div></section>';
 
-    // Account by account, each expandable into its own statement.
-    h+='<section><h2>ACCOUNT BY ACCOUNT</h2><div class="body"><div class="scroll"><table><thead><tr>'
-     + '<th>Account</th><th>Kind</th><th>Group</th><th>Branch</th><th class="num">Opening</th>'
-     + '<th class="num">Drawn</th><th class="num">Repaid</th><th class="num">Closing</th><th></th>'
-     + '</tr></thead><tbody>';
-    for(var i=0;i<j.loans.length;i++){ var l=j.loans[i];
+    // Account by account, each expandable into its own statement. A hundred dormant
+    // ledgers -- every lender ever repaid, every car loan long closed -- are hidden
+    // unless asked for: a page that opens on them buries the dozen that are live.
+    var showNil=$('nil').checked, live=[], nil=0;
+    for(var li=0;li<j.loans.length;li++){
+      var L0=j.loans[li];
+      if(!L0.moved && Math.abs(L0.closing)<0.5 && Math.abs(L0.opening)<0.5){ nil++; if(!showNil) continue; }
+      live.push({ l: L0, i: li });
+    }
+    h+='<section><h2>ACCOUNT BY ACCOUNT &middot; '+live.length+' LIVE'
+     + (nil?(' &middot; '+nil+' NIL '+(showNil?'SHOWN':'HIDDEN')):'')+'</h2><div class="body">';
+    if(nil&&!showNil){
+      h+='<div class="note" style="margin-bottom:8px">'+nil+' account(s) have no balance and no movement in this '
+       + 'window &mdash; lenders long repaid, car loans closed. Tick &ldquo;show accounts with no balance&rdquo; above '
+       + 'to list them.</div>';
+    }
+    h+='<div class="scroll"><table><thead><tr>'
+     + '<th>Account</th><th>Kind</th><th>Group</th><th>Branch</th><th class="num">Opening</th>';
+    h+=gross?'<th class="num">Drawn</th><th class="num">Repaid</th>'
+            :'<th class="num">Drawn</th><th class="num">Repaid</th>';
+    h+='<th class="num">Net</th><th class="num">Closing</th><th></th></tr></thead><tbody>';
+    for(var i=0;i<live.length;i++){ var l=live[i].l, idx=live[i].i;
+      var hid=(l.sweep&&!gross);
       h+='<tr'+(l.moved||Math.abs(l.closing)>=0.5?'':' class="quiet"')+'>'
-       + '<td><span class="ex" data-i="'+i+'">&#9656; '+esc(l.ledger)+'</span></td>'
+       + '<td><span class="ex" data-i="'+idx+'">&#9656; '+esc(l.ledger)+'</span>'
+       + (l.inDebit?' <span class="pill" style="background:#fef3c7;color:#78350f">in debit</span>':'')
+       + (hid?' <span class="pill">sweeps</span>':'')+'</td>'
        + '<td>'+esc(l.kindLabel)+'</td><td class="muted" style="font-size:11.5px">'+esc(l.group)+'</td>'
        + '<td class="mono">'+esc((l.branches||[]).join(', ')||'&mdash;')+'</td>'
-       + '<td class="num">'+money(l.opening)+'</td><td class="num">'+money(l.drawn)+'</td>'
-       + '<td class="num">'+money(l.repaid)+'</td><td class="num"><strong>'+money(l.closing)+'</strong></td>'
+       + '<td class="num">'+money(l.opening)+'</td>'
+       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(l.drawn))+'</td>'
+       + '<td class="num">'+(hid?'<span class="zero">&mdash;</span>':money(l.repaid))+'</td>'
+       + '<td class="num">'+chg(l.netChange)+'</td>'
+       + '<td class="num"><strong>'+money(l.closing)+'</strong></td>'
        + '<td><a target="_blank" href="'+esc(vchLink(l.ledger,j.from,j.to))+'">vouchers</a></td></tr>'
-       + '<tr id="ex'+i+'" style="display:none"><td colspan="9" style="background:#fbfdfe">'
-       + periodTable(l.periods,l.ledger)+'</td></tr>';
+       + '<tr id="ex'+idx+'" style="display:none"><td colspan="10" style="background:#fbfdfe">'
+       + '<div class="note" style="margin-bottom:8px">Opening '+esc(rupees(l.opening))+' = Tally&rsquo;s own opening '
+       + '<strong>'+esc(rupees(l.openingParts.tally))+'</strong> plus <strong>'
+       + esc(rupees(l.openingParts.postings))+'</strong> of postings up to '+esc(fmt8(j.from))
+       + '. Disagrees with Tally? The half that is wrong says where to look: the Tally half means the master, the '
+       + 'postings half means vouchers we do not hold.</div>'
+       + periodTable(l.periods,l.ledger,l.sweep)+'</td></tr>';
     }
-    h+='<tr class="tot"><td colspan="4">All borrowings</td>'
-     + '<td class="num">'+money(t.opening)+'</td><td class="num">'+money(t.drawn)+'</td>'
-     + '<td class="num">'+money(t.repaid)+'</td><td class="num">'+money(t.closing)+'</td><td></td></tr>'
+    h+='<tr class="tot"><td colspan="4">All borrowings'+(nil&&!showNil?' (including the '+nil+' nil ones)':'')+'</td>'
+     + '<td class="num">'+money(t.opening)+'</td>'
+     + '<td class="num">'+money(gross?t.drawn:t.drawnFacility)+'</td>'
+     + '<td class="num">'+money(gross?t.repaid:t.repaidFacility)+'</td>'
+     + '<td class="num">'+chg(t.netChange)+'</td>'
+     + '<td class="num">'+money(t.closing)+'</td><td></td></tr>'
      + '</tbody></table></div></div></section>';
 
     if(j.nearMisses&&j.nearMisses.length){
@@ -311,6 +398,10 @@
 
   $('go').addEventListener('click',load);
   $('xl').addEventListener('click',excel);
+  // Both toggles are presentation only -- the figures are already in hand, so re-render
+  // rather than re-fetch.
+  $('gross').addEventListener('change',function(){ if(loaded) render(loaded); });
+  $('nil').addEventListener('change',function(){ if(loaded) render(loaded); });
   load();
 })();
 </script>

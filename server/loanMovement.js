@@ -51,9 +51,19 @@ const NAME_KINDS = [
 // Never a borrowing, whatever it is called. "Loans & Advances (Asset)" is money WE lent
 // out and would otherwise be swept in by the word "loan"; a bank or cash account is the
 // other side of a repayment, not the loan.
+// `liability for expenses` is the accruals group: "Interest on Term Loan Payable" is
+// interest owed, not money borrowed. It was being counted because its NAME says "Term
+// Loan" and it sits under Current Liabilities -- nil in the window it was spotted in, so
+// it distorted nothing, but it would the moment interest is accrued.
 const NOT_BORROWING = ['loans & advances', 'loans and advances', 'current assets',
   'fixed assets', 'investments', 'bank accounts', 'cash-in-hand', 'cash in hand',
-  'sundry debtors', 'sundry creditors', 'duties & taxes', 'branch / divisions'];
+  'sundry debtors', 'sundry creditors', 'duties & taxes', 'branch / divisions',
+  'liability for expenses', 'provisions'];
+// And the same thing said by name, because a company can accrue interest anywhere. These
+// only ever BLOCK the name-based path -- a ledger the GROUP says is a loan stays one, so
+// "L/C Payable to Muller Martini" under Secured Loans is untouched by the word "payable".
+const NOT_BORROWING_NAME = ['interest', 'subvention', 'receivable', 'provision',
+  'charges', 'commission', 'penalty'];
 
 const KIND_LABELS = { secured: 'Secured loans', unsecured: 'Unsecured loans',
   od_cc: 'OD / CC / packing credit', other: 'Other borrowings' };
@@ -69,10 +79,20 @@ function loanKind(name, chain) {
   // not a borrowing, and this report must not turn one into the other.
   if (cs.indexOf('current liabilities') >= 0 || cs.indexOf('liabilit') >= 0) {
     const nm = String(name || '').toLowerCase();
+    for (const bad of NOT_BORROWING_NAME) if (nm.indexOf(bad) >= 0) return null;
     for (const n of NAME_KINDS) if (nm.indexOf(n.kw) >= 0) return n.kind;
   }
   return null;
 }
+
+// An OD, CC or packing-credit account SWEEPS: every receipt pays it down and every
+// payment draws it up, so its gross in and out are the company's whole turnover passing
+// through, not borrowing decisions. On one account over seven months that was 204 Cr
+// drawn against 169 Cr repaid -- 223 Cr of the 277 Cr "drawn" headline -- which buried
+// the 54 Cr of real new facilities. For these accounts only the CLOSING balance and the
+// net change mean anything, so the gross is reported but kept out of the headline.
+const SWEEP_KINDS = { od_cc: true };
+function isSweep(kind) { return !!SWEEP_KINDS[kind]; }
 
 // A ledger whose NAME says borrowing but whose group says otherwise. Not counted -- but
 // named in the response, because a loan silently missing from a loan report is the one
@@ -149,9 +169,19 @@ function buildLoanMovement(opts) {
   const keyIdx = new Map(keys.map((k, i) => [k, i]));
 
   const names = Object.keys(ledgerMeta);
-  // opening[ledger] accumulates the balance as it stood the instant before `from`.
-  const opening = {};
-  for (const n of names) opening[n] = 0;
+  // opening[ledger] accumulates the balance as it stood the instant before `from`, and
+  // its TWO HALVES are kept apart: `openTally` is the opening balance Tally itself
+  // carries on its own day, `openPost` is every posting we then added between that day
+  // and the window start.
+  //
+  // That split is the diagnosis, not decoration. When an opening disagrees with Tally,
+  // a wrong `tally` half means the master -- the openings were never pulled, or were
+  // pulled for the wrong company. A wrong `postings` half means the vouchers: days
+  // missing between the opening's day and the window start. One combined figure cannot
+  // say which, and on a SWEEPING OD the postings half is a year of turnover, so a small
+  // gap there moves the opening by crores.
+  const opening = {}, openTally = {}, openPost = {};
+  for (const n of names) { opening[n] = 0; openTally[n] = 0; openPost[n] = 0; }
 
   // Tally's own opening balance, where the branch has one and it stands on or before
   // the window start. Openings are per branch, so a loan held in both is the sum.
@@ -164,7 +194,7 @@ function buildLoanMovement(opts) {
     if (!o.asOn) continue;
     for (const n of names) {
       const amt = (o.amounts || {})[n];
-      if (amt) opening[n] = r2(opening[n] + amt);
+      if (amt) { opening[n] = r2(opening[n] + amt); openTally[n] = r2(openTally[n] + amt); }
     }
   }
 
@@ -183,8 +213,9 @@ function buildLoanMovement(opts) {
     if (d < from) {
       const asOn = openingAsOn[row.branch] || null;
       // No opening for this branch: everything before the window simply IS the opening.
-      if (!asOn) { opening[n] = r2(opening[n] + net); continue; }
-      if (d >= asOn) opening[n] = r2(opening[n] + net);          // after the opening day
+      if (!asOn) { opening[n] = r2(opening[n] + net); openPost[n] = r2(openPost[n] + net); continue; }
+      // after the opening day
+      if (d >= asOn) { opening[n] = r2(opening[n] + net); openPost[n] = r2(openPost[n] + net); }
       // d < asOn: already inside Tally's opening figure -- adding it would double it.
       continue;
     }
@@ -195,6 +226,7 @@ function buildLoanMovement(opts) {
       // the opening figure: take it back off, and it then shows as movement in its own
       // bucket, where it belongs.
       opening[n] = r2(opening[n] - net);
+      openPost[n] = r2(openPost[n] - net);
     }
     const k = bucketKeyOf(d, bucket);
     if (!keyIdx.has(k)) { ignored++; continue; }
@@ -221,6 +253,14 @@ function buildLoanMovement(opts) {
     loans.push({ ledger: n, kind: meta.kind, kindLabel: KIND_LABELS[meta.kind] || meta.kind,
       group: meta.group || '', branches: meta.branches || [],
       opening: r2(opening[n]), drawn: tin, repaid: tout, closing: run,
+      // The opening's two halves, so a disagreement with Tally says WHICH is wrong.
+      openingParts: { tally: r2(openTally[n]), postings: r2(openPost[n]) },
+      netChange: r2(run - opening[n]), sweep: isSweep(meta.kind),
+      // A loan in DEBIT: repaid more than the account ever held. Either Tally really
+      // carries it that way, or the opening is understated because vouchers between the
+      // opening's own day and the window start are missing. Flagged rather than left for
+      // somebody to notice, because it is the signature of a gap in the data.
+      inDebit: run < -0.5,
       moved: !!(tin || tout), periods });
   }
   // Biggest closing first, and a loan with no movement and no balance last -- a page
@@ -231,34 +271,64 @@ function buildLoanMovement(opts) {
 
   // All borrowings together, same statement shape. Summed from the per-ledger cells, so
   // the total cannot disagree with the rows above it.
+  // Each period carries the gross AND the split that keeps a sweeping OD out of the
+  // headline: `drawnFacility`/`repaidFacility` are the real facilities, `sweepNet` is the
+  // net move on the OD/CC accounts. closing = opening + drawnFacility - repaidFacility
+  // + sweepNet, so the split reconciles exactly as the gross does.
   let runAll = loans.reduce((s, l) => r2(s + l.opening), 0);
   const openAll = runAll;
   const periods = keys.map((k, i) => {
-    let din = 0, dout = 0;
-    for (const l of loans) { din = r2(din + l.periods[i].drawn); dout = r2(dout + l.periods[i].repaid); }
+    let din = 0, dout = 0, fin = 0, fout = 0, swp = 0;
+    for (const l of loans) {
+      const p = l.periods[i];
+      din = r2(din + p.drawn); dout = r2(dout + p.repaid);
+      if (l.sweep) swp = r2(swp + p.drawn - p.repaid);
+      else { fin = r2(fin + p.drawn); fout = r2(fout + p.repaid); }
+    }
     const o = runAll;
     runAll = r2(o + din - dout);
-    return { key: k, label: bucketLabel(k, bucket), opening: r2(o), drawn: din, repaid: dout, closing: runAll };
+    return { key: k, label: bucketLabel(k, bucket), opening: r2(o), drawn: din, repaid: dout,
+      drawnFacility: fin, repaidFacility: fout, sweepNet: swp,
+      netChange: r2(din - dout), closing: runAll };
   });
 
   const byKind = {};
   for (const l of loans) {
     const e = byKind[l.kind] || (byKind[l.kind] = { kind: l.kind, kindLabel: l.kindLabel,
-      count: 0, opening: 0, drawn: 0, repaid: 0, closing: 0 });
+      sweep: l.sweep, count: 0, opening: 0, drawn: 0, repaid: 0, netChange: 0, closing: 0 });
     e.count++;
     e.opening = r2(e.opening + l.opening); e.drawn = r2(e.drawn + l.drawn);
     e.repaid = r2(e.repaid + l.repaid); e.closing = r2(e.closing + l.closing);
+    e.netChange = r2(e.closing - e.opening);
   }
 
+  const sweepLoans = loans.filter((l) => l.sweep);
+  const facLoans = loans.filter((l) => !l.sweep);
   const total = {
     opening: openAll,
     drawn: loans.reduce((s, l) => r2(s + l.drawn), 0),
     repaid: loans.reduce((s, l) => r2(s + l.repaid), 0),
+    // The headline figures: real facilities drawn and repaid, with the OD/CC sweep as one
+    // net number instead of the company's turnover twice over.
+    drawnFacility: facLoans.reduce((s, l) => r2(s + l.drawn), 0),
+    repaidFacility: facLoans.reduce((s, l) => r2(s + l.repaid), 0),
+    sweepNet: sweepLoans.reduce((s, l) => r2(s + l.netChange), 0),
+    sweepOpening: sweepLoans.reduce((s, l) => r2(s + l.opening), 0),
+    sweepClosing: sweepLoans.reduce((s, l) => r2(s + l.closing), 0),
+    sweepAccounts: sweepLoans.length,
+    netChange: r2(runAll - openAll),
     closing: runAll,
+    openingParts: {
+      tally: loans.reduce((s, l) => r2(s + l.openingParts.tally), 0),
+      postings: loans.reduce((s, l) => r2(s + l.openingParts.postings), 0),
+    },
   };
+  const inDebit = loans.filter((l) => l.inDebit)
+    .map((l) => ({ ledger: l.ledger, opening: l.opening, repaid: l.repaid, closing: l.closing }));
+  const dormant = loans.filter((l) => !l.moved && Math.abs(l.closing) < 0.5).length;
   return { bucket, from, to, buckets: keys.length, loans, periods,
     byKind: Object.values(byKind).sort((a, b) => Math.abs(b.closing) - Math.abs(a.closing)),
-    total, openingAsOn, openingKnown, ignoredRows: ignored };
+    total, openingAsOn, openingKnown, ignoredRows: ignored, inDebit, dormant };
 }
 
 module.exports = { loanKind, nearMiss, bucketKeyOf, bucketLabel, bucketsBetween,
