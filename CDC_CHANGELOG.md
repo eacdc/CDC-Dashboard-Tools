@@ -1,6 +1,52 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.63 (server, diag) — November 2026 — Loan movement: `/diag/loans.html`
+
+**A new page: what every borrowing did, period by period.** Opening, drawn, repaid and
+closing for each loan account — secured and unsecured loans, OD and CC, packing credit,
+PCFC, bill discounting, term loans — by **day, week or month**, for one branch or
+consolidated. Each period's closing is the next one's opening, so the statement reads
+straight down and can be put beside Tally at any date inside it. There is a per-kind
+summary, a per-account table that expands into that account's own statement, a
+voucher-level drill-down on every period with movement, and an Excel export with three
+sheets.
+
+**A loan outstanding is shown POSITIVE** (`drawn` adds, `repaid` subtracts). That is the
+opposite of the Dr-positive scale the receivables code uses, deliberately: a report
+reading *"loan outstanding: −1,62,00,000"* is a report that gets misread.
+
+**Which ledgers count** is decided by the group Tally itself put them in — Secured Loans,
+Unsecured Loans, Bank OD/OCC, Loans (Liability) — plus a ledger under Current Liabilities
+whose *name* says packing credit, PCFC, cash credit, bill discounting, WCDL, term loan or
+buyer's credit. Reading the name matters because the group chain never contains it, which
+is exactly how PCFC accounts hid for a year. Money **we** lent out (Loans & Advances) is
+never counted, and a ledger named like a loan but grouped elsewhere — "Term Loan Interest"
+under Indirect Expenses — is listed as a **near miss** rather than silently dropped: a loan
+missing from a loan report is the one error nobody would spot.
+
+**Both ledger maps are read.** A packing credit sits under Bank OD A/c, which the
+extractor files under `party_ledgers`, while a secured loan lands in `ledgers`. The
+fixture puts one borrowing in each and insists both are found.
+
+**The opening is Tally's own**, plus every posting between the day it stands on and the
+window start — and *minus* any posting inside the window but before that day, which the
+opening already contains, or it would be counted twice. A branch whose opening balances
+were never pulled gets movement and is **told** it is movement, not a balance.
+
+The arithmetic lives in `server/loanMovement.js` with no database in it, so it is tested
+directly rather than through Mongo; `/api/loans` is a thin adapter. `npm run test:loans`
+runs both halves — 29 assertions on the arithmetic (including that every closing carries
+forward, that a drawdown and a repayment on the same day both survive, and that a window
+starting before the openings stand still ends at the right figure) and 22 on the endpoint.
+A day-by-day request spanning more than 800 periods is refused with the bucket to use
+instead. Cancelled and optional vouchers reach no figure here either.
+
+One bug the tests caught while being written: `'unsecured loans'` **contains**
+`'secured loans'`, so a substring test in the wrong order labelled every director's loan as
+secured debt. The group keywords are now ordered, and a test fails by name if they are
+sorted.
+
 ## v2.62 (portal, server) — November 2026 — A renamed ledger is one party, and its money stops vanishing
 
 **A ledger renamed in Tally was two parties — and the old one's money disappeared.**
