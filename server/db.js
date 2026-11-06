@@ -19,6 +19,13 @@ function getDb() {
       const db = DB_NAME ? c.db(DB_NAME) : c.db();
       // Idempotent indexes.
       await db.collection('vouchers').createIndex({ branch: 1, date: 1 });
+      // DATE ALONE, because a consolidated query names no branch and cannot use the
+      // compound index above -- `date` is its second key, so `{date: {$gte..$lte}}` with
+      // no branch scans the whole decade. Every page that asks for both companies at once
+      // was doing exactly that; /api/capex began timing out the moment it also looked a
+      // few years behind its window, and a timed-out request comes back as an HTML error
+      // page, which reads in the browser as "Unexpected token '<'".
+      await db.collection('vouchers').createIndex({ date: 1 });
       await db.collection('vouchers').createIndex({ branch: 1, guid: 1 }, { unique: true });
       await db.collection('masters').createIndex({ branch: 1 }, { unique: true });
       await db.collection('sync_state').createIndex({ branch: 1 }, { unique: true });

@@ -208,6 +208,31 @@
   // `match.branch = br` over the same vouchers, and every figure on the page is a SUM
   // over the rows -- so narrowing the rows here gives the same answer. That claim is
   // checked rather than assumed: see sliceFor.
+  // A REQUEST THAT FAILS UPSTREAM COMES BACK AS HTML, not JSON -- Render's own gateway
+  // page when the server is asleep, restarting or has timed out. Calling .json() on that
+  // throws "Unexpected token '<', \"<!DOCTYPE\"... is not valid JSON", which tells the
+  // reader nothing about which request failed or why. Read the body as text, say what
+  // actually came back, and name the likely cause.
+  function fetchJson(url){
+    return fetch(url).then(function(r){
+      return r.text().then(function(t){
+        var j=null;
+        try{ j=JSON.parse(t); }catch(e){
+          var head=t.replace(/\s+/g,' ').slice(0,120);
+          if(r.status>=500||/^\s*<!DOCTYPE|^\s*<html/i.test(t)){
+            throw new Error('The server answered '+r.status+' '+(r.statusText||'')+' with a web page '
+              + 'instead of data. Usually it is asleep or still starting after a deploy, or the '
+              + 'request took too long and the gateway gave up. Try again in a moment; if it keeps '
+              + 'happening, narrow the date range. (It said: '+head+')');
+          }
+          throw new Error('The server answered '+r.status+' with something that is not data: '+head);
+        }
+        if(!j||j.ok===false) throw new Error((j&&j.error)||('the API answered '+r.status));
+        return j;
+      });
+    });
+  }
+
   function load(){
     err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
     $('go').disabled=true; $('xl').disabled=true;
@@ -215,9 +240,8 @@
          +'&from='+encodeURIComponent($('from').value.trim())
          +'&to='+encodeURIComponent($('to').value.trim())
          +'&min='+encodeURIComponent($('min').value.trim()||'0');
-    fetch(q).then(function(r){return r.json();}).then(function(j){
+    fetchJson(q).then(function(j){
       $('go').disabled=false;
-      if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
       loaded=j; $('xl').disabled=false; render(sliceFor(j,$('branch').value));
     }).catch(function(e){ $('go').disabled=false; out.innerHTML=''; err.textContent=e.message; });
   }
@@ -268,6 +292,7 @@
     out.capexPartyGroups=brOnly(j.capexPartyGroups);
     out.advanceGroups=brOnly(j.advanceGroups);
     out.nameNearMiss=brOnly(j.nameNearMiss);
+    out.lookbackNote=j.lookbackNote||'';
     var fb=(j.capexFlow&&j.capexFlow.byBranch)||{};
     if(br==='all'){ out.capexFlow=j.capexFlow; }
     else { var o=fb[br]||{additions:0,advanceNet:0,creditorNet:0};
@@ -546,6 +571,11 @@
     // WHAT ACTUALLY LEFT THE BANK. Followed on the payment vouchers, not the
     // capitalisation, because a machine is paid for long before it is capitalised.
     var cr=j.cashRows||[];
+    if(j.lookbackNote){
+      h+='<section><h2>ONE THING WAS NOT READ</h2><div class="body"><div class="note" '
+       + 'style="border-color:#fde68a;background:#fffbeb;color:#92400e">'+esc(j.lookbackNote)
+       + '</div></div></section>';
+    }
     h+='<section><h2>CASH OUT ON CAPEX &mdash; WHAT ACTUALLY LEFT THE BANK</h2><div class="body">'
      + '<div class="cards"><div class="card"><div class="k">Total cash out</div><div class="v">'
      +   esc(rupees(j.cashOut||0))+'</div></div>'

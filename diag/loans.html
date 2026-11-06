@@ -184,6 +184,31 @@
     $('to').value=ymd(now);
   })();
 
+  // A REQUEST THAT FAILS UPSTREAM COMES BACK AS HTML, not JSON -- Render's own gateway
+  // page when the server is asleep, restarting or has timed out. Calling .json() on that
+  // throws "Unexpected token '<', \"<!DOCTYPE\"... is not valid JSON", which tells the
+  // reader nothing about which request failed or why. Read the body as text, say what
+  // actually came back, and name the likely cause.
+  function fetchJson(url){
+    return fetch(url).then(function(r){
+      return r.text().then(function(t){
+        var j=null;
+        try{ j=JSON.parse(t); }catch(e){
+          var head=t.replace(/\s+/g,' ').slice(0,120);
+          if(r.status>=500||/^\s*<!DOCTYPE|^\s*<html/i.test(t)){
+            throw new Error('The server answered '+r.status+' '+(r.statusText||'')+' with a web page '
+              + 'instead of data. Usually it is asleep or still starting after a deploy, or the '
+              + 'request took too long and the gateway gave up. Try again in a moment; if it keeps '
+              + 'happening, narrow the date range. (It said: '+head+')');
+          }
+          throw new Error('The server answered '+r.status+' with something that is not data: '+head);
+        }
+        if(!j||j.ok===false) throw new Error((j&&j.error)||('the API answered '+r.status));
+        return j;
+      });
+    });
+  }
+
   function load(){
     err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
     $('go').disabled=true; $('xl').disabled=true; openRows={};
@@ -191,7 +216,7 @@
          +'&from='+encodeURIComponent($('from').value.trim())
          +'&to='+encodeURIComponent($('to').value.trim())
          +'&bucket='+encodeURIComponent($('bucket').value);
-    fetch(q).then(function(r){return r.json();}).then(function(j){
+    fetchJson(q).then(function(j){
       $('go').disabled=false;
       if(!j||!j.ok) throw new Error((j&&j.error)||'the API did not answer');
       loaded=j; $('xl').disabled=false;

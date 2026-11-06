@@ -2481,13 +2481,29 @@ app.get('/api/capex', async (req, res) => {
     // only ever read the window on screen. The purchase is what identifies the supplier
     // and names the bill, so it is looked for further back than the question asked --
     // three years, which covers a machine on instalments without scanning the decade.
-    const lookFrom = String(Math.max(1900, Number(from.slice(0, 4)) - 3)) + from.slice(4);
-    const earlier = lookFrom < from
-      ? await db.collection('vouchers')
-        .find({ date: { $gte: lookFrom, $lt: from }, ...(branch !== 'all' ? { branch } : {}), ...LIVE_ONLY })
-        .project({ _id: 0, branch: 1, ledgers: 1, party_ledgers: 1, bills: 1 })
-        .toArray()
-      : [];
+    // ONE year, not three, and it must never be able to take the page down with it.
+    // This pass only improves the narrowest of the rules -- a supplier inferred from a
+    // purchase -- while the headline figure does not use it at all. So it is given a
+    // deadline and allowed to fail: a slow or missing lookback costs a little accuracy
+    // in one column and is SAID, where an unbounded one returned an HTML gateway error
+    // and took the whole page with it.
+    const lookFrom = String(Math.max(1900, Number(from.slice(0, 4)) - 1)) + from.slice(4);
+    let earlier = [];
+    let lookbackNote = '';
+    if (lookFrom < from) {
+      try {
+        earlier = await db.collection('vouchers')
+          .find({ date: { $gte: lookFrom, $lt: from }, ...(branch !== 'all' ? { branch } : {}), ...LIVE_ONLY })
+          .project({ _id: 0, branch: 1, ledgers: 1, party_ledgers: 1, bills: 1 })
+          .maxTimeMS(8000)
+          .toArray();
+      } catch (e) {
+        earlier = [];
+        lookbackNote = `The year before ${from} could not be read in time (${e.message}). A machine`
+          + ' bought then and paid for inside this window may be missing from the payment list below;'
+          + ' every other figure on this page is unaffected.';
+      }
+    }
     for (const v of earlier.concat(vs)) {
       const map = assetOf[v.branch] || {};
       const chs = chainOf[v.branch] || {};
@@ -2752,7 +2768,7 @@ app.get('/api/capex', async (req, res) => {
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal,
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
-      unmatchedSupplier, nameNearMiss,
+      unmatchedSupplier, nameNearMiss, lookbackNote,
       capexFlow: (() => {
         const r2 = (n) => Math.round(n * 100) / 100;
         const t = { additions: 0, advanceNet: 0, creditorNet: 0 };

@@ -1,6 +1,32 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.79 (server, diag) — November 2026 — "Unexpected token '<'": the capex query was scanning the whole decade
+
+The capex page started failing with `Unexpected token '<', "<!DOCTYPE "... is not valid
+JSON`. That is a request coming back as a **web page** rather than data — Render's gateway
+answering because the query took too long.
+
+Two changes landing together caused it. The page now always asks for **both companies** so
+the branch selector can filter without reloading; and the supplier pass had just started
+reading **three years** before the window. The vouchers index is `{branch, date}`, so a
+query that names no branch cannot use it — `date` is its second key — and a date-only
+filter scans the entire decade. Four years of that, with every ledger map, was past what
+the gateway would wait for.
+
+Fixed three ways, each worth having on its own:
+
+- **A plain `{date: 1}` index.** Every consolidated query on this database was quietly
+  scanning, not just this one.
+- **The lookback is one year, has a deadline, and is allowed to fail.** It only improves
+  the narrowest of the rules — a supplier inferred from a purchase — and the headline
+  figure does not use it at all. If it cannot be read in time the page still loads and
+  says what was skipped, instead of returning nothing.
+- **The pages explain their own failures.** `r.json()` on an error page throws a message
+  about a `<` character that names neither the request nor the cause. Both diag pages now
+  read the response as text first and report the status, what actually came back, and the
+  usual cause — asleep, restarting after a deploy, or a query that ran long.
+
 ## v2.78 (server, diag) — November 2026 — An advance stops being one when the machine turns up
 
 Payments for presses long since installed still read **"advance — machine not here yet"**.

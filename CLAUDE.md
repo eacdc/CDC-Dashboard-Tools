@@ -455,10 +455,28 @@ us an asset -- and a name match is listed as that one company rather than counte
 "Sundry Creditors". `capexNameNearMiss` names what the refusal list threw out, because a
 wrong word in that list would take a real machine supplier off the page in silence.
 
-**The supplier pass looks THREE YEARS BEHIND the window.** It only ever read the window on
+**A CONSOLIDATED QUERY NAMES NO BRANCH, so `{branch:1, date:1}` cannot serve it** -- `date`
+is its second key, so a date-only filter scans the whole decade. Every page asking for both
+companies was doing that quietly; `/api/capex` began timing out once it ALSO looked years
+behind its window, and a timed-out request comes back as Render's HTML gateway page, which
+in the browser reads `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`. A plain
+`{date: 1}` index exists for exactly this. Any new query that filters on date without a
+branch must assume it is scanning unless that index covers it.
+
+**A fetch that expects JSON must read the body as TEXT first.** `r.json()` on a gateway
+error page throws a parser message that names neither the request nor the cause, so
+`fetchJson` in both diag pages parses the text itself and, on failure, reports the status,
+what actually came back, and what usually causes it. A page that cannot explain its own
+failure costs a round of "what does this mean?" every time.
+
+**The supplier pass looks ONE YEAR BEHIND the window, and may fail without taking the page
+with it.** It only ever read the window on
 screen, so a machine bought in March and paid in April taught it nothing -- the purchase is
-what identifies the supplier and names the bill. A second, narrow query (`lookFrom`,
-projecting only ledgers/bills) covers a machine on instalments without scanning the decade.
+what identifies the supplier and names the bill. A second narrow query (`lookFrom`,
+projecting only ledgers/bills) covers that. It carries `maxTimeMS` and a try/catch: this
+pass only improves the narrowest rule and the headline figure does not use it at all, so a
+slow lookback costs a little accuracy in one column and SAYS so (`lookbackNote`), where an
+unbounded one returned a gateway error and took the whole page down.
 
 **A PARTY IS NOT A CATEGORY, so an evidence-recognised supplier counts only on the BILL the
 asset was bought on.** `Emirates Logistics` is a freight forwarder; its clearing charges on
