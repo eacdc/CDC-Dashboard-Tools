@@ -106,7 +106,7 @@ var e=React.createElement,useState=React.useState,useRef=React.useRef;
 // how the landing badge stayed at v1.1 for months while the other two moved -- and a
 // stale badge is worse than none, because it is read as proof that a deploy did not
 // land. They all read these globals now. Bump the version HERE and nowhere else.
-window.CDC_VER='v1.14';window.CDC_BUILD='06-Nov-2026';
+window.CDC_VER='v1.15';window.CDC_BUILD='06-Nov-2026';
 var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -1182,52 +1182,55 @@ function _bills(v,party,types,net){
 var __ieDebug={byVoucherType:{},skippedByVoucherType:{},sampleHits:[],sampleSkips:[],totalVouchersWithIE:0,totalAmount:0};
 for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi],vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
 if(v.date>todayYMD)continue;// Skip vouchers after as-of date
-if(isSaleVt(vt))for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dInv[p]=dInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'],pls[p])});}
-if(isPurchVt(vt))for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cInv[p]=cInv[p]||[]).push({date:v.date,amt:a,ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'',bills:_bills(v,p,['New Ref'],pls[p])});}
-if(RCV[vt])for(var p in pls){if(!isD(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(dRct[p]=dRct[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'],pls[p])});}
-if(PAY[vt])for(var p in pls){if(!isC(p)||ib[p])continue;var a=Math.abs(pls[p]);if(a<1)continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:a,alloc:_bills(v,p,['Agst Ref'],pls[p])});}
-// EVERY OTHER VOUCHER TYPE -- a journal under any name, a contra, a receipt type
-// somebody renamed, a type invented in Tally last year. A posting to a Sundry Debtor
-// MOVES that debtor's balance, and the posting's own SIGN says which way: Cr (+ve)
-// settles a bill, Dr (-ve) raises one. Creditors, mirrored.
+// ONE RULE FOR EVERY VOUCHER TYPE: the party's OWN posting decides, and its SIGN says
+// which way it moves.
+//     debtor   Cr (+ve) -> settles a bill (dRct)     Dr (-ve) -> raises one (dInv)
+//     creditor Dr (-ve) -> settles a bill (cPay)     Cr (+ve) -> raises one (cInv)
+// The voucher type decides exactly ONE thing: a sale or a purchase opens its bill as a
+// "New Ref", so that is all that is read when one of those RAISES a bill. Every other
+// type may carry either kind of reference, so all of them are read.
 //
-// Nothing here asks what the OTHER leg of the voucher was, and that is the whole
-// point. The code this replaced tried to recognise a settlement by its contra leg --
-// it counted a journal only when a LOAN ledger was debited, or when the other branch
-// was in it -- and an export invoice financed by PCFC is exactly where that fails:
-//   * a packing-credit account normally sits under Bank OD A/c, which the extractor
-//     files under party_ledgers, and the old test only ever looked in ledgers;
-//   * the loan keywords were matched against the GROUP chain, and "PCFC" is in the
-//     LEDGER name, so "Loans (Liability) > Bank OD A/c" matched none of them;
-//   * the test was vt==='Journal' exactly, while this file matches every other type
-//     by prefix, so "Journal - Export" fell straight through;
-//   * and a realisation whose other leg is exchange difference, or a bad debt written
-//     off, is a settlement with no loan and no branch anywhere in it.
-// Each of those left the customer's invoice open for ever at its full value while
-// Tally showed it settled -- 17.45 lakh against Tally's 6.74 on one export customer.
-// Double entry does not need the inference: the party's own leg already says it.
-// Pinned by server/test_proj_fake.js, which holds every one of those shapes.
-if(!isNoPostVt(vt)&&!isSaleVt(vt)&&!isPurchVt(vt)&&!RCV[vt]&&!PAY[vt]&&!isCNVt(vt)&&!isDNVt(vt)){
+// Nothing here asks what the OTHER leg of the voucher was, and nothing takes Math.abs()
+// of a posting. TWO separate wrong figures came from breaking those rules, and both
+// were reported as "the portal disagrees with Tally":
+//
+//   * A JOURNAL was believed only when a LOAN ledger was debited, or when the other
+//     branch appeared in it -- so an export invoice knocked off against PCFC stayed
+//     open for ever at full value: 17.45 lakh against Tally's 6.74. It defeated that
+//     test four ways at once. Packing credit sits under Bank OD A/c, which the
+//     extractor files under party_ledgers, while the test read only `ledgers`. The loan
+//     keywords were matched against the GROUP chain, and getChain omits the ledger's
+//     own name, so "PCFC Loan 0012" matched none of them. The type was tested as
+//     'Journal' exactly, while every other type here is matched by prefix, so
+//     "Journal - Export" fell straight through. And a realisation whose other leg is
+//     exchange difference, or a bad debt written off, has no loan and no branch in it.
+//
+//   * A SALE or PURCHASE posting was read through Math.abs(), so a RETURN booked on a
+//     "Purchase ..." or "Sales ..." voucher type was added as a FRESH INVOICE instead
+//     of reducing the balance -- wrong by TWICE the returned value, once for failing to
+//     subtract it and once for adding it. A paper supplier read 6.29 Cr against Tally's
+//     1.62. Tally's own reports never ask the voucher type which way a posting goes.
+//
+// Pinned by server/test_proj_fake.js. Do not reintroduce either inference.
+if(!isNoPostVt(vt)){
   // A debtor or creditor can land in `ledgers` rather than `party_ledgers` when the
   // group it sat under at sync time is not the one the merged table gives it now, so
   // read both. The two carry different keys, so nothing is counted twice.
-  var __oth={};for(var __ok in pls)__oth[__ok]=pls[__ok];
-  for(var __ol in lds)if(!__oth.hasOwnProperty(__ol))__oth[__ol]=lds[__ol];
-  for(var p in __oth){if(ib[p])continue;var __sg=__oth[p];if(Math.abs(__sg)<1)continue;
-    if(isD(p)){
-      if(__sg>0)(dRct[p]=dRct[p]||[]).push({date:v.date,amt:__sg,alloc:_bills(v,p,null,__sg)});
-      else (dInv[p]=dInv[p]||[]).push({date:v.date,amt:-__sg,ref:__vno(v)||'JV',bills:_bills(v,p,null,__sg)});
-    } else if(isC(p)){
-      if(__sg<0)(cPay[p]=cPay[p]||[]).push({date:v.date,amt:-__sg,alloc:_bills(v,p,null,__sg)});
-      else (cInv[p]=cInv[p]||[]).push({date:v.date,amt:__sg,ref:__vno(v)||'JV',bills:_bills(v,p,null,__sg)});
+  var __pp={};for(var __k1 in pls)__pp[__k1]=pls[__k1];
+  for(var __k2 in lds)if(!__pp.hasOwnProperty(__k2))__pp[__k2]=lds[__k2];
+  var __raiseTypes=(isSaleVt(vt)||isPurchVt(vt))?['New Ref']:null;
+  for(var p in __pp){if(ib[p])continue;var __sg=__pp[p];if(Math.abs(__sg)<1)continue;
+    var __pD=isD(p),__pC=!__pD&&isC(p);
+    if(!__pD&&!__pC)continue;
+    if(__pD?(__sg>0):(__sg<0)){
+      var __st=__pD?dRct:cPay;
+      (__st[p]=__st[p]||[]).push({date:v.date,amt:Math.abs(__sg),alloc:_bills(v,p,null,__sg)});
+    } else {
+      var __rs=__pD?dInv:cInv;
+      (__rs[p]=__rs[p]||[]).push({date:v.date,amt:Math.abs(__sg),ref:__vno(v)||'INV',bills:_bills(v,p,__raiseTypes,__sg)});
     }
   }
 }
-if(isDNVt(vt))for(var p in pls){if(pls[p]>=0||!isC(p)||ib[p])continue;(cPay[p]=cPay[p]||[]).push({date:v.date,amt:Math.abs(pls[p])});}
-// Credit Notes: Dr debtor (positive) = cancels invoice → treat as receipt for debtor
-if(isCNVt(vt)){for(var p in pls){if(pls[p]<=0)continue;if(isD(p)&&!ib[p]){(dRct[p]=dRct[p]||[]).push({date:v.date,amt:pls[p]});}}}
-// Debit Notes on debtors: Cr debtor (negative) = additional charge → treat as invoice
-if(isDNVt(vt)){for(var p in pls){if(pls[p]>=0)continue;if(isD(p)&&!ib[p]){(dInv[p]=dInv[p]||[]).push({date:v.date,amt:Math.abs(pls[p]),ref:v.no||v.voucher_no||v.vchno||v.vch_no||v.voucherNo||v.number||v.refNo||v.ref||'DN'});}}}
 // Indirect expenses: only skip Purchase vouchers (those flow through creditor cycle, double count).
 // For each IE ledger leg, also skip if the LEDGER name matches non-cash patterns (depreciation,
 // provision, amortization, write-off, bad debt). Net result: salary, electricity, bank charges,
@@ -1618,19 +1621,21 @@ function buildPVA(data,vouchers,xd,ib,recBills,payBills2,dOvr,excl,exBills){
 
   // Step 2: Actual receipts during last month
   var actual={};
-  var LK=['secured loans','unsecured loans','pcfc','pcre','wcdl','term loan'];
   function gCS(pn){var p=xd.ledgers[pn];if(!p)return'';var ch=[p],se={};while(p&&xd.groups[p]&&!se[p]){se[p]=1;p=xd.groups[p];if(p)ch.unshift(p);}return ch.join('>').toLowerCase();}
-  function isL(pn){var cs=gCS(pn);for(var k=0;k<LK.length;k++)if(cs.indexOf(LK[k])>=0)return true;return false;}
   function isD(pn){return gCS(pn).indexOf('sundry debtors')>=0;}
-  var RCV={'Bank Receipt':1,'Receipt':1};
+  // The same sign rule the projection uses: a posting that CREDITS a Sundry Debtor is
+  // money that came off what it owed. This was three separate tests -- Receipt types by
+  // exact name, a journal recognised by its loan or branch leg, and credit notes -- so a
+  // PCFC knock-off was collection that NEITHER side of this tab could see, and an export
+  // customer reported a permanent shortfall against a projection that now expects it.
+  // Sale and purchase types are left out: a return is a reduction, not a collection.
   for(var vi=0;vi<vouchers.length;vi++){var v=vouchers[vi];
     if(v.date<lmSYMD||v.date>lmEYMD)continue;
     var vt=v.type,pls=v.party_ledgers||{},lds=v.ledgers||{};
-    if(RCV[vt])for(var p in pls){if(pls[p]>0&&isD(p)&&!ib[p])actual[p]=(actual[p]||0)+pls[p];}
-    if(vt==='Journal'){var hLC=false;for(var l in lds)if(lds[l]<0&&isL(l)){hLC=true;break;}
-      var hBr=false;for(var pp in pls)if(ib[pp]){hBr=true;break;}
-      for(var p in pls){if(!isD(p)||ib[p]||pls[p]<=0)continue;if(hLC||hBr)actual[p]=(actual[p]||0)+pls[p];}}
-    if(isCNVt(vt))for(var p in pls){if(pls[p]>0&&isD(p)&&!ib[p])actual[p]=(actual[p]||0)+pls[p];}
+    if(isNoPostVt(vt)||isSaleVt(vt)||isPurchVt(vt))continue;
+    var __ap={};for(var __a1 in pls)__ap[__a1]=pls[__a1];
+    for(var __a2 in lds)if(!__ap.hasOwnProperty(__a2))__ap[__a2]=lds[__a2];
+    for(var p in __ap){if(ib[p]||!isD(p))continue;if(__ap[p]>0)actual[p]=(actual[p]||0)+__ap[p];}
   }
 
   // Step 3: Combine

@@ -265,5 +265,46 @@ assert(near(bothSides.allDebtorBills['Alpha Exports'].outstanding, 2000000),
   'a receivable bill in both the snapshot and the vouchers is outstanding ONCE as well'
   + ' (got ' + Math.round(bothSides.allDebtorBills['Alpha Exports'].outstanding) + ')');
 
+// ---------------------------------------------------------------------------
+// 10. A RETURN booked on a Sales/Purchase voucher type reduces the balance.
+// ---------------------------------------------------------------------------
+// The sale and purchase paths used to read the posting through Math.abs(), so a return
+// posted on a "Purchase ..." or "Sales ..." type was filed as a FRESH INVOICE: wrong by
+// TWICE the returned value, once for not subtracting it and once for adding it. A paper
+// supplier read 6.29 Cr against Tally's 1.62. Tally's own reports never ask the voucher
+// type which way a posting goes, and neither may this.
+const purchRet = { date: '20260501', type: 'Purchase Return', no: 'PR/1',
+  party_ledgers: { [CREDITOR]: -1000000 }, ledgers: { 'Paper Purchase': 1000000 },
+  bills: [{ ledger: CREDITOR, ref: 'PUR/200', type: 'Agst Ref', amount: -1000000 }] };
+assert(near(owedC([laterPurchase, purchRet], []).amt, 0),
+  'a purchase return on a "Purchase ..." voucher type REDUCES the payable, it does not add an invoice'
+  + ' (got ' + owedC([laterPurchase, purchRet], []).amt + ' on a 10 lakh purchase returned in full)');
+
+const bigPurch = { date: '20260401', type: 'Purchase', no: 'PUR/300',
+  party_ledgers: { [CREDITOR]: 5000000 }, ledgers: { 'Paper Purchase': -5000000 },
+  bills: [{ ledger: CREDITOR, ref: 'PUR/300', type: 'New Ref', amount: 5000000 }] };
+const partRet = { date: '20260501', type: 'Purchase Return', no: 'PR/2',
+  party_ledgers: { [CREDITOR]: -1000000 }, ledgers: { 'Paper Purchase': 1000000 },
+  bills: [{ ledger: CREDITOR, ref: 'PUR/300', type: 'Agst Ref', amount: -1000000 }] };
+assert(near(owedC([bigPurch, partRet], []).amt, 4000000),
+  'and a partial return leaves the rest payable, not the whole invoice plus the return'
+  + ' (got ' + owedC([bigPurch, partRet], []).amt + ', was 6000000 before the sign rule)');
+
+// The same shape on the sales side.
+const saleV = sale('Gamma Trading', 'EXP/700', '20260401', 3000000);
+const saleRet = { date: '20260501', type: 'Sales Return', no: 'SR/1',
+  party_ledgers: { 'Gamma Trading': 500000 }, ledgers: { 'Export Sales': -500000 },
+  bills: [{ ledger: 'Gamma Trading', ref: 'EXP/700', type: 'Agst Ref', amount: 500000 }] };
+assert(near(owed([saleV, saleRet], 'Gamma Trading'), 2500000),
+  'a sales return on a "Sales ..." voucher type reduces what the customer owes'
+  + ' (got ' + owed([saleV, saleRet], 'Gamma Trading') + ')');
+
+// A credit note now carries its allocations too, so it reverses the bill it NAMES.
+const cnNamed = { date: '20260501', type: 'Credit Note', no: 'CN/1',
+  party_ledgers: { 'Gamma Trading': 500000 }, ledgers: { 'Export Sales': -500000 },
+  bills: [{ ledger: 'Gamma Trading', ref: 'EXP/700', type: 'Agst Ref', amount: 500000 }] };
+assert(near(owed([saleV, cnNamed], 'Gamma Trading'), 2500000),
+  'and so does a credit note, which is the same movement under a different voucher type');
+
 console.log(fails ? `\n${fails} FAILED` : '\nall good');
 process.exit(fails ? 1 : 0);
