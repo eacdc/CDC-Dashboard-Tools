@@ -1,6 +1,26 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.77 (server, diag) — November 2026 — What a payment is, and how we knew, are two different columns
+
+*"Paid a machinery supplier"* and *"paid a supplier who sold us an asset"* sat side by side
+in the cash list as though they were two kinds of payment. They are the **same** kind —
+settling a machine supplier's bill — recognised two different ways, and nothing on the page
+said which bucket was which or why it mattered.
+
+They are now two columns. **What kind** is the stage of the purchase the money is at: paid
+straight for an asset, an advance before the machine arrives, or settling a machine
+supplier's bill. **Counted because** is how that account was recognised as capex at all:
+the group Tally files it in, its own name saying machinery, or its having actually sold us
+an asset. Both filter and sort.
+
+So `Pinghu Bindex Machinery Co.,Ltd.` reads *paid a machine supplier's bill* · *by name* —
+same kind of payment as Robotjet, different evidence behind it. And the one restriction
+that matters is now visibly tied to the evidence rather than to a label: an account that
+**exists** for machinery counts in full; an account inferred from a single purchase counts
+only against that purchase's bill, which is what keeps a freight forwarder's ordinary
+invoices out.
+
 ## v2.76 (server, diag) — November 2026 — Capex for the period, computed without guessing at anything
 
 Every rule that tried to decide **which supplier sells machines** has been wrong in both

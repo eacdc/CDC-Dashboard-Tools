@@ -473,6 +473,16 @@ says every rupee through it is capital, so those still count in full. What is dr
 totalled as `unmatchedSupplier` and stated on the page, because money deliberately left out
 of a figure has to be visible. Requires `bills` in the voucher projection.
 
+**WHAT a payment is and HOW we knew are two columns, not one.** The cash list had
+"paid a machinery supplier" and "paid a supplier who sold us an asset" as if they were two
+kinds of payment; they are the SAME kind -- settling a machine supplier's bill -- recognised
+two different ways, and a reader could only wonder which bucket was which. `kind` is now the
+stage of the purchase (`asset` paid straight for one, `advance` before delivery, `creditor`
+settling a bill) and `via` is the evidence (`group` / `name` / `sold`), each its own column
+and its own filter. The bill restriction keys off `via === 'sold'`, not off a kind, because
+that is what it was always really about: an account that EXISTS for machinery counts in
+full, an account inferred from one purchase counts only on that purchase's bill.
+
 **The page states its own rules** in a HOW THIS PAGE DECIDES section. There are now five and
 they are not guessable from the numbers -- the question "what is the logic behind capex
 classification?" is the sign that they belonged on the page rather than only in here.

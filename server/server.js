@@ -2528,8 +2528,16 @@ app.get('/api/capex', async (req, res) => {
       if (Math.abs(bankOut) >= 1) {
         let capexDr = 0; const legs = [];
         for (const k of Object.keys(all)) {
-          const kind = map[k] ? 'asset'
-            : ((pm[k] && pm[k].kind) || (seenSupplier[v.branch + '|' + k] ? 'supplier' : null));
+          // TWO DIFFERENT QUESTIONS, kept in two columns. KIND is what the payment IS --
+          // straight for an asset, an advance before delivery, or settling a machine
+          // supplier's bill. VIA is how this account was recognised as capex at all.
+          // They were conflated, so "paid a machinery supplier" and "paid a supplier who
+          // sold us an asset" read as two kinds of payment when they are one kind
+          // recognised two ways, and a reader could only wonder which bucket was which.
+          let kind = null, via = null;
+          if (map[k]) { kind = 'asset'; via = 'group'; }
+          else if (pm[k]) { kind = pm[k].kind === 'advance' ? 'advance' : 'creditor'; via = pm[k].via; }
+          else if (seenSupplier[v.branch + '|' + k]) { kind = 'creditor'; via = 'sold'; }
           if (!kind) continue;
           let dr = -all[k];                       // Dr positive: money applied to capex
           // SELLING AN ASSET IS NOT NEGATIVE CAPEX SPEND. Proceeds from scrapping old
@@ -2539,11 +2547,12 @@ app.get('/api/capex', async (req, res) => {
           // counts both ways, because money genuinely coming BACK from a machinery
           // supplier is a refund of capex cash and belongs in the figure.
           if (kind === 'asset' && dr <= 0) continue;
-          // A GROUP kept for machinery says every rupee through it is capital. A party
-          // recognised only because it once supplied an asset says no such thing -- so
-          // it counts only to the extent this payment settles a bill the asset was
-          // actually bought on. A payment that names no such bill is an ordinary one.
-          if (kind === 'supplier') {
+          // A GROUP kept for machinery, or a company whose own name says machines, says
+          // every rupee through it is capital. A party recognised ONLY because it once
+          // supplied an asset says no such thing -- so it counts only to the extent this
+          // payment settles a bill the asset was actually bought on. A payment that names
+          // no such bill is an ordinary one.
+          if (via === 'sold') {
             let matched = 0;
             for (const b of (v.bills || [])) {
               if (!b || b.ledger !== k || !b.ref) continue;
@@ -2556,7 +2565,7 @@ app.get('/api/capex', async (req, res) => {
             if (dr < 1) continue;
           }
           capexDr += dr;
-          legs.push({ ledger: k, kind, amt: dr });
+          legs.push({ ledger: k, kind, via, amt: dr });
         }
         // Both sides must point the same way. Money out against a capex debit is a
         // payment; money IN against a capex credit is a refund and is counted negative.
@@ -2570,7 +2579,7 @@ app.get('/api/capex', async (req, res) => {
           cashOut = Math.round((cashOut + attr) * 100) / 100;
           cashRows.push({ date: v.date, branch: v.branch,
             amount: Math.round(attr * 100) / 100,
-            paidFor: lead.ledger, kind: lead.kind,
+            paidFor: lead.ledger, kind: lead.kind, via: lead.via,
             alsoLegs: legs.length - 1,
             no: v.no || '', type: v.type || '',
             party: v.party || ((v.details || {}).partyName) || '',

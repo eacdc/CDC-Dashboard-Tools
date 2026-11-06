@@ -313,7 +313,7 @@ const V = (branch, date, pl, ld, extra) => {
   // A SUPPLIER IS WHOEVER ACTUALLY SOLD US A MACHINE, not whoever is filed under a group
   // that says so. Names and groups run out; the purchase voucher does not.
   const bob = (j.cashRows || []).find((r) => /Bobst/.test(r.paidFor));
-  assert(bob && bob.amount === 4000000 && bob.kind === 'supplier',
+  assert(bob && bob.amount === 4000000 && bob.kind === 'creditor' && bob.via === 'sold',
     'paying a supplier filed under ORDINARY Sundry Creditors is still capex cash when that'
     + ' supplier sold us a fixed asset in this window -- evidence, not vocabulary');
   assert(j.capexPartyGroups.some((x) => x.kind === 'supplier' && /Sundry Creditors/.test(x.group)),
@@ -349,7 +349,7 @@ const V = (branch, date, pl, ld, extra) => {
   // left a binding-machine maker, and every instalment paid to it, off the page entirely
   // -- there is no purchase to learn from while the machine is still being paid for.
   const png = (j.cashRows || []).find((r) => /Pinghu/.test(r.paidFor));
-  assert(png && png.amount === 9000000 && png.kind === 'capital_creditor',
+  assert(png && png.amount === 9000000 && png.kind === 'creditor' && png.via === 'name',
     'an instalment to a machine maker in the ORDINARY creditors group is capex cash, because'
     + ' its own name says machinery and nothing else was ever going to say so');
   assert(j.capexPartyGroups.some((x) => /Pinghu/.test(x.group) && x.via === 'name'),
@@ -364,6 +364,18 @@ const V = (branch, date, pl, ld, extra) => {
     'and both are NAMED as refused, because the refusal is a judgement about words and a'
     + ' wrong one would otherwise take a real machine supplier off the page in silence');
 
+  // WHAT A PAYMENT IS AND HOW WE KNEW ARE TWO DIFFERENT QUESTIONS. Conflating them made
+  // "paid a machinery supplier" and "paid a supplier who sold us an asset" read as two
+  // kinds of payment, when they are the same kind of payment recognised two ways.
+  const sameKind = (j.cashRows || []).filter((r) => /Pinghu|Bobst/.test(r.paidFor));
+  assert(sameKind.length === 2 && sameKind.every((r) => r.kind === 'creditor'),
+    'paying a machine maker and paying a supplier that sold us a machine are the SAME kind'
+    + ' of payment -- settling a machine bill -- whatever told us the account was capex');
+  assert(sameKind.find((r) => /Pinghu/.test(r.paidFor)).via === 'name'
+    && sameKind.find((r) => /Bobst/.test(r.paidFor)).via === 'sold',
+    'and HOW each was recognised is its own column, so a figure resting on a guess about'
+    + ' English is distinguishable from one resting on a purchase voucher');
+
   // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
   // that matters for a cash-flow view.
   const cash = j.cashRows || [];
@@ -377,7 +389,7 @@ const V = (branch, date, pl, ld, extra) => {
     + ' machine, because the capex DEBITS are read rather than the bank total (got '
     + (settle && settle.amount) + ')');
   const direct = cash.find((r) => r.paidFor === 'Computers');
-  assert(direct && direct.amount === 500000 && direct.kind === 'asset',
+  assert(direct && direct.amount === 500000 && direct.kind === 'asset' && direct.via === 'group',
     'and an asset paid for straight out of the bank is cash out on the day it is paid');
   assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000
       + 28200000 + 6926000 + 4000000 + 150000 + 9000000),

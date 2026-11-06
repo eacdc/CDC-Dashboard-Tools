@@ -165,9 +165,22 @@
   var FUND_LABEL={cash:'bank leg on this voucher',credit:'booked to supplier account',
                   loan:'loan leg on this voucher',other:'journal entry',disposal:'disposal',
                   moved:'moved between assets'};
-  var CASH_LABEL={asset:'paid straight for an asset',capital_creditor:'paid a machinery supplier',
-                  advance:'advance against a machine',
-                  supplier:'paid a supplier who sold us an asset'};
+  // WHAT THE PAYMENT IS. Three kinds, and only three -- the stage of the purchase the
+  // money is at, which is the thing a reader is actually asking about.
+  var CASH_LABEL={asset:'paid straight for an asset',
+                  advance:'advance &mdash; machine not here yet',
+                  creditor:'paid a machine supplier&rsquo;s bill',
+                  capital_creditor:'machine supplier',supplier:'machine supplier'};
+  // The ROLE of an account, as plain text with no entities: the matched-accounts table
+  // escapes its cells, so a label carrying an &mdash; printed the entity itself.
+  var ROLE_LABEL={advance:'capital advance',capital_creditor:'machine supplier',
+                  supplier:'machine supplier',creditor:'machine supplier',asset:'the asset itself'};
+  // HOW WE KNEW IT WAS CAPEX. A different question from the one above, and the reason
+  // two rows that are the same kind of payment can rest on very different evidence.
+  var VIA_LABEL={group:'the group it is filed in',
+                 name:'its own name says machinery',
+                 sold:'it sold us an asset &mdash; so only that bill counts'};
+  var VIA_SHORT={group:'by group',name:'by name',sold:'sold us an asset'};
 
   (function(){
     var now=new Date(), y=now.getFullYear();
@@ -535,14 +548,21 @@
      + '<div class="cards"><div class="card"><div class="k">Total cash out</div><div class="v">'
      +   esc(rupees(j.cashOut||0))+'</div></div>'
      + (j.cashByKind||[]).map(function(k){return '<div class="card"><div class="k">'
-         + esc(CASH_LABEL[k.key]||k.key)+'</div><div class="v">'+esc(rupees(k.spend))+'</div></div>';}).join('')
+         + (CASH_LABEL[k.key]||esc(k.key))+'</div><div class="v">'+esc(rupees(k.spend))+'</div></div>';}).join('')
      + '</div>'
      + '<div class="note">This is the money question, and it is a different one from the figures above. '
      + 'An asset is <em>capitalised</em> the day it is ready; it is <em>paid for</em> on its own vouchers, '
      + 'often months earlier. So this section follows the payments: every voucher that credited a bank, cash '
      + 'or OD account, counting the part of it that went to an asset, to a supplier of machinery, or as an '
      + '<strong>advance against a machine that has not arrived yet</strong>. A payment run that settles one '
-     + 'machine and three paper bills contributes only the machine.</div>';
+     + 'machine and three paper bills contributes only the machine.<br><br>'
+     + '<strong>Two columns, two different questions.</strong> <em>What kind</em> is what the payment '
+     + 'IS &mdash; straight for an asset, an advance before the machine arrives, or settling a machine '
+     + 'supplier&rsquo;s bill. <em>Counted because</em> is how that account was recognised as capex at '
+     + 'all: the group Tally files it in, its own name saying machinery, or its having actually sold us '
+     + 'an asset. A supplier recognised the last way is the only one restricted to the specific bill the '
+     + 'asset was bought on &mdash; the other two are accounts that exist for machinery, so everything '
+     + 'through them counts.</div>';
     if(j.unmatchedSupplier>0){
       h+='<div class="note"><strong>'+esc(rupees(j.unmatchedSupplier))+' is deliberately NOT in that '
        + 'figure.</strong> It went to parties that did sell us an asset at some point &mdash; a freight '
@@ -560,8 +580,12 @@
         filters:[
           {key:'kind',all:'every kind of capex payment',
            options:distinct(cr,function(r){return r.kind;})
-             .map(function(v){return {v:v,label:CASH_LABEL[v]||v};}),
+             .map(function(v){return {v:v,label:(CASH_LABEL[v]||v).replace(/&mdash;/g,'-').replace(/&rsquo;/g,"'")};}),
            match:function(r,v){return r.kind===v;}},
+          {key:'via',all:'however it was recognised',
+           options:distinct(cr,function(r){return r.via;})
+             .map(function(v){return {v:v,label:VIA_SHORT[v]||v};}),
+           match:function(r,v){return r.via===v;}},
           {key:'branch',all:'both companies',options:distinct(cr,function(r){return r.branch;})
              .map(function(v){return {v:v,label:v.toUpperCase()};}),
            match:function(r,v){return r.branch===v;}}
@@ -575,7 +599,11 @@
            html:function(r){return esc(r.paidFor)
              +(r.alsoLegs?('<span class="muted"> +'+r.alsoLegs+' more</span>'):'');}},
           {key:'kind',label:'What kind',cls:'muted',style:'font-size:11.5px',val:function(r){return r.kind;},
-           html:function(r){return esc(CASH_LABEL[r.kind]||r.kind);}},
+           html:function(r){return CASH_LABEL[r.kind]||esc(r.kind);}},
+          {key:'via',label:'Counted because',cls:'muted',style:'font-size:11.5px',
+           val:function(r){return r.via||'';},
+           html:function(r){return '<span title="'+esc((VIA_LABEL[r.via]||'').replace(/&[a-z]+;/g,' '))+'">'
+             +esc(VIA_SHORT[r.via]||r.via||'')+'</span>';}},
           {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
            html:function(r){return esc(r.branch);}},
           {key:'no',label:'Voucher',cls:'mono',style:'white-space:nowrap',
@@ -610,10 +638,9 @@
        + '<th>Br</th><th class="num">Ledgers</th></tr></thead><tbody>';
       for(var g2=0;g2<j.capexPartyGroups.length;g2++){var p2=j.capexPartyGroups[g2];
         h+='<tr><td class="muted" style="font-size:11.5px">'+esc(p2.group)+'</td>'
-         + '<td>'+esc(CASH_LABEL[p2.kind]||p2.kind)+'</td>'
+         + '<td>'+esc(ROLE_LABEL[p2.kind]||p2.kind)+'</td>'
          + '<td class="muted" style="font-size:11.5px">'
-         +   (p2.via==='sold'?'it sold us an asset'
-             :(p2.via==='name'?'<strong>its own name</strong> says machinery':'the group it is filed in'))+'</td>'
+         +   (VIA_LABEL[p2.via]||'the group it is filed in')+'</td>'
          + '<td class="mono">'+esc(p2.branch)+'</td>'
          + '<td class="num">'+p2.ledgers+'</td></tr>';}
       h+='</tbody></table></div>';
@@ -852,11 +879,12 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byGroup,'Group')),'By group');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(
       mk(j.byFunding.map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend};}),'Booked against')),'Booked against');
-    var cshR=[['Date','Paid for','What kind','Branch','Voucher type','Voucher no','Cash out','Note from Tally']];
+    var cshR=[['Date','Paid for','What kind','Counted because','Branch','Voucher type','Voucher no','Cash out','Note from Tally']];
     var cR=j.cashRows||[];
     for(var c2=0;c2<cR.length;c2++){var q3=cR[c2];
-      cshR.push([q3.date,q3.paidFor,CASH_LABEL[q3.kind]||q3.kind,q3.branch,q3.type,q3.no,q3.amount,q3.narration]);}
-    cshR.push(['TOTAL','','','','','',j.cashOut||0,'']);
+      var kl=(CASH_LABEL[q3.kind]||q3.kind).replace(/&mdash;/g,'-').replace(/&rsquo;/g,"'");
+      cshR.push([q3.date,q3.paidFor,kl,VIA_SHORT[q3.via]||q3.via||'',q3.branch,q3.type,q3.no,q3.amount,q3.narration]);}
+    cshR.push(['TOTAL','','','','','','',j.cashOut||0,'']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cshR),'Cash out');
     XLSX.writeFile(wb,'CDC_Capex_'+j.branch+'_'+j.from+'_'+j.to+'_'+ymd(new Date())+'.xlsx');
   }
