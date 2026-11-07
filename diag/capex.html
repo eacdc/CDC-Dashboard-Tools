@@ -294,6 +294,11 @@
     out.advanceGroups=brOnly(j.advanceGroups);
     out.nameNearMiss=brOnly(j.nameNearMiss);
     out.neverSold=brOnly(j.neverSold);
+    var aor=((j.advanceOutstanding||{}).rows||[]).filter(function(x){return br==='all'||x.branch===br;});
+    var aot=0; for(var ai=0;ai<aor.length;ai++) aot+=aor[ai].outstanding;
+    out.advanceOutstanding={asOn:(j.advanceOutstanding||{}).asOn||null,
+      total:Math.round(aot*100)/100,rows:aor,missing:(j.advanceOutstanding||{}).missing||0};
+    out.depreciation=(br==='all')?(j.depreciation||0):(((j.depreciationByBranch||{})[br])||0);
     out.lookbackNote=j.lookbackNote||'';
     var fb=(j.capexFlow&&j.capexFlow.byBranch)||{};
     if(br==='all'){ out.capexFlow=j.capexFlow; }
@@ -569,6 +574,39 @@
      + 'rupee. A machine bought on a term loan is in this figure even though no money left your bank: '
      + 'the bank paid the supplier and you owe the bank.</div>'
      + '</div></section>';
+
+    // THE BALANCE-SHEET VIEW. Tally's own closing balances, not a reconstruction.
+    var ao=j.advanceOutstanding||{total:0,rows:[],asOn:null,missing:0};
+    h+='<section><h2>AS THE BALANCE SHEET SHOWS IT</h2><div class="body">'
+     + '<div class="cards">'
+     + '<div class="card"><div class="k">Assets added this period</div><div class="v">'
+     +   esc(rupees(j.additions))+'</div></div>'
+     + '<div class="card" style="border-color:#99f6e4;background:#f0fdfa">'
+     +   '<div class="k">Advances out &mdash; machines not come'+(ao.asOn?(' (at '+esc(fmt8(ao.asOn))+')'):'')
+     +   '</div><div class="v">'+esc(rupees(ao.total))+'</div></div>'
+     + '<div class="card"><div class="k">Depreciation this period</div><div class="v">'
+     +   esc(rupees(j.depreciation||0))+'</div></div>'
+     + '</div>'
+     + '<div class="note">These are the three lines the Tally balance sheet shows, read the same way it '
+     + 'reads them. <strong>Advances out</strong> is the closing balance of the capital-advance accounts '
+     + 'under Current Assets &mdash; Tally&rsquo;s own figure, not rebuilt from payments, so it carries '
+     + 'everything still outstanding and not merely what was paid inside the window. <strong>Assets added'
+     + '</strong> is what reached the fixed-asset ledgers in this period. <strong>Depreciation</strong> is '
+     + 'the charge for the period: it is an expense, never capex, and is shown here only because the three '
+     + 'belong together.'
+     + (ao.missing?(' <em>'+ao.missing+' advance account(s) have no closing balance stored &mdash; run the '
+       + 'pipeline once and they will appear.</em>'):'')
+     + '</div>';
+    if(ao.rows&&ao.rows.length){
+      h+='<div class="scroll"><table><thead><tr><th>Advance account</th><th>Br</th>'
+       + '<th class="num">Still out</th></tr></thead><tbody>';
+      for(var a4=0;a4<ao.rows.length;a4++){var r4=ao.rows[a4];
+        h+='<tr><td>'+esc(r4.ledger)+'</td><td class="mono">'+esc(r4.branch)+'</td>'
+         + '<td class="num">'+money(r4.outstanding)+'</td></tr>';}
+      h+='<tr class="tot"><td colspan="2">Paid for machines that have not come</td>'
+       + '<td class="num">'+money(ao.total)+'</td></tr></tbody></table></div>';
+    }
+    h+='</div></section>';
 
     // WHAT ACTUALLY LEFT THE BANK. Followed on the payment vouchers, not the
     // capitalisation, because a machine is paid for long before it is capitalised.

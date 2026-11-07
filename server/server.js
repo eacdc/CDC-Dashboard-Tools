@@ -2331,6 +2331,8 @@ app.get('/api/capex', async (req, res) => {
     const chainOf = {};                      // br -> { ledger: lowercased chain, for matching }
     const dispOf = {};                       // br -> { ledger: chain as Tally spells it }
     const ibOf = {};                         // br -> { ledger: 1 } for Branch / Divisions
+    const closeOf = {};                      // br -> Tally's own closing balances and their date
+    const depOf = {};                        // br -> { ledger: 1 } for the depreciation charge
     const excluded = new Map();              // group chain -> how many ledgers it holds
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
@@ -2366,6 +2368,18 @@ app.get('/api/capex', async (req, res) => {
       assetOf[br] = map;
       chainOf[br] = chains;
       dispOf[br] = disp;
+      closeOf[br] = { bal: (mb && mb.closing) || null, asOn: (mb && mb.closingAsOn) || null };
+      // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
+      // because that is how a balance sheet reads: what came in, what was written down.
+      const dep = {};
+      for (const ln of Object.keys(xdb.ledgers || {})) {
+        const nm2 = ln.toLowerCase();
+        if (nm2.indexOf('depreciation') < 0 && nm2.indexOf('depriciation') < 0
+          && nm2.indexOf('amortis') < 0 && nm2.indexOf('amortiz') < 0) continue;
+        if ((chains[ln] || '').indexOf('fixed assets') >= 0) continue;   // the contra-asset, not the charge
+        dep[ln] = 1;
+      }
+      depOf[br] = dep;
       // THE OTHER COMPANY IS NOT A SUPPLIER. Tally files the inter-branch account under
       // `Branch / Divisions`, which is how the year-on-year fold already drops it.
       const ibm = {};
@@ -2450,7 +2464,8 @@ app.get('/api/capex', async (req, res) => {
     const rows = [];
     const cashRows = [];
     let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0, unmatchedSupplier = 0;
-    let interBranchTotal = 0;
+    let interBranchTotal = 0, depreciation = 0;
+    const depBr = {};
     // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
     // Every rule that tries to decide which SUPPLIER is a machinery supplier has been
     // wrong in both directions -- a freight forwarder counted in full, a machine maker
@@ -2626,6 +2641,12 @@ app.get('/api/capex', async (req, res) => {
       let interBranch = false;
       for (const k of Object.keys(all)) if (ibm[k] && Math.abs(all[k]) >= 1) { interBranch = true; break; }
 
+      const dpm = depOf[v.branch] || {};
+      for (const k of Object.keys(all)) if (dpm[k]) {
+        depreciation = Math.round((depreciation - all[k]) * 100) / 100;
+        depBr[v.branch] = Math.round(((depBr[v.branch] || 0) - all[k]) * 100) / 100;
+      }
+
       const fl = flowOf(v.branch);
       for (const k of Object.keys(all)) {
         const pp = pm[k];
@@ -2786,6 +2807,29 @@ app.get('/api/capex', async (req, res) => {
       })
       .sort((a, b) => b.paid - a.paid);
 
+    // WHAT THE BALANCE SHEET SHOWS. The advance accounts' own closing balances, straight
+    // out of Tally's masters rather than rebuilt from payments: that is the figure on the
+    // balance sheet under Current Assets, and it answers "what have we paid for machines
+    // that have not come" without depending on any rule here. Rebuilding it from the
+    // payments in a window could only ever see the window; the balance carries everything.
+    const advOut = [];
+    let advOutTotal = 0, advAsOn = null, advMissing = 0;
+    for (const br of branches) {
+      const cl = closeOf[br] || {};
+      const pm2 = partyOf[br] || {};
+      for (const ln of Object.keys(pm2)) {
+        if (pm2[ln].kind !== 'advance') continue;
+        if (!cl.bal || !(ln in cl.bal)) { advMissing++; continue; }
+        // Tally-raw: an asset carries a Dr, which is -ve. Outstanding is the Dr side.
+        const outstanding = Math.round(-(Number(cl.bal[ln]) || 0) * 100) / 100;
+        if (Math.abs(outstanding) < 1) continue;
+        advAsOn = advAsOn || cl.asOn || null;
+        advOutTotal = Math.round((advOutTotal + outstanding) * 100) / 100;
+        advOut.push({ branch: br, ledger: ln, outstanding, asOn: cl.asOn || null });
+      }
+    }
+    advOut.sort((a, b) => b.outstanding - a.outstanding);
+
     cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
     const cashRoll = (keyOf, labelOf) => {
       const m = new Map();
@@ -2806,7 +2850,8 @@ app.get('/api/capex', async (req, res) => {
       scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
-      moved: movedTotal, interBranchTotal,
+      moved: movedTotal, interBranchTotal, depreciation, depreciationByBranch: depBr,
+      advanceOutstanding: { asOn: advAsOn, total: advOutTotal, rows: advOut, missing: advMissing },
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
       unmatchedSupplier, nameNearMiss, lookbackNote, neverSold,
       capexFlow: (() => {

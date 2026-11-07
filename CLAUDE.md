@@ -510,6 +510,20 @@ says every rupee through it is capital, so those still count in full. What is dr
 totalled as `unmatchedSupplier` and stated on the page, because money deliberately left out
 of a figure has to be visible. Requires `bills` in the voucher projection.
 
+**TALLY'S BALANCE SHEET ALREADY ANSWERS TWO OF THESE QUESTIONS, so read its figure rather
+than rebuilding one.** "What have we paid for machines that have not come" is the closing
+balance of the capital-advance accounts under Current Assets, and it is in `masters.closing`
+(Tally-raw, so an asset's Dr is -ve: outstanding is `-closing[ledger]`). Rebuilding it from
+the payments in a window can only ever see the window, while the balance carries everything
+still out -- an advance paid three years ago for a machine still not here is in Tally's
+figure and in no reconstruction of mine. `advanceOutstanding` carries `asOn`, because a
+balance means nothing without the day it stands on, and counts how many advance accounts had
+no closing stored so a half-pulled master cannot read as a small figure. Depreciation for
+the period sits beside it for the same reason -- it is an expense and NEVER capex, but
+additions, advances out and depreciation are the three lines a reader of the balance sheet
+expects together. The depreciation ledgers are matched by name and the contra-asset under
+Fixed Assets is excluded, so the charge is counted once.
+
 **AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP.** The label was written the day
 the money left and never revisited, so payments for presses long since installed still read
 "machine not here yet". Every posting to an advance ledger is collected (`advPost`) and run
