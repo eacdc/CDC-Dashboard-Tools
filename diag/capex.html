@@ -78,6 +78,19 @@
 </style>
 </head>
 <body>
+<!-- Opened on its own (a bookmark, or a link from outside), this page had no way back to
+     anything else: the portal's own top bar exists only inside the portal. Shown only when
+     this page is NOT in the portal's frame, so it never doubles up on that bar. -->
+<div id="backbar" style="display:none;align-items:center;gap:8px;padding:8px 20px;
+     border-bottom:2px solid #e2e8f0;background:#f8fafc;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px">
+  <strong style="letter-spacing:1px;color:#0f172a">CDC FINANCE</strong>
+  <a href="../portal/" style="padding:5px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:700;text-decoration:none">&#8617; Portal</a>
+  <a href="./loans.html" style="padding:5px 12px;border-radius:999px;border:1px solid #e2e8f0;background:#fff;color:#b45309;font-weight:700;text-decoration:none">&#127974; Loans</a>
+  <a href="./capex.html" style="padding:5px 12px;border-radius:999px;border:1px solid #e2e8f0;background:#fff;color:#0f766e;font-weight:700;text-decoration:none">&#127981; Capex</a>
+  <span style="margin-left:auto;color:#94a3b8">P&amp;L, Cashflow, Projection and the rest are in the portal</span>
+</div>
+<script>try{if(window.top===window)document.getElementById('backbar').style.display='flex';}catch(e){
+  document.getElementById('backbar').style.display='flex';}</script>
 <header>
   <h1>Capex &mdash; what was bought, when, for how much</h1>
   <div class="sub">Every posting that <strong>debits a fixed asset</strong> (or capital work in progress), as a dated
@@ -99,8 +112,8 @@
           <option value="ahm">Ahmedabad</option>
         </select>
       </label>
-      <label>from <input id="from" size="10" placeholder="YYYYMMDD"></label>
-      <label>to <input id="to" size="10" placeholder="YYYYMMDD"></label>
+      <label>from <input id="from" type="date"></label>
+      <label>to <input id="to" type="date"></label>
       <label>ignore items under <input id="min" size="9" value="0"></label>
       <button id="go">Load</button>
       <button id="xl" class="ghost" disabled>&#11015; Excel</button>
@@ -140,6 +153,9 @@
   function fmt8(d){if(!d||d.length<8)return d||'';
     var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+  // A date picker speaks YYYY-MM-DD; every API here speaks YYYYMMDD.
+  function d8(v){ return String(v||'').replace(/-/g,''); }
+  function iso(d){ return String(d.getFullYear())+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
   function ymd(d){return String(d.getFullYear())+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
   function crShort(n){
     var a=Math.abs(n||0), s=(n<0?'-':'');
@@ -165,6 +181,15 @@
   var FUND_LABEL={cash:'bank leg on this voucher',credit:'booked to supplier account',
                   loan:'loan leg on this voucher',other:'journal entry',disposal:'disposal',
                   moved:'moved between assets'};
+  // The window to start on: this financial year to date. Lost in an earlier edit, which
+  // left both boxes empty and the first Load answering "from and to are required".
+  (function(){
+    var now=new Date(), y=now.getFullYear();
+    if(now.getMonth()<3) y-=1;                      // before April we are still in last FY
+    $('from').value=String(y)+'-04-01';
+    $('to').value=iso(now);
+  })();
+
   var tip=null;
   function showTip(ev,html){
     if(!tip){tip=document.createElement('div');tip.className='tip';document.body.appendChild(tip);}
@@ -211,8 +236,8 @@
     err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
     $('go').disabled=true; $('xl').disabled=true;
     var q='/api/capex?branch=all'
-         +'&from='+encodeURIComponent($('from').value.trim())
-         +'&to='+encodeURIComponent($('to').value.trim())
+         +'&from='+encodeURIComponent(d8($('from').value))
+         +'&to='+encodeURIComponent(d8($('to').value))
          +'&min='+encodeURIComponent($('min').value.trim()||'0');
     fetchJson(q).then(function(j){
       $('go').disabled=false;
@@ -479,16 +504,13 @@
      + '<div class="card"><div class="k">Assets bought</div><div class="v">'+esc(rupees(j.additions))+'</div></div>'
      + '<div class="card"><div class="k">Assets sold or scrapped</div><div class="v">'+esc(rupees(j.disposals))+'</div></div>'
      + '<div class="card"><div class="k">Net increase in assets</div><div class="v">'+esc(rupees(j.net))+'</div></div>'
-     + (j.moved?('<div class="card"><div class="k">Moved between asset accounts</div><div class="v">'
-         +esc(rupees(j.moved))+'</div></div>'):'')
      + '</div>'
      + '<div class="note">'+esc(j.scaleNote)+' <strong>Buying an asset is not the same as paying for it.</strong> '
      + '<em>Net increase in assets</em> is bought minus sold &mdash; the two are never mixed before that.'
      + ' <strong>None of these figures is cash.</strong> A machine is booked against its supplier, or '
      + 'against an advance paid earlier, so the purchase voucher itself usually touches no bank account at '
      + 'all &mdash; this is what was committed, not a bank statement.'
-     + (j.moved?(' <strong>'+esc(rupees(j.moved))+' moved between asset accounts</strong> and is in neither '
-       + 'figure &mdash; see the last section.'):'')+'</div>'
+     + '</div>'
      + '</div></section>';
 
     h+='<section><h2>WHEN IT WAS SPENT</h2><div class="body">'+monthChart(j.byMonth)
@@ -511,11 +533,11 @@
          'Machines and buildings that reached the books this period. Taken straight from the '
          + 'fixed-asset ledgers, with the voucher and narration behind every one &mdash; nothing is '
          + 'guessed at here.')
-     + fline((cf.advanceNet<0?'&minus; Advances released':'+ Advances paid, machine not here yet'),
+     + fline((cf.advanceNet<0?'&minus; Fall in machine advances this period':'+ Rise in machine advances this period'),
          Math.abs(cf.advanceNet),
          (cf.advanceNet<0
-           ? 'Advances that turned INTO machines this period. Taken off, because that money left in an earlier period and is already counted in the line above.'
-           : 'Money paid against proformas for machines that have not arrived. Gone, but not yet an asset.'))
+           ? 'The advance accounts went DOWN by this much, because advances paid earlier turned into machines. Taken off here, because that money left in an earlier period and the machines it bought are already in the line above.'
+           : 'The advance accounts went UP by this much: new money paid against proformas inside this period. It is the <em>change</em> during the period, not the balance &mdash; the full amount still lying with suppliers is in the next section.'))
      + fline('<strong>Capex this period</strong>', cf.total, '', true)
      + '</tbody></table></div>'
      + '<div class="note" style="margin-top:8px"><strong>Two accounts, no opinions.</strong> What Tally '
@@ -524,6 +546,13 @@
      + 'counted twice: a 3 Cr advance counts the period it is paid, and when the machine arrives the '
      + 'advance falls by the same 3 Cr and cancels it out, leaving only the rest of the machine. Over the '
      + 'life of a machine the lines add up to exactly what it cost.<br><br>'
+     + '<strong>This advance line is not the same figure as <em>advances out</em> below, and both are '
+     + 'right.</strong> This one is the <em>movement</em>: how much the advance accounts rose or fell '
+     + 'between the two dates at the top of this page. The next section shows the <em>balance</em>: '
+     + 'everything still lying with machine suppliers, whenever it was paid. A balance built up over '
+     + 'several years is naturally the larger of the two, and only the movement belongs in a figure for '
+     + 'this period &mdash; adding the whole balance would count every advance again in every window '
+     + 'that followed it.<br><br>'
      + 'This is <em>capex committed</em>, not a bank statement: a machine booked this period but not yet '
      + 'paid for is in it, and so is one bought on a term loan where the bank paid the supplier directly. '
      + 'A payment-by-payment list used to sit below this and has been taken out &mdash; it depended on '
@@ -539,7 +568,7 @@
      + '<div class="card"><div class="k">Assets added this period</div><div class="v">'
      +   esc(rupees(j.additions))+'</div></div>'
      + '<div class="card" style="border-color:#99f6e4;background:#f0fdfa">'
-     +   '<div class="k">Advances out &mdash; machines not come'+(ao.asOn?(' (at '+esc(fmt8(ao.asOn))+')'):'')
+     +   '<div class="k">Advances out in total &mdash; machines not come'+(ao.asOn?(' (at '+esc(fmt8(ao.asOn))+')'):'')
      +   '</div><div class="v">'+esc(rupees(ao.total))+'</div></div>'
      + '<div class="card"><div class="k">Depreciation this period</div><div class="v">'
      +   esc(rupees(j.depreciation||0))+'</div></div>'
@@ -547,7 +576,9 @@
      + '<div class="note">These are the three lines the Tally balance sheet shows, read the same way it '
      + 'reads them. <strong>Advances out</strong> is the closing balance of the capital-advance accounts '
      + 'under Current Assets &mdash; Tally&rsquo;s own figure, not rebuilt from payments, so it carries '
-     + 'everything still outstanding and not merely what was paid inside the window. <strong>Assets added'
+     + 'everything still outstanding whenever it was paid, not merely what was paid inside the window &mdash; '
+     + 'which is why it is normally larger than the advance movement shown in the section above, and why '
+     + 'the two must never be added together. <strong>Assets added'
      + '</strong> is what reached the fixed-asset ledgers in this period. <strong>Depreciation</strong> is '
      + 'the charge for the period: it is an expense, never capex, and is shown here only because the three '
      + 'belong together.'
@@ -703,64 +734,11 @@
        + '<td class="num">'+money(ibT)+'</td><td></td></tr></tbody></table></div></div></section>';
     }
 
-    // Capitalisation: WIP credited, the finished asset debited, same voucher, same money.
-    // Neither a purchase nor a sale, and shown apart so it cannot be mistaken for either.
-    var mv=j.rows.filter(function(r){return r.moved>0;});
-    if(mv.length){
-      h+='<section><h2>MOVED BETWEEN ASSET ACCOUNTS &mdash; NOT BOUGHT, NOT SOLD</h2><div class="body">'
-       + '<div class="note">These entries take money <em>out of</em> one asset account and put the same '
-       + 'money <em>into</em> another on the same voucher. The usual case is <strong>capitalisation</strong>: '
-       + 'a building or a machine is accumulated in a work-in-progress account while it is being built or '
-       + 'installed, and on the day it is finished the whole balance is moved across to the finished asset. '
-       + 'The company owns exactly what it owned the day before, under a different name &mdash; so nothing '
-       + 'was bought and nothing was sold, and none of this is in the figures above. '
-       + 'Counting the legs separately would have shown the factory twice over: once as the WIP leaving, '
-       + 'once as the building arriving.</div>'
-       + tHtml('moved',{
-          placeholder:'search account, group, voucher, note',
-          rows:mv, defSort:'moved', defDir:-1,
-          search:function(r){return [r.asset,r.group,r.no,r.type,r.narration].join(' ');},
-          filters:[
-            {key:'dir',all:'both directions',
-             options:[{v:'out',label:'out of an account'},{v:'in',label:'into an account'}],
-             match:function(r,v){return v==='out'?r.movedOut:!r.movedOut;}},
-            {key:'branch',all:'both companies',options:distinct(mv,function(r){return r.branch;})
-               .map(function(v){return {v:v,label:v.toUpperCase()};}),
-             match:function(r,v){return r.branch===v;}}
-          ],
-          ranges:[{key:'moved',label:'amount',skipZero:true,val:function(r){return r.moved;}}],
-          cols:[
-            {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
-             html:function(r){return esc(fmt8(r.date));}},
-            {key:'asset',label:'Account',val:function(r){return r.asset;},
-             html:function(r){return esc(r.asset);}},
-            {key:'group',label:'Group',cls:'muted',style:'font-size:11.5px',val:function(r){return r.group;},
-             html:function(r){return esc(r.group);}},
-            {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
-             html:function(r){return esc(r.branch);}},
-            {key:'no',label:'Voucher',cls:'mono',style:'white-space:nowrap',
-             val:function(r){return r.type+' '+r.no;},html:vcell},
-            {key:'moved',label:'Out of',num:true,cls:'num',
-             val:function(r){return r.movedOut?r.moved:0;},
-             html:function(r){return r.movedOut?money(r.moved):'<span style="color:#cbd5e1">&mdash;</span>';}},
-            {key:'movedIn',label:'Into',num:true,cls:'num',
-             val:function(r){return r.movedOut?0:r.moved;},
-             html:function(r){return r.movedOut?'<span style="color:#cbd5e1">&mdash;</span>':money(r.moved);}},
-            {key:'narration',label:'Note from Tally',cls:'muted',style:'font-size:11.5px',
-             val:function(r){return r.narration||'';},html:function(r){return esc(r.narration||'');}}
-          ],
-          foot:function(rs){
-            var o2=0,n2=0;
-            for(var k3=0;k3<rs.length;k3++){ if(rs[k3].movedOut)o2+=rs[k3].moved; else n2+=rs[k3].moved; }
-            var lab=(rs.length===mv.length)
-              ? 'Total &mdash; and the two sides match, which is why it nets to nothing'
-              : 'Total of these '+rs.length+' row(s) &mdash; filtered, so the two sides need not match';
-            return '<tr class="tot"><td colspan="5">'+lab+'</td><td class="num">'+money(o2)
-              +'</td><td class="num">'+money(n2)+'</td><td></td></tr>';
-          }
-        })
-       + '</div></section>';
-    }
+    // The capitalisation rows themselves are no longer listed: a reader asked what
+    // "moved between asset accounts" meant and the honest answer is that it is bookkeeping,
+    // not a purchase. The ARITHMETIC stays -- min(assetDr, assetCr) is still held out of
+    // both figures, which is what stopped the Ahmedabad factory appearing twice -- and
+    // rule 3 on this page still says so. Only the table has gone.
 
       h+='<section><h2>HOW THIS PAGE DECIDES</h2><div class="body">'
      + '<div class="note" style="line-height:1.75">'
@@ -798,7 +776,7 @@
     if(!shown||!window.XLSX) return;
     var j=shown, wb=XLSX.utils.book_new();     // what is on screen, not the whole fetch
     var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from','Funded by',
-               'Bought for','Sold off','Moved between asset accounts','Note from Tally']];
+               'Bought for','Sold off','Transferred between our own asset accounts','Note from Tally']];
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
       rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,FUND_LABEL[r.funded]||r.funded,
                  r.spend,r.disposal,r.moved||0,r.narration]); }
