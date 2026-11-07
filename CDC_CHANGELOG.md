@@ -1,6 +1,22 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.84 (diag) — November 2026 — Three sections off the capex page; the two guards move into the workbook
+
+**HOW THE ENTRY WAS BOOKED is gone, and so is the funding label on every row.** It read the
+purchase voucher's other legs and reported which ledger the entry was made against. That is
+not how the machine was paid for, whatever the column was called, and three attempts at
+wording it ("on supplier credit", "financed by a loan", "booked to supplier account") were
+each read as a claim about money. `funded` is still on the API; nothing on the page reads it.
+
+**ADVANCE ACCOUNTS NOT COUNTED and NOT COUNTED: NAMED LIKE AN ASSET GROUP are no longer
+sections.** Both were guards, and one of them earned its place — it is how *Advance for
+Machinery* was found missing from the advances figure. But 146 staff advances and the advance
+income tax drowned the single row that mattered, and the group list said the same thing about
+*Sundry Creditor - Fixed Assets* every time. They are now **two sheets in the Excel
+download** — *Advances not counted* and *Groups not counted* — and rule 5 on the page says
+where to find them. Nothing has stopped being checked; it has stopped taking up the screen.
+
 ## v2.83 (portal, diag) — November 2026 — Two advance figures that are not the same figure, and a way back
 
 **The 1.01 Cr and the 7.70 Cr were both right and read as though one of them was wrong.**

@@ -368,8 +368,13 @@ settled it months later (read as a second purchase, "financed by a loan" because
 the other leg), and the exchange difference on it. What decides it is where the chain ROOTS
 -- `assetDepth()` walks it top-down and a payables/receivables/bank group reached BEFORE any
 fixed-asset group disqualifies everything beneath it. What is dropped this way is returned
-as `excludedGroups` and shown on the page, because a real asset group filed somewhere
-unusual must be visible, not discovered a year later.
+as `excludedGroups`, because a real asset group filed somewhere unusual must be visible, not
+discovered a year later. It is no longer a SECTION -- one row saying the same thing about
+`Sundry Creditor - Fixed Assets` every time -- but it is a sheet in the workbook, and rule 5
+on the page says so. The same goes for the advance accounts the rule did not pick up
+(`advanceGroups`, the guard that found `Advance for Machinery` missing): 146 staff advances
+and the advance income tax drowned the one row that mattered. Keep both FINDABLE; do not
+quietly stop returning them.
 
 **Money moving between two asset accounts is neither a purchase nor a sale.** When the
 Ahmedabad factory was finished, one journal credited every work-in-progress ledger it had
@@ -405,10 +410,12 @@ closing, that gap demonstrably changed nothing, so the note now says so rather t
 a question the page has already answered.
 
 **An addition is not cash out.** It is recorded the day the asset is capitalised; the
-money may have left earlier, later, or over five years. So each row carries `funded`
-(cash / credit / loan / other), read off that voucher's OTHER legs, with a loan leg
-winning over a creditor leg because a machine on term finance usually touches both. The
-header shows additions and paid-from-bank separately for that reason. Disposals are
+money may have left earlier, later, or over five years. Each row still carries `funded`
+(cash / credit / loan / other) on the API, read off that voucher's OTHER legs, but NOTHING ON
+THE PAGE READS IT any more. It described which ledger the entry was made against and was
+twice taken for a statement about how the machine was paid for -- which it never was, whatever
+the label said ("booked to supplier account" was the third attempt at wording it). Do not put
+it back on the page without a reading of it that is true. Disposals are
 reported apart and NEVER netted into spend. `npm run test:capex`.
 
 **THE PAGE ASKS NO QUESTION IT CANNOT ANSWER FROM TALLY'S OWN ACCOUNTS.** It once chased
