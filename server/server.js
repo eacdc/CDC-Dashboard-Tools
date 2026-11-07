@@ -2251,57 +2251,32 @@ const MENTIONS_ASSET = ['fixed assets', 'capital work', 'capital-work'];
 // NEVER MATCH BARE 'capital': `Capital Account` is the ROOT of every group chain in
 // Tally, so it would make every ledger in the company a capex account.
 // 'machinary' is in the list because that is how the Ahmedabad masters spell it.
+// WHICH ACCOUNTS HOLD ADVANCES AGAINST MACHINES. That is the only party question this
+// endpoint still asks, and it is answered from the GROUP Tally files the account in --
+// Ahmedabad's sit under `Advance for Machinery` -- or from a ledger name that says both
+// "advance" and a machine. Never match bare `capital`: `Capital Account` is the ROOT of
+// every chain in Tally and would make the whole company capex. `machinary` is in the
+// list because that is how the Ahmedabad masters spell it.
+//
+// EVERY OTHER RULE THAT GUESSED AT SUPPLIERS IS GONE. Deciding which creditor sells
+// machines was wrong in both directions for weeks -- a freight forwarder counted in
+// full, a machine maker left out, a wire supplier counted for years -- and the
+// payment-by-payment list built on it dropped two 3.7 Cr Manugraph payments while
+// keeping the 10 L ones. A list that is confidently incomplete is worse than no list.
+// What is left needs no opinion: what Tally capitalised, and what Tally says is still
+// sitting in the advance accounts.
 const CAPITAL_KW = ['fixed asset', 'capital goods', 'capital work', 'capital expenditure',
   'capital advance', 'capex', 'machinery', 'machinary', 'machine', 'equipment',
   'plant &', 'plant and'];
 function hasCapitalWord(hay) { for (const k of CAPITAL_KW) if (hay.indexOf(k) >= 0) return true; return false; }
-// A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME, and a company that sells what goes
-// INTO machines usually does too. `Pinghu Bindex Machinery Co.,Ltd.` is a binding-machine
-// maker filed under ordinary Sundry Creditors, so refusing to read creditor names left it
-// -- and every rupee paid to it -- off the page entirely. Reading names is therefore
-// allowed, with the consumables and services that would otherwise ride in on the same
-// words refused by hand. Every name matched this way is LISTED on the page as having been
-// recognised by its name, because this is the one rule here that guesses from English.
-const NOT_CAPITAL_NAME = ['spare', 'parts', ' oil', 'lubric', 'grease', 'repair', 'service',
-  'hire', 'rental', ' rent', 'consumable', 'chemical', 'insurance', 'freight', 'transport',
-  'clearing', 'courier', 'erection charges', 'amc'];
-function looksConsumable(nm) {
-  for (const k of NOT_CAPITAL_NAME) if (nm.indexOf(k) >= 0) return true;
-  return false;
-}
-// Returns { kind, via } or null. `via` is how it was recognised, and is shown on the page:
-// a group kept for machinery is a fact about the books, a name is an inference about
-// English, and the reader is entitled to know which one a figure rests on.
-function capexPartyKind(name, chain) {
+function capexAdvanceKind(name, chain) {
   const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
-  const nm = String(name || '').toLowerCase();
-  // AN ADVANCE is recognised from the group OR the ledger name, because it is filed both
-  // ways -- a group called `Advance for Machinery` holding one ledger per supplier, or a
-  // ledger called `Advance - Heidelberg Machine` under a general advances group. Requiring
-  // the exact words `plant & machinery` missed `Advance for Machinery` entirely, and with
-  // it every rupee paid against a proforma -- which on these books is nearly all of the
-  // capex cash, since the machine is paid for long before any creditor is touched.
-  if ((cs + '>' + nm).indexOf('advance') >= 0 && hasCapitalWord(cs + '>' + nm)) {
+  const hay = cs + '>' + String(name || '').toLowerCase();
+  if (hay.indexOf('advance') >= 0 && hasCapitalWord(hay)) {
     return { kind: 'advance', via: hasCapitalWord(cs) ? 'group' : 'name' };
-  }
-  if (cs.indexOf('sundry creditors') >= 0 || cs.indexOf('current liabilities') >= 0) {
-    if (hasCapitalWord(cs)) return { kind: 'capital_creditor', via: 'group' };
-    if (hasCapitalWord(nm) && !looksConsumable(nm)) return { kind: 'capital_creditor', via: 'name' };
   }
   return null;
 }
-// A creditor whose name says machinery but which is refused as a consumable or a service.
-// Named on the page rather than dropped: the refusal list is a judgement about words, and
-// a wrong one would otherwise take a real machine supplier off the page in silence.
-function capexNameNearMiss(name, chain) {
-  if (capexPartyKind(name, chain)) return false;
-  const cs = (Array.isArray(chain) ? chain.join('>') : String(chain || '')).toLowerCase();
-  if (cs.indexOf('sundry creditors') < 0 && cs.indexOf('current liabilities') < 0) return false;
-  const nm = String(name || '').toLowerCase();
-  return hasCapitalWord(nm) && looksConsumable(nm);
-}
-const BANKISH = ['bank accounts', 'cash-in-hand', 'cash in hand', 'bank od', 'bank occ'];
-function isBankish(cs) { for (const b of BANKISH) if (String(cs || '').indexOf(b) >= 0) return true; return false; }
 
 
 function assetDepth(chain) {
@@ -2391,29 +2366,17 @@ app.get('/api/capex', async (req, res) => {
     // the supplier -- and both of those touch a CREDITOR or an ADVANCE account, never the
     // fixed asset. So the money is followed through those instead, and the two kinds are
     // kept apart because an advance is cash gone on a machine that has not arrived.
-    const partyOf = {};                      // br -> { ledger: {kind, group} }
-    const partyGroups = new Map();
+    const partyOf = {};                      // br -> { ledger: {kind, via, group} }
     const advGroups = new Map();             // every group saying "advance", counted or not
-    const nameNearMiss = [];                 // reads like machinery, refused as a consumable
     for (const br of branches) {
       const chains = chainOf[br] || {};
       const amap = assetOf[br] || {};
       const pm = {};
       for (const ln of Object.keys(chains)) {
         if (amap[ln]) continue;              // the asset itself, already counted
-        if (capexNameNearMiss(ln, chains[ln])) {
-          nameNearMiss.push({ branch: br, ledger: ln, group: (dispOf[br] || {})[ln] || chains[ln] });
-          continue;
-        }
-        const r = capexPartyKind(ln, chains[ln]);
+        const r = capexAdvanceKind(ln, chains[ln]);
         if (!r) continue;
         pm[ln] = { kind: r.kind, via: r.via, group: (dispOf[br] || {})[ln] || chains[ln] };
-        // A GROUP kept for machinery is one row however many ledgers are in it. A NAME is
-        // a guess about one company, so it is listed as that company rather than hidden
-        // inside a count of "Sundry Creditors".
-        const label = r.via === 'name' ? ln : pm[ln].group;
-        const k = br + '|' + r.kind + '|' + r.via + '|' + label;
-        partyGroups.set(k, (partyGroups.get(k) || 0) + 1);
       }
       partyOf[br] = pm;
       for (const ln of Object.keys(chains)) {
@@ -2426,10 +2389,6 @@ app.get('/api/capex', async (req, res) => {
         advGroups.set(k, e);
       }
     }
-    const capexPartyGroups = [...partyGroups.entries()]
-      .map(([k, n]) => { const p = k.split('|');
-        return { branch: p[0], kind: p[1], via: p[2], group: p.slice(3).join('|'), ledgers: n }; })
-      .sort((a, b) => b.ledgers - a.ledgers);
     const advanceGroups = [...advGroups.values()].sort((a, b) => b.ledgers - a.ledgers);
 
     const excludedGroups = [...excluded.entries()]
@@ -2450,7 +2409,7 @@ app.get('/api/capex', async (req, res) => {
       // has and every row comes back blank -- which is exactly how it shipped.
       .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
         'details.narration': 1, 'details.reference': 1, 'details.partyName': 1,
-        ledgers: 1, party_ledgers: 1, bills: 1 })
+        ledgers: 1, party_ledgers: 1 })
       .toArray();
 
     // How the voucher paid for it, from its own other legs. Named rather than guessed:
@@ -2462,8 +2421,7 @@ app.get('/api/capex', async (req, res) => {
       { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
     ];
     const rows = [];
-    const cashRows = [];
-    let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0, unmatchedSupplier = 0;
+    let additions = 0, disposals = 0, movedTotal = 0;
     let interBranchTotal = 0, depreciation = 0;
     const depBr = {};
     // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
@@ -2482,14 +2440,7 @@ app.get('/api/capex', async (req, res) => {
     // 2, so 2. Over the three periods 3 + 0 + 2 = the 5 Cr machine, each rupee landing in
     // the period it actually left.
     const flowBr = {};
-    const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0, creditorNet: 0 }));
-    // AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP. The label was written at the
-    // moment the money left and never revisited, so payments for machines long since
-    // installed still read "machine not here yet". Every posting to an advance ledger is
-    // collected here -- the payments that put money in, and the credits that take it out
-    // when the machine is capitalised or set against the supplier -- and run FIFO below,
-    // so each payment is told whether its own money is still sitting there.
-    const advPost = {};
+    const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0 }));
     // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
     // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
     // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
@@ -2497,140 +2448,18 @@ app.get('/api/capex', async (req, res) => {
     // purchases themselves are read first, and every ledger CREDITED on a voucher that
     // DEBITS a fixed asset is taken as a supplier of that asset -- evidence rather than
     // vocabulary. Collected here, used by the cash pass below.
-    const seenSupplier = {};                 // 'br|ledger' -> group, learned from purchases
-    const capexBill = {};                    // 'br|ledger|ref' -> true, the bills assets were bought on
-    // A MACHINE BOUGHT IN MARCH AND PAID IN APRIL taught this pass nothing, because it
-    // only ever read the window on screen. The purchase is what identifies the supplier
-    // and names the bill, so it is looked for further back than the question asked --
-    // three years, which covers a machine on instalments without scanning the decade.
-    // ONE year, not three, and it must never be able to take the page down with it.
-    // This pass only improves the narrowest of the rules -- a supplier inferred from a
-    // purchase -- while the headline figure does not use it at all. So it is given a
-    // deadline and allowed to fail: a slow or missing lookback costs a little accuracy
-    // in one column and is SAID, where an unbounded one returned an HTML gateway error
-    // and took the whole page with it.
-    const lookFrom = String(Math.max(1900, Number(from.slice(0, 4)) - 1)) + from.slice(4);
-    let earlier = [];
-    let lookbackNote = '';
-    if (lookFrom < from) {
-      try {
-        earlier = await db.collection('vouchers')
-          .find({ date: { $gte: lookFrom, $lt: from }, ...(branch !== 'all' ? { branch } : {}), ...LIVE_ONLY })
-          .project({ _id: 0, branch: 1, ledgers: 1, party_ledgers: 1, bills: 1 })
-          .maxTimeMS(8000)
-          .toArray();
-      } catch (e) {
-        earlier = [];
-        lookbackNote = `The year before ${from} could not be read in time (${e.message}). A machine`
-          + ' bought then and paid for inside this window may be missing from the payment list below;'
-          + ' every other figure on this page is unaffected.';
-      }
-    }
-    for (const v of earlier.concat(vs)) {
-      const map = assetOf[v.branch] || {};
-      const chs = chainOf[v.branch] || {};
-      const dsp = dispOf[v.branch] || {};
-      const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
-      const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
-      if (!hits.length) continue;
-      let assetDrHere = 0;
-      for (const ln of hits) if (all[ln] < 0) assetDrHere -= all[ln];
-      if (assetDrHere < 1) continue;         // nothing was bought on this voucher
-      for (const k of Object.keys(all)) {
-        if (map[k] || all[k] <= 0) continue;              // not a credit, or the asset itself
-        const c = chs[k] || '';
-        // Only a payable. A loan or a bank leg funds the purchase; it does not supply it.
-        if (c.indexOf('sundry creditors') < 0 && c.indexOf('sundry debtors') < 0) continue;
-        seenSupplier[v.branch + '|' + k] = dsp[k] || c;
-      }
-      // AND THE BILL ITSELF. "This party once sold us an asset" is far too wide a net:
-      // a freight forwarder whose charges on ONE import were capitalised into a machine
-      // then had its every routine invoice counted as capex -- ten ordinary payments,
-      // 1.76 Cr, none of it capital. A bill reference is exact where a party is not, so
-      // the refs raised on this voucher are remembered and only payments against THOSE
-      // count later.
-      for (const b of (v.bills || [])) {
-        if (!b || !b.ref || map[b.ledger]) continue;
-        if (!seenSupplier[v.branch + '|' + b.ledger]) continue;
-        capexBill[v.branch + '|' + b.ledger + '|' + String(b.ref).trim().toLowerCase()] = true;
-      }
-    }
-
     for (const v of vs) {
       const map = assetOf[v.branch] || {};
       const pm = partyOf[v.branch] || {};
       const chs = chainOf[v.branch] || {};
       const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
 
-      // ---- WHAT LEFT THE BANK BECAUSE OF CAPEX --------------------------------
-      // Followed on the PAYMENT voucher, not the capitalisation. A bank or cash ledger
-      // CREDITED is money going out (Tally +ve); the capex share of it is whatever that
-      // voucher DEBITED to an asset, to a machinery creditor, or to a capital advance.
-      // Taking the debits rather than the bank total is what makes a payment run that
-      // settles one machine and three paper bills contribute only the machine.
-      let bankOut = 0;
-      for (const k of Object.keys(all)) if (isBankish(chs[k])) bankOut += all[k];
-      if (Math.abs(bankOut) >= 1) {
-        let capexDr = 0; const legs = [];
-        for (const k of Object.keys(all)) {
-          // TWO DIFFERENT QUESTIONS, kept in two columns. KIND is what the payment IS --
-          // straight for an asset, an advance before delivery, or settling a machine
-          // supplier's bill. VIA is how this account was recognised as capex at all.
-          // They were conflated, so "paid a machinery supplier" and "paid a supplier who
-          // sold us an asset" read as two kinds of payment when they are one kind
-          // recognised two ways, and a reader could only wonder which bucket was which.
-          let kind = null, via = null;
-          if (map[k]) { kind = 'asset'; via = 'group'; }
-          else if (pm[k]) { kind = pm[k].kind === 'advance' ? 'advance' : 'creditor'; via = pm[k].via; }
-          else if (seenSupplier[v.branch + '|' + k]) { kind = 'creditor'; via = 'sold'; }
-          if (!kind) continue;
-          let dr = -all[k];                       // Dr positive: money applied to capex
-          // SELLING AN ASSET IS NOT NEGATIVE CAPEX SPEND. Proceeds from scrapping old
-          // laptops came back here as cash out of -3,00,000, quietly netting a disposal
-          // into the spend figure -- the one thing this page refuses to do anywhere
-          // else. An asset leg counts only when it is DEBITED. A creditor or an advance
-          // counts both ways, because money genuinely coming BACK from a machinery
-          // supplier is a refund of capex cash and belongs in the figure.
-          if (kind === 'asset' && dr <= 0) continue;
-          // A GROUP kept for machinery, or a company whose own name says machines, says
-          // every rupee through it is capital. A party recognised ONLY because it once
-          // supplied an asset says no such thing -- so it counts only to the extent this
-          // payment settles a bill the asset was actually bought on. A payment that names
-          // no such bill is an ordinary one.
-          if (via === 'sold') {
-            let matched = 0;
-            for (const b of (v.bills || [])) {
-              if (!b || b.ledger !== k || !b.ref) continue;
-              if (!capexBill[v.branch + '|' + k + '|' + String(b.ref).trim().toLowerCase()]) continue;
-              matched += Math.abs(Number(b.amount) || 0);
-            }
-            const skipped = Math.max(0, dr - matched);
-            if (skipped >= 1) unmatchedSupplier = Math.round((unmatchedSupplier + skipped) * 100) / 100;
-            dr = Math.min(dr, matched);
-            if (dr < 1) continue;
-          }
-          capexDr += dr;
-          legs.push({ ledger: k, kind, via, amt: dr });
-        }
-        // Both sides must point the same way. Money out against a capex debit is a
-        // payment; money IN against a capex credit is a refund and is counted negative.
-        // Anything else (a receipt that happens to touch an asset) is not capex cash.
-        let attr = 0;
-        if (capexDr > 0 && bankOut > 0) attr = Math.min(capexDr, bankOut);
-        else if (capexDr < 0 && bankOut < 0) attr = Math.max(capexDr, bankOut);
-        if (Math.abs(attr) >= 1) {
-          legs.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
-          const lead = legs[0];
-          cashOut = Math.round((cashOut + attr) * 100) / 100;
-          cashRows.push({ date: v.date, branch: v.branch,
-            amount: Math.round(attr * 100) / 100,
-            paidFor: lead.ledger, kind: lead.kind, via: lead.via,
-            alsoLegs: legs.length - 1,
-            no: v.no || '', type: v.type || '',
-            party: v.party || ((v.details || {}).partyName) || '',
-            narration: (((v.details || {}).narration) || '').slice(0, 300),
-            guid: v.guid || '' });
-        }
+      // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
+      // because that is how a balance sheet reads: what came in, what was written down.
+      const dpm = depOf[v.branch] || {};
+      for (const k of Object.keys(all)) if (dpm[k]) {
+        depreciation = Math.round((depreciation - all[k]) * 100) / 100;
+        depBr[v.branch] = Math.round(((depBr[v.branch] || 0) - all[k]) * 100) / 100;
       }
 
       // A MACHINE MOVED FROM ONE OF OUR COMPANIES TO THE OTHER IS NOT A PURCHASE. The
@@ -2641,25 +2470,14 @@ app.get('/api/capex', async (req, res) => {
       let interBranch = false;
       for (const k of Object.keys(all)) if (ibm[k] && Math.abs(all[k]) >= 1) { interBranch = true; break; }
 
-      const dpm = depOf[v.branch] || {};
-      for (const k of Object.keys(all)) if (dpm[k]) {
-        depreciation = Math.round((depreciation - all[k]) * 100) / 100;
-        depBr[v.branch] = Math.round(((depBr[v.branch] || 0) - all[k]) * 100) / 100;
-      }
-
+      // The movement in the capital-advance accounts, which is half of the period figure.
       const fl = flowOf(v.branch);
       for (const k of Object.keys(all)) {
         const pp = pm[k];
         if (!pp) continue;
         // An advance is an ASSET, Dr-positive: paying one makes it rise, adjusting it
-        // against a delivered machine makes it fall. A creditor is a LIABILITY,
-        // Cr-positive: booking a machine against it makes it rise, paying makes it fall.
-        if (pp.kind === 'advance') {
-          fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
-          const ak = v.branch + '|' + k;
-          (advPost[ak] || (advPost[ak] = [])).push({ date: v.date, dr: -all[k], guid: v.guid || '' });
-        }
-        else if (pp.kind === 'capital_creditor') fl.creditorNet = Math.round((fl.creditorNet + all[k]) * 100) / 100;
+        // against a delivered machine makes it fall.
+        if (pp.kind === 'advance') fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
       }
 
       const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
@@ -2744,69 +2562,6 @@ app.get('/api/capex', async (req, res) => {
     const byFunding = roll((r) => r.funded, (r) => r.funded)
       .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
 
-    const supG = new Map();
-    for (const k of Object.keys(seenSupplier)) {
-      const br = k.slice(0, k.indexOf('|'));
-      const kk = br + '|supplier|' + seenSupplier[k];
-      supG.set(kk, (supG.get(kk) || 0) + 1);
-    }
-    for (const [k, n] of supG.entries()) {
-      const p = k.split('|');
-      const g = p.slice(2).join('|');
-      if (capexPartyGroups.some((x) => x.branch === p[0] && x.group === g)) continue;
-      capexPartyGroups.push({ branch: p[0], kind: 'supplier', via: 'sold', group: g, ledgers: n });
-    }
-    capexPartyGroups.sort((a, b) => b.ledgers - a.ledgers);
-
-    // FIFO, in date order: a credit to an advance account releases the OLDEST money
-    // still sitting in it, which is how an advance account actually works -- the first
-    // proforma paid is the first machine to arrive. What is left at the end of the window
-    // is money still out against machines that have not come.
-    const advStillOpen = new Set();
-    for (const ak of Object.keys(advPost)) {
-      const list = advPost[ak].slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-      const queue = [];
-      for (const pst of list) {
-        if (pst.dr > 0) { queue.push({ guid: pst.guid, left: pst.dr }); continue; }
-        let rel = -pst.dr;
-        while (rel > 0.5 && queue.length) {
-          const head = queue[0];
-          const take = Math.min(head.left, rel);
-          head.left -= take; rel -= take;
-          if (head.left <= 0.5) queue.shift();
-        }
-      }
-      // Part-released counts as still open: the machine is not here until all of it is.
-      for (const q of queue) if (q.guid) advStillOpen.add(ak + '|' + q.guid);
-    }
-    for (const r of cashRows) {
-      if (r.kind !== 'advance') continue;
-      if (!advStillOpen.has(r.branch + '|' + r.paidFor + '|' + r.guid)) r.kind = 'advance_done';
-    }
-
-    // A MACHINE SUPPLIER THAT HAS NEVER SOLD US A MACHINE. The group and name rules take
-    // a party's word for it and then count every rupee through the account, so a monthly
-    // consumable filed in a machinery creditors group rides along for years -- stitching
-    // wire at 5-15 L a month came to over a crore of "capex" without one asset to show
-    // for it. Nothing is silently dropped, because Tally's own group is a better
-    // authority than a guess here; but a supplier that has sold us nothing over the whole
-    // period looked at is named, with what was paid, so it can be settled either way.
-    const paidTo = {};
-    for (const r of cashRows) {
-      if (r.via === 'sold') continue;        // recognised BY a sale, so the question is moot
-      const k = r.branch + '|' + r.paidFor;
-      paidTo[k] = Math.round(((paidTo[k] || 0) + r.amount) * 100) / 100;
-    }
-    const neverSold = Object.keys(paidTo)
-      .filter((k) => !seenSupplier[k] && paidTo[k] > 0)
-      .map((k) => {
-        const br = k.slice(0, k.indexOf('|')), ln = k.slice(k.indexOf('|') + 1);
-        const pp = (partyOf[br] || {})[ln] || {};
-        return { branch: br, ledger: ln, paid: paidTo[k], kind: pp.kind || '', via: pp.via || '',
-          group: pp.group || '' };
-      })
-      .sort((a, b) => b.paid - a.paid);
-
     // WHAT THE BALANCE SHEET SHOWS. The advance accounts' own closing balances, straight
     // out of Tally's masters rather than rebuilt from payments: that is the figure on the
     // balance sheet under Current Assets, and it answers "what have we paid for machines
@@ -2830,21 +2585,6 @@ app.get('/api/capex', async (req, res) => {
     }
     advOut.sort((a, b) => b.outstanding - a.outstanding);
 
-    cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
-    const cashRoll = (keyOf, labelOf) => {
-      const m = new Map();
-      for (const r of cashRows) {
-        const k = keyOf(r);
-        const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
-        e.spend = Math.round((e.spend + r.amount) * 100) / 100;
-        e.count++;
-        m.set(k, e);
-      }
-      return [...m.values()];
-    };
-    const cashByMonth = cashRoll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
-      .sort((a, b) => (a.key < b.key ? -1 : 1));
-    const cashByKind = cashRoll((r) => r.kind, (r) => r.kind).sort((a, b) => b.spend - a.spend);
 
     res.json({ ok: true, branch, from, to, min,
       scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
@@ -2852,20 +2592,17 @@ app.get('/api/capex', async (req, res) => {
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
       moved: movedTotal, interBranchTotal, depreciation, depreciationByBranch: depBr,
       advanceOutstanding: { asOn: advAsOn, total: advOutTotal, rows: advOut, missing: advMissing },
-      cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
-      unmatchedSupplier, nameNearMiss, lookbackNote, neverSold,
+      advanceGroups,
       capexFlow: (() => {
         const r2 = (n) => Math.round(n * 100) / 100;
-        const t = { additions: 0, advanceNet: 0, creditorNet: 0 };
+        const t = { additions: 0, advanceNet: 0 };
         for (const br of Object.keys(flowBr)) {
           t.additions += flowBr[br].additions;
           t.advanceNet += flowBr[br].advanceNet;
-          t.creditorNet += flowBr[br].creditorNet;
-          flowBr[br].total = r2(flowBr[br].additions + flowBr[br].advanceNet - flowBr[br].creditorNet);
+          flowBr[br].total = r2(flowBr[br].additions + flowBr[br].advanceNet);
         }
         return { additions: r2(t.additions), advanceNet: r2(t.advanceNet),
-          creditorNet: r2(t.creditorNet),
-          total: r2(t.additions + t.advanceNet - t.creditorNet), byBranch: flowBr };
+          total: r2(t.additions + t.advanceNet), byBranch: flowBr };
       })(),
       byGroup, byMonth, byAsset, byFunding, excludedGroups });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
