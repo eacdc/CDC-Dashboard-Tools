@@ -61,6 +61,7 @@
   .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
   .tot-row td{font-weight:700;background:#f7f8fa;}
   .words{padding:6px 8px;font-size:11.5px;}
+  .narr{white-space:pre-wrap;}
   .words .lbl{display:inline;text-transform:none;color:var(--soft);}
   .decl{font-size:10.5px;color:#333;line-height:1.4;}
   .sign{height:64px;text-align:right;font-size:11.5px;}
@@ -241,6 +242,15 @@ function computeTax(v, items){
 }
 
 /* ---------------------------------------------------------------- renderers */
+// The narration is the only part of a voucher that says WHY. It lives at details.narration
+// (never at the top level -- see CLAUDE.md), and was printed on journals but not on
+// invoices, which left the commoner half of the vouchers unexplainable on paper.
+function narrBlock(d, mt){
+  var t = d && d.narration ? String(d.narration).trim() : '';
+  if(!t) return '';
+  return '<div class="b words narr '+(mt||'mt6')+'"><span class="lbl">Narration</span> '+esc(t)+'</div>';
+}
+
 function renderInvoice(v){
   var co=COMPANY[v.branch]||COMPANY.ahm, d=v.details||{};
   var items=effectiveItems(v), t=computeTax(v, items);
@@ -376,7 +386,7 @@ function renderInvoice(v){
   return '<div class="doc-title">Tax Invoice</div>'+einv+
     companyHeader(sellerCo)+ meta+
     '<div class="flex mt6" style="gap:6px">'+consignee+buyer+'</div>'+ pos+
-    itemsTbl+ amtWords+ hsnTbl+ footer;
+    itemsTbl+ amtWords+ hsnTbl+ narrBlock(d,'mt6')+ footer;
 }
 
 function renderJournal(v){
@@ -400,8 +410,7 @@ function renderJournal(v){
     body+
     '<tr class="tot-row"><td class="right">Total</td><td class="num">'+fmtIN(totDr)+'</td><td class="num">'+fmtIN(totCr)+'</td></tr>'+
     '</tbody></table>';
-  var narr = d.narration ? '<div class="b words mt8"><span class="lbl">On Account of / Narration</span> '+
-      esc(d.narration)+'</div>' : '';
+  var narr = narrBlock(d, 'mt8');
   var head='<table class="meta mt6"><tr>'+
     '<td><span class="lbl">Voucher Type</span><span class="val">'+esc(v.type||'Journal')+'</span></td>'+
     '<td><span class="lbl">No.</span><span class="val">'+esc(v.no||'-')+'</span></td>'+
@@ -470,13 +479,27 @@ function downloadPdf(){
     var pw=pdf.internal.pageSize.getWidth();    // 210
     var ph=pdf.internal.pageSize.getHeight();   // 297
     var fullImgH=canvas.height*pw/canvas.width; // mm if whole canvas scaled to page width
-    if(fullImgH<=ph){
-      pdf.addImage(canvas,"PNG",0,0,pw,fullImgH,undefined,"FAST");
+    // The sheet is styled to a full A4, so a short voucher measures 297.0mm EXACTLY and
+    // floating point decides whether it fits. It usually did not, and every journal came
+    // out as two pages, the second holding a hair-line of nothing. A sliver this thin
+    // carries no content on any voucher, so it is squeezed onto the page it belongs to.
+    var EPS=0.75;                               // mm
+    // And a voucher that overflows by a BAND rather than a page -- a narration that pushed
+    // the declaration over the edge, say -- prints better shrunk a few per cent than split,
+    // with a second sheet carrying nothing but the signature box. Up to 8%: beyond that the
+    // type starts to suffer and an honest second page is the better answer.
+    var FIT=1.08;
+    if(fullImgH<=ph+EPS){
+      pdf.addImage(canvas,"PNG",0,0,pw,Math.min(fullImgH,ph),undefined,"FAST");
+    }else if(fullImgH<=ph*FIT){
+      var k=ph/fullImgH, w2=pw*k;
+      pdf.addImage(canvas,"PNG",(pw-w2)/2,0,w2,ph,undefined,"FAST");
     }else{
       var pageHpx=Math.floor(canvas.width*ph/pw); // canvas px that fill one A4 page
       var y=0,first=true;
       while(y<canvas.height){
         var sliceH=Math.min(pageHpx,canvas.height-y);
+        if(!first && sliceH*pw/canvas.width<EPS) break;   // trailing hair-line: a blank page
         var pc=document.createElement("canvas");
         pc.width=canvas.width; pc.height=sliceH;
         pc.getContext("2d").drawImage(canvas,0,y,canvas.width,sliceH,0,0,canvas.width,sliceH);
@@ -518,6 +541,9 @@ var DEMO_INVOICE={
     irn:"639b10aa578562519e6f438e0618cf5ddf5744ff103c3e8c8db4357b440986b7",
     ackNo:"182623151669776", ackDate:"20260715",
     reference:"J04201", termsOfPayment:"60 Days",
+    // The sample carries a narration so the demo shows the block -- a layout nobody can
+    // see is a layout that quietly stops being rendered.
+    narration:"Catalogue printing for the Winter 2026 exhibition, against Qtn. 6645.2.\nDelivered to the Hungerford Street gallery.",
     deliveryNote:"2678", deliveryNoteDate:"20260715", ewayBillNo:"811714091343", vehicleNo:"WB03D6774",
     buyersOrderNo:"Qtn. No. 6645.2, Qtn. No. 6720.1", buyersOrderDate:"20260713, 20260713",
     destination:"Kolkata-700017", placeOfSupply:"West Bengal",
