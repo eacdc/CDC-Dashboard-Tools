@@ -378,8 +378,10 @@ been accumulated in and debited the finished asset. Read leg by leg that was a 4
 the building and every machine in it appearing twice, once as the WIP leaving and once as
 the asset arriving. So a voucher's asset legs are weighed against each other first:
 `min(assetDr, assetCr)` is a TRANSFER, only the excess on either side is a real purchase or
-disposal, and the transfer is reported in its own section (`moved`, `movedOut`) rather than
-in either figure. A capitalisation journal nets to exactly nothing, which is the right
+disposal, and the transfer (`moved`, `movedOut`) is in neither figure. Those rows are no
+longer LISTED on the page -- "moved between asset accounts" is bookkeeping, not a business
+figure, and a reader asked what it meant -- but the arithmetic and the API field stay, and
+rule 3 on the page still states it. Do not remove the netting with the section. A capitalisation journal nets to exactly nothing, which is the right
 answer -- the company owns what it already owned, under a different name.
 
 **THE OTHER COMPANY IS NOT A SUPPLIER.** A ledger whose chain holds `Branch / Divisions`
@@ -451,7 +453,13 @@ balance of the capital-advance accounts under Current Assets, and it is in `mast
 the payments in a window can only ever see the window, while the balance carries everything
 still out -- an advance paid three years ago for a machine still not here is in Tally's
 figure and in no reconstruction of mine. `advanceOutstanding` carries `asOn`, because a
-balance means nothing without the day it stands on, and counts how many advance accounts had
+balance means nothing without the day it stands on. **It is NOT `capexFlow.advanceNet`, and
+the page must never let the two be read as one figure.** `advanceNet` is the MOVEMENT in the
+window (what belongs in a period's capex); `advanceOutstanding.total` is the BALANCE however
+long ago it was paid, so it is normally the larger and is usually the one a reader recognises
+from Tally. Reading them as the same figure is what made 1.01 Cr look like a wrong answer to
+a question 7.70 Cr had already answered; adding them would count every advance again in every
+window after the one it was paid in, and counts how many advance accounts had
 no closing stored so a half-pulled master cannot read as a small figure. Depreciation for
 the period sits beside it for the same reason -- it is an expense and NEVER capex, but
 additions, advances out and depreciation are the three lines a reader of the balance sheet

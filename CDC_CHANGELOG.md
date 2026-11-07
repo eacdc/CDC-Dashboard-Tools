@@ -1,6 +1,39 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.83 (portal, diag) — November 2026 — Two advance figures that are not the same figure, and a way back
+
+**The 1.01 Cr and the 7.70 Cr were both right and read as though one of them was wrong.**
+The 7.70 Cr is the *balance*: everything still lying with machine suppliers for machines
+that have not come, whenever it was paid, taken straight from Tally's own closing balances.
+The 1.01 Cr is the *movement*: how much that balance rose between the two dates at the top
+of the page. Only the movement belongs in a figure for one period — adding the whole balance
+would count every advance again in every window after it. The two lines now say *balance* and
+*rise this period* in the labels themselves, a paragraph states plainly that they are
+different measures and must never be added, and the balance-sheet card reads **advances out
+in total**.
+
+**"Moved between asset accounts" is gone from the page.** The question it answered — why a
+capitalisation journal is neither a purchase nor a sale — is bookkeeping, not a business
+figure, and the section made readers stop and work out what it meant. The arithmetic behind
+it stays exactly as it was: `min(assetDr, assetCr)` is still held out of both additions and
+disposals, which is what stopped the Ahmedabad factory appearing twice (once as the
+work-in-progress leaving, once as the building arriving), and rule 3 on the page still says
+so.
+
+**Dates are pickers, not typed YYYYMMDD boxes**, on both the capex and the loan pages. The
+capex page had also lost its default dates in an earlier edit and opened with both boxes
+empty, so the first *Load* answered "from and to are required"; it starts on this financial
+year to date again. The loan page's period heading now reads *01-Apr-2026* rather than
+*20260401*.
+
+**There is a way back out of Loans and Capex.** Opened from the landing page they used to be
+plain links *out* of the portal, and the portal's own top bar only exists once data is
+loaded — so there was nothing to click to get back to P&L, Cashflow or Projection. They now
+open inside the portal, with a bar carrying **Back to portal** and the other page. Opened on
+their own (a bookmark, or a link from outside) both pages show the same bar at the top, and
+hide it when they are inside the portal so it cannot double up.
+
 ## v2.82 (server, diag) — November 2026 — The payment list is gone: what Tally capitalised, and what Tally says is still out
 
 Two ₹3.7 Cr Manugraph payments for the Web Offset machines were missing from the

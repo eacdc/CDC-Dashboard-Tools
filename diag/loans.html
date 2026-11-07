@@ -101,6 +101,19 @@
 </style>
 </head>
 <body>
+<!-- Opened on its own (a bookmark, or a link from outside), this page had no way back to
+     anything else: the portal's own top bar exists only inside the portal. Shown only when
+     this page is NOT in the portal's frame, so it never doubles up on that bar. -->
+<div id="backbar" style="display:none;align-items:center;gap:8px;padding:8px 20px;
+     border-bottom:2px solid #e2e8f0;background:#f8fafc;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px">
+  <strong style="letter-spacing:1px;color:#0f172a">CDC FINANCE</strong>
+  <a href="../portal/" style="padding:5px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:700;text-decoration:none">&#8617; Portal</a>
+  <a href="./loans.html" style="padding:5px 12px;border-radius:999px;border:1px solid #e2e8f0;background:#fff;color:#b45309;font-weight:700;text-decoration:none">&#127974; Loans</a>
+  <a href="./capex.html" style="padding:5px 12px;border-radius:999px;border:1px solid #e2e8f0;background:#fff;color:#0f766e;font-weight:700;text-decoration:none">&#127981; Capex</a>
+  <span style="margin-left:auto;color:#94a3b8">P&amp;L, Cashflow, Projection and the rest are in the portal</span>
+</div>
+<script>try{if(window.top===window)document.getElementById('backbar').style.display='flex';}catch(e){
+  document.getElementById('backbar').style.display='flex';}</script>
 <header>
   <h1>Loan movement &mdash; opening, drawn, repaid, closing</h1>
   <div class="sub">Every borrowing account in both companies: secured and unsecured loans, OD and CC, packing credit,
@@ -120,8 +133,8 @@
           <option value="ahm">Ahmedabad</option>
         </select>
       </label>
-      <label>from <input id="from" size="10" placeholder="YYYYMMDD"></label>
-      <label>to <input id="to" size="10" placeholder="YYYYMMDD"></label>
+      <label>from <input id="from" type="date"></label>
+      <label>to <input id="to" type="date"></label>
       <label>per
         <select id="bucket">
           <option value="month">Month</option>
@@ -174,14 +187,17 @@
   function fmt8(d){if(!d||d.length<8)return d||'';
     var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return d.slice(6,8)+'-'+M[parseInt(d.slice(4,6),10)-1]+'-'+d.slice(0,4);}
+  // A date picker speaks YYYY-MM-DD; every API here speaks YYYYMMDD.
+  function d8(v){ return String(v||'').replace(/-/g,''); }
+  function iso(d){ return String(d.getFullYear())+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
   function ymd(d){return String(d.getFullYear())+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
 
   // Default window: this financial year to date. April starts the year here.
   (function(){
     var now=new Date(), y=now.getFullYear();
     if(now.getMonth()<3) y-=1;
-    $('from').value=String(y)+'0401';
-    $('to').value=ymd(now);
+    $('from').value=String(y)+'-04-01';
+    $('to').value=iso(now);
   })();
 
   // A REQUEST THAT FAILS UPSTREAM COMES BACK AS HTML, not JSON -- Render's own gateway
@@ -213,8 +229,8 @@
     err.textContent=''; out.innerHTML='<div class="note">Reading&hellip;</div>';
     $('go').disabled=true; $('xl').disabled=true; openRows={};
     var q='/api/loans?branch='+encodeURIComponent($('branch').value)
-         +'&from='+encodeURIComponent($('from').value.trim())
-         +'&to='+encodeURIComponent($('to').value.trim())
+         +'&from='+encodeURIComponent(d8($('from').value))
+         +'&to='+encodeURIComponent(d8($('to').value))
          +'&bucket='+encodeURIComponent($('bucket').value);
     fetchJson(q).then(function(j){
       $('go').disabled=false;
@@ -575,7 +591,7 @@
     }
 
     var t=j.total, net=t.closing-t.opening, gross=$('gross').checked;
-    h+='<section><h2>'+esc(j.from)+' TO '+esc(j.to)+' &middot; '+esc(String(j.bucket).toUpperCase())
+    h+='<section><h2>'+esc(fmt8(j.from))+' TO '+esc(fmt8(j.to))+' &middot; '+esc(String(j.bucket).toUpperCase())
      + ' &middot; '+j.loans.length+' ACCOUNT(S)</h2><div class="body">'
      + '<div class="cards">'
      + '<div class="card"><div class="k">Opening</div><div class="v">'+esc(rupees(t.opening))+'</div></div>'
