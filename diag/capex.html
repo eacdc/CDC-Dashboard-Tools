@@ -38,11 +38,6 @@
   .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-family:ui-monospace,monospace}
   .card .v{font-size:19px;font-weight:700;font-family:ui-monospace,monospace;margin-top:3px}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-  .pill{display:inline-block;font-size:10px;font-family:ui-monospace,monospace;padding:1px 6px;
-        border-radius:999px;margin-left:5px}
-  .f-cash{background:#dcfce7;color:#14532d} .f-credit{background:#fef3c7;color:#78350f}
-  .f-loan{background:#e0e7ff;color:#3730a3} .f-other{background:#f1f5f9;color:#475569}
-  .f-disposal{background:#fee2e2;color:#991b1b}
   a{color:var(--teal)}
   .zero{color:#cbd5e1}
   /* Chart tokens: light only, like every page here. One series, so no legend box --
@@ -94,9 +89,9 @@
 <header>
   <h1>Capex &mdash; what was bought, when, for how much</h1>
   <div class="sub">Every posting that <strong>debits a fixed asset</strong> (or capital work in progress), as a dated
-    list: the item, the amount, the voucher it is on, and who it was bought from. Each row also says <strong>how it was
-    funded</strong>, because an addition is recorded the day the asset is capitalised and the money may have left
-    earlier, later, or over five years &mdash; a press bought on term finance is not crores of cash gone in a day.
+    list: the item, the amount, the voucher it is on, and who it was bought from. <strong>None of it is cash</strong>:
+    an addition is recorded the day the asset is capitalised, and the money may have left earlier, later, or over five
+    years &mdash; a press bought on term finance is not crores of cash gone in a day.
     Assets sold or scrapped are shown apart and never netted against what was bought. Beside it, straight
     from Tally&rsquo;s own balances: what is still <strong>paid out in advance</strong> against machines that
     have not arrived, and the <strong>depreciation</strong> for the period
@@ -174,13 +169,10 @@
     var step=(r<=1?1:r<=2?2:r<=5?5:10)*p;
     return {step:step, top:step*4};
   }
-  // These describe HOW THE ENTRY WAS BOOKED, not when the money moved. "Booked to supplier"
-  // does NOT mean the machine was taken on credit -- it is simply the account the purchase
-  // was entered against, and the payment for it usually went out earlier, against a
-  // proforma. It says nothing at all about when the money moved.
-  var FUND_LABEL={cash:'bank leg on this voucher',credit:'booked to supplier account',
-                  loan:'loan leg on this voucher',other:'journal entry',disposal:'disposal',
-                  moved:'moved between assets'};
+  // There was a funding label here -- "booked to supplier account", "journal entry" -- read
+  // off the purchase voucher's other legs. It described which ledger the entry was made
+  // against and nothing more, and was twice taken for a statement about how the machine was
+  // paid for, which it never was. `funded` is still on the API; nothing on the page reads it.
   // The window to start on: this financial year to date. Lost in an earlier edit, which
   // left both boxes empty and the first Load answering "from and to are required".
   (function(){
@@ -276,8 +268,6 @@
       .sort(function(a,b){return b.spend-a.spend;});
     out.byAsset=roll(rows,function(r){return r.branch+'|'+r.asset;},function(r){return r.asset;})
       .sort(function(a,b){return b.spend-a.spend;});
-    out.byFunding=roll(rows,function(r){return r.funded;},function(r){return r.funded;})
-      .filter(function(x){return x.key!=='moved';}).sort(function(a,b){return b.spend-a.spend;});
     out.byMonth=roll(rows,function(r){return r.date.slice(0,6);},byMonthLab)
       .sort(function(a,b){return a.key<b.key?-1:1;});
     var brOnly=function(a){return (a||[]).filter(function(x){return br==='all'||x.branch===br;});};
@@ -496,7 +486,6 @@
 
     out.innerHTML=h; return;
     }
-    var cash=0; for(var f=0;f<j.byFunding.length;f++) if(j.byFunding[f].key==='cash') cash=j.byFunding[f].spend;
 
     h+='<section><h2>'+esc(fmt8(j.from))+' TO '+esc(fmt8(j.to))+' &middot; '
      + j.rows.filter(function(r){return r.spend>0;}).length+' PURCHASE(S)</h2><div class="body">'
@@ -596,55 +585,20 @@
     }
     h+='</div></section>';
 
-    // The advance accounts the rule did NOT pick up. This guards the one figure the page
-    // now leans on, so it stays even though everything else in this block has gone.
-    var ag=(j.advanceGroups||[]).filter(function(x){return !x.counted;});
-    if(ag.length){
-      h+='<section><h2>ADVANCE ACCOUNTS NOT COUNTED</h2><div class="body">'
-       + '<div class="note">These hold advances, but nothing about them says machinery, so their balances '
-       + 'are not in the <em>advances out</em> figure above. If one of them is for a machine, say so and it '
-       + 'will be counted &mdash; that is exactly how <em>Advance for Machinery</em> came to be missing '
-       + 'once before.</div>'
-       + '<div class="scroll"><table><thead><tr><th>Group or ledger</th><th>Br</th><th class="num">Ledgers</th>'
-       + '</tr></thead><tbody>';
-      for(var g3=0;g3<ag.length;g3++){
-        h+='<tr><td class="muted" style="font-size:11.5px">'+esc(ag[g3].group)+'</td>'
-         + '<td class="mono">'+esc(ag[g3].branch)+'</td><td class="num">'+ag[g3].ledgers+'</td></tr>';}
-      h+='</tbody></table></div></div></section>';
-    }
-
-    h+='<section><h2>HOW THE ENTRY WAS BOOKED &mdash; NOT WHEN IT WAS PAID</h2><div class="body">'
-     + '<div class="note"><strong>This says nothing about whether you had paid.</strong> It is simply which '
-     + 'account the purchase was entered against. <em>Booked to supplier account</em> is the normal way a machine '
-     + 'is entered in Tally &mdash; it does not mean the machine was taken on credit, and the payment for it has '
-     + 'usually already gone out against a proforma. For the money, read the cash section above.</div>'
-     + rollTable(j.byFunding.filter(function(x){return x.key!=='disposal';})
-                 .map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend,disposal:0};}),
-                 'Booked against', j.additions)
-     + '</div></section>';
+    // The advance accounts the rule did NOT pick up are no longer listed here: 146 staff
+    // advances and the advance income tax drowned the one row that mattered. The list is
+    // still built, and is a sheet in the workbook -- it is how "Advance for Machinery" was
+    // found missing once, so it must stay FINDABLE even though it is not worth the space.
 
     h+='<section><h2>WHAT WAS BOUGHT</h2><div class="body">'+rollTable(j.byAsset,'Asset',j.additions)+'</div></section>';
-    // A group whose NAME says fixed assets but which sits under a liability is a payables
-    // group. Reported rather than dropped in silence: if a real asset group is filed
-    // somewhere unusual, it has to be visible here and not found a year from now.
-    if(j.excludedGroups&&j.excludedGroups.length){
-      var eg='<div class="note">These groups mention fixed assets in their name but sit under a '
-       + 'liability or a receivable, so the ledgers in them are <strong>payables, not assets</strong>, '
-       + 'and nothing in them is counted above. A supplier of machinery filed under '
-       + '<em>Sundry Creditor - Fixed Assets</em> is the usual case. If one of these really is an '
-       + 'asset group, say so and it will be counted.</div>'
-       + '<div class="scroll"><table><thead><tr><th>Group</th><th>Br</th><th class="num">Ledgers</th>'
-       + '</tr></thead><tbody>';
-      for(var x=0;x<j.excludedGroups.length;x++){var g=j.excludedGroups[x];
-        eg+='<tr><td class="muted" style="font-size:11.5px">'+esc(g.group)+'</td>'
-          + '<td class="mono">'+esc(g.branch)+'</td><td class="num">'+g.ledgers+'</td></tr>';}
-      h+='<section><h2>NOT COUNTED: NAMED LIKE AN ASSET GROUP, FILED AS A LIABILITY</h2>'
-       + '<div class="body">'+eg+'</tbody></table></div></div></section>';
-    }
+    // The groups named like an asset group but filed under a liability are not listed here
+    // either -- one row, every time, saying the same thing about Sundry Creditor - Fixed
+    // Assets. Also a sheet in the workbook, for the day a real asset group is filed oddly.
+
     h+='<section><h2>BY ASSET GROUP</h2><div class="body">'+rollTable(j.byGroup,'Group',j.additions)+'</div></section>';
 
-    // A row that is purely a transfer belongs in its own section below, not in the list of
-    // what was bought and sold -- it would otherwise sit there with a dash in both columns.
+    // A row that is purely a transfer between two asset accounts is in neither figure, so it
+    // is kept out of this list too -- it would otherwise sit here with a dash in both columns.
     var entry=j.rows.filter(function(r){return (r.spend>0||r.disposal>0)&&!r.interBranch;});
     var ibRows=j.rows.filter(function(r){return r.interBranch&&(r.spend>0||r.disposal>0);});
     var noNarr=0;
@@ -666,10 +620,6 @@
            {key:'group',all:'every asset group',options:distinct(entry,function(r){return r.group;})
               .map(function(v){return {v:v,label:v};}),
             match:function(r,v){return r.group===v;}},
-           {key:'funded',all:'booked against anything',
-            options:distinct(entry,function(r){return r.funded;})
-              .map(function(v){return {v:v,label:FUND_LABEL[v]||v};}),
-            match:function(r,v){return r.funded===v;}},
            {key:'branch',all:'both companies',options:distinct(entry,function(r){return r.branch;})
               .map(function(v){return {v:v,label:v.toUpperCase()};}),
             match:function(r,v){return r.branch===v;}},
@@ -682,8 +632,7 @@
            {key:'date',label:'Date',cls:'mono',val:function(r){return r.date;},
             html:function(r){return esc(fmt8(r.date));}},
            {key:'asset',label:'Item',val:function(r){return r.asset;},
-            html:function(r){return esc(r.asset)+'<span class="pill f-'+esc(r.funded)+'">'
-              +esc(FUND_LABEL[r.funded]||r.funded)+'</span>';}},
+            html:function(r){return esc(r.asset);}},
            {key:'group',label:'Group',cls:'muted',style:'font-size:11.5px',val:function(r){return r.group;},
             html:function(r){return esc(r.group);}},
            {key:'branch',label:'Br',cls:'mono',val:function(r){return r.branch;},
@@ -757,7 +706,11 @@
      + 'advances. Two balances Tally keeps, and the change in them rather than the payments &mdash; which '
      + 'is what stops an advance and the machine it buys being counted twice.<br>'
      + '<strong>5. What is still out.</strong> The closing balance of the capital-advance accounts, as '
-     + 'Tally states it on its own date: money paid for machines that have not come.<br>'
+     + 'Tally states it on its own date: money paid for machines that have not come. An advance account '
+     + 'counts only if its name or group says machinery, so staff advances and advance income tax are '
+     + 'left out &mdash; <strong>the Excel download lists every advance account not counted, and every '
+     + 'group named like an asset group but filed as a liability</strong>, for the day one of them turns '
+     + 'out to belong here.<br>'
      + '<strong>6. What this is not.</strong> It is not a bank statement. A machine booked but unpaid is '
      + 'in these figures; a cheque written against an old bill is not. Nothing here tries to work out '
      + 'which supplier sells machines, because that judgement was wrong often enough to mislead.'
@@ -775,20 +728,30 @@
   function excel(){
     if(!shown||!window.XLSX) return;
     var j=shown, wb=XLSX.utils.book_new();     // what is on screen, not the whole fetch
-    var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from','Funded by',
+    var rows=[['Date','Item','Group','Branch','Voucher type','Voucher no','Bought from',
                'Bought for','Sold off','Transferred between our own asset accounts','Note from Tally']];
     for(var i=0;i<j.rows.length;i++){ var r=j.rows[i];
-      rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,FUND_LABEL[r.funded]||r.funded,
+      rows.push([r.date,r.asset,r.group,r.branch,r.type,r.no,r.party,
                  r.spend,r.disposal,r.moved||0,r.narration]); }
-    rows.push(['TOTAL','','','','','','','',j.additions,j.disposals,j.moved||0,'']);
+    rows.push(['TOTAL','','','','','','',j.additions,j.disposals,j.moved||0,'']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Every entry');
     var mk=function(arr,head){var a=[[head,'Items','Bought for']];
       for(var k=0;k<arr.length;k++)a.push([arr[k].label,arr[k].count,arr[k].spend]);return a;};
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byMonth,'Month')),'By month');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byAsset,'Asset')),'By asset');
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mk(j.byGroup,'Group')),'By group');
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(
-      mk(j.byFunding.map(function(x){return {label:FUND_LABEL[x.key]||x.key,count:x.count,spend:x.spend};}),'Booked against')),'Booked against');
+    // The two guards that used to be sections. Off the page, but a sheet away -- the first
+    // is how a real machine advance was found missing, the second how a real asset group
+    // filed under a liability would be.
+    var notCounted=[['Advance account not counted','Branch','Ledgers']];
+    (j.advanceGroups||[]).filter(function(x){return !x.counted;}).forEach(function(x){
+      notCounted.push([x.group,x.branch,x.ledgers]);});
+    if(notCounted.length>1) XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet(notCounted),'Advances not counted');
+    var exG=[['Group named like an asset group, filed as a liability','Branch','Ledgers']];
+    (j.excludedGroups||[]).forEach(function(g){exG.push([g.group,g.branch,g.ledgers]);});
+    if(exG.length>1) XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet(exG),'Groups not counted');
     XLSX.writeFile(wb,'CDC_Capex_'+j.branch+'_'+j.from+'_'+j.to+'_'+ymd(new Date())+'.xlsx');
   }
 
