@@ -461,7 +461,12 @@
     var h='<div class="scroll"><table><thead><tr><th>'+esc(head)+'</th><th class="num">Items</th>'
       + '<th class="num">Bought for</th></tr></thead><tbody>';
     for(var i=0;i<rows.length;i++){
-      if(!rows[i].spend&&!rows[i].disposal) continue;
+      // Both columns here are about BUYING, and the total is `additions`. A ledger that was
+      // only credited in the window -- sold, scrapped, or written down against the asset
+      // itself -- has nothing to put in either, and rendered as a row of "0" and a dash:
+      // thirty-nine of them on a real year, saying nothing. What left the books is on the
+      // ASSETS SOLD card and in the Sold off column of EVERY ENTRY, where it belongs.
+      if(!rows[i].spend) continue;
       h+='<tr><td>'+esc(rows[i].label)+'</td><td class="num">'+rows[i].count+'</td>'
        + '<td class="num">'+money(rows[i].spend)+'</td></tr>';
     }

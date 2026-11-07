@@ -1,6 +1,18 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.85 (diag) — November 2026 — No more rows of "0" and a dash in what was bought
+
+**What was bought** and **by asset group** listed thirty-nine ledgers at `0` items and no
+amount. Those are ledgers that were only *credited* in the window — sold, scrapped, or
+written down against the asset itself — and both columns of those tables are about buying,
+so they had nothing to put in either. They are skipped now, which also makes each table add
+up to exactly the Total printed under it.
+
+Nothing stopped being counted: what left the books is still in the **assets sold or
+scrapped** figure at the top and in the *Sold off* column of **every entry**, where a
+disposal belongs.
+
 ## v2.84 (diag) — November 2026 — Three sections off the capex page; the two guards move into the workbook
 
 **HOW THE ENTRY WAS BOOKED is gone, and so is the funding label on every row.** It read the
