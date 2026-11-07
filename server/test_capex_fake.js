@@ -302,111 +302,14 @@ const V = (branch, date, pl, ld, extra) => {
   assert(!j.byAsset.some((x) => /^WIP/.test(x.label) && x.spend),
     'and no work-in-progress account appears in what was bought');
 
-  // AN ADVANCE GROUP IS RECOGNISED BY THE WORD "MACHINERY", not by an exact phrase.
-  const hdl = (j.cashRows || []).find((r) => /Heidelberger/.test(r.paidFor));
-  assert(hdl && hdl.amount === 28200000 && hdl.kind === 'advance',
-    'an advance paid into a group called "Advance for Machinery" is capex cash -- requiring'
-    + ' the words "plant & machinery" missed every rupee of it');
-  assert((j.cashRows || []).some((r) => /Gaiapac/.test(r.paidFor)),
-    'and so is one paid to a ledger named only after the supplier, because the GROUP says'
-    + ' what the money is for');
-  // A SUPPLIER IS WHOEVER ACTUALLY SOLD US A MACHINE, not whoever is filed under a group
-  // that says so. Names and groups run out; the purchase voucher does not.
-  const bob = (j.cashRows || []).find((r) => /Bobst/.test(r.paidFor));
-  assert(bob && bob.amount === 4000000 && bob.kind === 'creditor' && bob.via === 'sold',
-    'paying a supplier filed under ORDINARY Sundry Creditors is still capex cash when that'
-    + ' supplier sold us a fixed asset in this window -- evidence, not vocabulary');
-  assert(j.capexPartyGroups.some((x) => x.kind === 'supplier' && /Sundry Creditors/.test(x.group)),
-    'and the page says it was recognised that way rather than by its group');
+  // AN ADVANCE GROUP IS RECOGNISED BY THE WORD "MACHINERY", not by an exact phrase --
+  // requiring `plant & machinery` missed `Advance for Machinery` entirely, and with it the
+  // one party question this endpoint still asks.
   assert((j.advanceGroups || []).some((x) => /Loans & Advances/.test(x.group) && !x.counted),
     'while an advance account that says nothing about machinery is LISTED as not counted,'
     + ' so money left out of the figure is visible instead of silently missing');
   assert((j.advanceGroups || []).some((x) => /Advance for Machinery/.test(x.group) && x.counted),
     'and one that is counted is marked as such');
-
-  // A PARTY IS NOT A CATEGORY. A freight forwarder whose charges on one import were
-  // capitalised into a machine is not thereby a machinery supplier, and its ordinary
-  // invoices are not capex. The bill reference is exact where the party is not.
-  const emi = (j.cashRows || []).filter((r) => /Emirates/.test(r.paidFor));
-  assert(emi.length === 1 && emi[0].amount === 150000,
-    'only the payment settling the bill the asset was actually bought on counts -- not the'
-    + ' freight forwarder\'s other invoices (got ' + emi.length + ' row(s) totalling '
-    + emi.reduce((t, r) => t + r.amount, 0) + ')');
-  assert(!(j.cashRows || []).some((r) => r.amount === 4200183 || r.amount === 2915864),
-    'an ordinary freight payment against its own bill is NOT capex cash, and neither is one'
-    + ' that names no bill at all');
-  assert(j.unmatchedSupplier >= 4200183 + 2915864 - 1,
-    'what was paid to such a party against other bills is TOTALLED, so money deliberately'
-    + ' left out of the figure is visible rather than silently dropped (got '
-    + j.unmatchedSupplier + ')');
-  // And the rule must not throw out the case it was built for.
-  const bob2 = (j.cashRows || []).find((r) => /Bobst/.test(r.paidFor));
-  assert(bob2 && bob2.amount === 4000000,
-    'a supplier that really did sell us a machine is still counted, because the payment'
-    + ' settles the very bill the machine was bought on');
-
-  // A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME. Refusing to read creditor names
-  // left a binding-machine maker, and every instalment paid to it, off the page entirely
-  // -- there is no purchase to learn from while the machine is still being paid for.
-  const png = (j.cashRows || []).find((r) => /Pinghu/.test(r.paidFor));
-  assert(png && png.amount === 9000000 && png.kind === 'creditor' && png.via === 'name',
-    'an instalment to a machine maker in the ORDINARY creditors group is capex cash, because'
-    + ' its own name says machinery and nothing else was ever going to say so');
-  assert(j.capexPartyGroups.some((x) => /Pinghu/.test(x.group) && x.via === 'name'),
-    'and it is listed as itself, recognised by its NAME -- the one rule here that guesses'
-    + ' from English says so rather than hiding inside a count of Sundry Creditors');
-  // The two it must not sweep in with it.
-  assert(!(j.cashRows || []).some((r) => /Spare Parts|Lubricants/.test(r.paidFor)),
-    'while spares and oil from suppliers whose names also say machine are NOT capex -- what'
-    + ' goes into a machine is not a machine');
-  assert((j.nameNearMiss || []).length === 2
-    && (j.nameNearMiss || []).every((x) => /Spare Parts|Lubricants/.test(x.ledger)),
-    'and both are NAMED as refused, because the refusal is a judgement about words and a'
-    + ' wrong one would otherwise take a real machine supplier off the page in silence');
-
-  // WHAT A PAYMENT IS AND HOW WE KNEW ARE TWO DIFFERENT QUESTIONS. Conflating them made
-  // "paid a machinery supplier" and "paid a supplier who sold us an asset" read as two
-  // kinds of payment, when they are the same kind of payment recognised two ways.
-  const sameKind = (j.cashRows || []).filter((r) => /Pinghu|Bobst/.test(r.paidFor));
-  assert(sameKind.length === 2 && sameKind.every((r) => r.kind === 'creditor'),
-    'paying a machine maker and paying a supplier that sold us a machine are the SAME kind'
-    + ' of payment -- settling a machine bill -- whatever told us the account was capex');
-  assert(sameKind.find((r) => /Pinghu/.test(r.paidFor)).via === 'name'
-    && sameKind.find((r) => /Bobst/.test(r.paidFor)).via === 'sold',
-    'and HOW each was recognised is its own column, so a figure resting on a guess about'
-    + ' English is distinguishable from one resting on a purchase voucher');
-
-  // CASH OUT ON CAPEX -- a different question from what was capitalised, and the one
-  // that matters for a cash-flow view.
-  const cash = j.cashRows || [];
-  const adv = cash.find((r) => /Komori/.test(r.paidFor));
-  assert(adv && adv.amount === 15000000 && adv.kind === 'advance',
-    'an ADVANCE against a machine is cash out on capex the day it is paid, months before the'
-    + ' asset exists -- it does not wait for the machine to be capitalised');
-  const settle = cash.find((r) => r.date === '20260828');
-  assert(settle && near(settle.amount, 2110443.65),
-    'a payment run that settles one machinery bill and one paper advance contributes ONLY the'
-    + ' machine, because the capex DEBITS are read rather than the bank total (got '
-    + (settle && settle.amount) + ')');
-  const direct = cash.find((r) => r.paidFor === 'Computers');
-  assert(direct && direct.amount === 500000 && direct.kind === 'asset' && direct.via === 'group',
-    'and an asset paid for straight out of the bank is cash out on the day it is paid');
-  assert(near(j.cashOut, 15000000 + 2110443.65 + 2110443.65 + 500000 + 1500000
-      + 28200000 + 6926000 + 4000000 + 150000 + 9000000),
-    'the total is every one of those and nothing else -- no capitalisation journal, no'
-    + ' supplier bill that has not been paid, and no disposal netted off (got ' + j.cashOut + ')');
-  assert(!cash.some((r) => r.amount < 0),
-    'and SELLING an asset is not negative capex spend: proceeds from scrapping old laptops'
-    + ' do not quietly net a disposal into the money gone out');
-  assert(!cash.some((r) => r.date === '20260515'),
-    'the day a press is CAPITALISED against a term loan no money moves, so it is not cash out');
-  assert(j.capexPartyGroups.some((x) => /Sundry Creditor - Fixed Assets/.test(x.group) && x.kind === 'capital_creditor')
-    && j.capexPartyGroups.some((x) => /Capital Advances/.test(x.group) && x.kind === 'advance'),
-    'and the accounts the cash is followed through are NAMED, because this rests entirely on'
-    + ' how the chart of accounts is laid out and a missing one is money left out in silence');
-  assert(!j.capexPartyGroups.some((x) => /Loans & Advances/.test(x.group)),
-    'a general supplier-advance account is NOT guessed at: it carries paper as well as'
-    + ' machinery, and no rule here can split it');
 
   // HOW THE ENTRY WAS BOOKED -- which says nothing about when the money moved.
   const press = j.rows.find((r) => r.asset === 'Heidelberg CD102 Press');
@@ -496,27 +399,22 @@ const V = (branch, date, pl, ld, extra) => {
   assert(near(y1.additions, 0) && near(y1.advanceNet, 30000000) && near(y1.total, 30000000),
     'the year an advance is paid and no machine arrives, capex is the advance: 3 Cr (got '
     + JSON.stringify(y1) + ')');
-  assert(near(y2.additions, 50000000) && near(y2.advanceNet, -30000000)
-    && near(y2.creditorNet, 20000000) && near(y2.total, 0),
-    'the year the 5 Cr machine ARRIVES, capex is nothing -- the advance falls by the 3 Cr'
-    + ' already counted and the 2 Cr still owed has not left yet. This is the double count'
-    + ' the whole measure exists to prevent (got ' + JSON.stringify(y2) + ')');
-  assert(near(y3.additions, 0) && near(y3.creditorNet, -20000000) && near(y3.total, 20000000),
-    'and the year the balance is PAID, capex is that 2 Cr, though the machine arrived a year'
-    + ' earlier (got ' + JSON.stringify(y3) + ')');
+  assert(near(y2.additions, 50000000) && near(y2.advanceNet, -30000000) && near(y2.total, 20000000),
+    'the year the 5 Cr machine ARRIVES, only the 2 Cr NOT already advanced is new capex --'
+    + ' the advance falls by the 3 Cr counted last year and cancels that much of it. This is'
+    + ' the double count the whole measure exists to prevent (got ' + JSON.stringify(y2) + ')');
+  assert(near(y3.total, 0),
+    'and the year the supplier is PAID nothing is added, because the machine was counted'
+    + ' when it arrived: this is capex committed, not a bank statement (got ' + y3.total + ')');
   assert(near(y1.total + y2.total + y3.total, 50000000),
-    'so over the machine\'s whole life the three periods add up to exactly what it cost,'
-    + ' each rupee landing in the period it actually left: ' + (y1.total + y2.total + y3.total));
+    'so over the machine\'s whole life the three periods still add up to exactly what it'
+    + ' cost: ' + (y1.total + y2.total + y3.total));
+
   const whole = await flow('20240401', '20270331');
   assert(near(whole.total, 50000000),
     'and one window covering all three answers the same, because the advance and the bill'
     + ' both open and close inside it');
 
-  // ==========================================================================
-  // AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP. The label was written the day
-  // the money left and never revisited, so payments for presses long since installed
-  // still read "machine not here yet". Two advances to the same supplier, one machine
-  // delivered: FIFO has to say which payment is still out.
   // ==========================================================================
   fakeDb.collection('masters').docs.length = 0;
   fakeDb.collection('vouchers').docs.length = 0;
@@ -540,29 +438,6 @@ const V = (branch, date, pl, ld, extra) => {
   // The FIRST machine lands in July: 40 L of the advance is capitalised into it.
   V3.push(V('kol', '20260715', { [ADV]: 4000000 }, { 'Stahl Folder': -4000000 },
     { type: 'Journal', narration: 'folder capitalised against advance' }));
-
-  const advJ = await get('/api/capex?branch=kol&from=20260401&to=20260930');
-  const advRows = (advJ.cashRows || []).filter((r) => /Advance for Machinery/.test(r.paidFor));
-  const apr = advRows.find((r) => r.date === '20260405');
-  const may = advRows.find((r) => r.date === '20260510');
-  assert(apr && apr.kind === 'advance_done',
-    'the April advance is no longer an advance: its machine arrived in July, and a payment'
-    + ' for a press now running must not still read "machine not here yet"');
-  assert(may && may.kind === 'advance',
-    'while the May advance IS still one -- that machine has not come (got ' + (may && may.kind) + ')');
-  assert(advJ.cashByKind.find((k) => k.key === 'advance').spend === 6000000
-    && advJ.cashByKind.find((k) => k.key === 'advance_done').spend === 4000000,
-    'so the two are totalled apart, and "still out against machines not here" is a figure'
-    + ' that can be read off the page rather than worked out by hand');
-  assert(near(advJ.capexFlow.advanceNet, 6000000),
-    'and the period figure is unaffected, because it was never counting payments: 1 Cr paid'
-    + ' in, 40 L released, 60 L of advances still standing (got ' + advJ.capexFlow.advanceNet + ')');
-
-  // The release takes the OLDEST money first, which is what an advance account does --
-  // the first proforma paid is the first machine to arrive.
-  const half = await get('/api/capex?branch=kol&from=20260401&to=20260630');
-  assert((half.cashRows || []).every((r) => r.kind !== 'advance_done'),
-    'and in a window that ENDS before the machine arrived, neither advance is settled yet');
 
   // ==========================================================================
   // THE OTHER COMPANY IS NOT A SUPPLIER, and a monthly consumable in a machinery group
@@ -620,16 +495,6 @@ const V = (branch, date, pl, ld, extra) => {
   assert(!(ibJ.byAsset || []).some((x) => x.spend > 780000),
     'and no rollup carries it either, or the page would disagree with its own total');
 
-  const taiy = (ibJ.neverSold || []).find((x) => /Taiyebji/.test(x.ledger));
-  assert(taiy && near(taiy.paid, 3000000),
-    'a supplier in a machinery creditors group that has never sold us a single asset is'
-    + ' NAMED with what was paid to it -- that is what a monthly consumable filed in a'
-    + ' machine group looks like (got ' + JSON.stringify(taiy) + ')');
-  assert(!(ibJ.neverSold || []).some((x) => /Smitkal/.test(x.ledger)),
-    'while a supplier that did sell us a machine raises no such question');
-  assert(near(ibJ.cashOut, 3000000 + 780000),
-    'and it is still COUNTED, because the group Tally files an account in is a better'
-    + ' authority than anything guessed here -- the doubt is reported, not acted on');
 
   // ==========================================================================
   // AS THE BALANCE SHEET SHOWS IT. Tally already answers "what have we paid for machines

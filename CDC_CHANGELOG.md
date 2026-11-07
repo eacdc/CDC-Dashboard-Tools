@@ -1,6 +1,38 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.82 (server, diag) — November 2026 — The payment list is gone: what Tally capitalised, and what Tally says is still out
+
+Two ₹3.7 Cr Manugraph payments for the Web Offset machines were missing from the
+payment-by-payment list while the ₹10 L ones were in it. That list only ever worked by
+deciding which creditors sell machines, and that judgement had already been wrong in both
+directions — a freight forwarder counted in full, a machine maker left out entirely, a
+stitching-wire supplier counted for over a crore. **A list that is confidently incomplete is
+worse than no list**, so it has been removed.
+
+What is left asks nothing of anybody's judgement:
+
+- **What Tally capitalised** — every fixed-asset addition, with the voucher, the supplier
+  and the narration behind each one.
+- **What Tally says is still out** — the closing balance of the capital-advance accounts,
+  on its own date.
+- **Depreciation**, beside them, because that is how the balance sheet reads.
+
+**Capex for the period** is now simply *assets capitalised + the rise in capital advances* —
+two accounts, following the change in them rather than the payments, which is still what
+stops an advance and the machine it buys being counted twice. Over a machine's life the
+periods add to exactly what it cost: pay ₹3 Cr of advance (₹3 Cr), the ₹5 Cr machine arrives
+(only the ₹2 Cr not already advanced is new), paying the supplier later adds nothing.
+
+It is **capex committed, not cash**. A machine booked but not yet paid for is in it; a
+cheque written against an old bill is not. The page says so.
+
+Gone with the list: the creditor-name matching, the consumable refusal list, the
+learned-from-purchases supplier rule, the bill-reference matching, the FIFO
+advance-settlement labelling, the one-year lookback query and every diagnostic that existed
+only to guard them. The page is shorter, and every figure on it now traces to an account
+rather than to a rule.
+
 ## v2.81 (server, diag) — November 2026 — As the balance sheet shows it
 
 Tally's balance sheet already answers two of these questions cleanly, so the page now reads

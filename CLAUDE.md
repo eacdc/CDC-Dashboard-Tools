@@ -392,15 +392,6 @@ counterparty is flagged `interBranch`, kept out of additions, disposals AND ever
 in its own section. `sliceFor` skips them too, which is what keeps the browser's check
 against the server honest.
 
-**A MACHINE SUPPLIER THAT HAS NEVER SOLD US A MACHINE is named, not dropped.** The group
-and name rules take an account's word for it and then count every rupee through it, so a
-monthly consumable filed in a machinery creditors group rides along for years -- stitching
-wire at 5-15 L a month came to over a crore of "capex" with not one asset to show for it.
-`neverSold` lists every party recognised by group or name (not by `via:'sold'`, where the
-question is moot) that received money in the window and appears nowhere in `seenSupplier`.
-It is still COUNTED: the group Tally files an account in is a better authority than anything
-guessed here, so the doubt is reported and the user decides.
-
 **A warning nobody can act on trains the reader to skip the ones they can.** Two on the loan
 page were doing that. Thirty interest, insurance and subvention ledgers ("Interest on Term
 Loan with HDFC Bank") were listed as near misses under *"if this is a real loan, move it
@@ -418,61 +409,26 @@ winning over a creditor leg because a machine on term finance usually touches bo
 header shows additions and paid-from-bank separately for that reason. Disposals are
 reported apart and NEVER netted into spend. `npm run test:capex`.
 
-**CAPEX FOR THE PERIOD asks nothing of anybody's judgement, and is the headline.**
-`capexFlow` = assets capitalised + rise in capital advances - rise in what is owed to
-machinery creditors. Three balances Tally itself keeps, and NO opinion about which supplier
-sells machines -- the opinion that has now been wrong in both directions (a freight
-forwarder counted in full, a machine maker left out). It follows the CHANGE in those
-balances, never the payments, and that is what stops an advance and the machine it buys
-being counted twice: pay 3 Cr of advance (advances +3 Cr, capex 3 Cr); the 5 Cr machine
-arrives with 2 Cr owed (capitalised +5, advances -3, owed +2 => 0, because the 3 went out
-last year and the 2 has not gone); pay the 2 (owed -2 => 2). Three periods, 3 + 0 + 2 = the
-5 Cr machine, each rupee in the period it left. `npm run test:capex` drives exactly that
-machine through three windows. Signs: an advance is a Dr-positive ASSET (`-all[k]`), a
-creditor a Cr-positive LIABILITY (`+all[k]`). A machine on a term loan IS in this figure
-though no money left the bank -- the bank paid the supplier and the company owes the bank.
+**THE PAGE ASKS NO QUESTION IT CANNOT ANSWER FROM TALLY'S OWN ACCOUNTS.** It once chased
+capex CASH payment by payment, which meant deciding which creditors sell machines, and that
+judgement was wrong in both directions for weeks: a freight forwarder counted in full, a
+machine maker left out, a stitching-wire supplier counted for over a crore, and finally two
+3.7 Cr Manugraph payments dropped while the 10 L ones stayed. A list that is confidently
+incomplete is worse than no list, so it was deleted -- with `capexPartyKind`'s creditor
+branch, `seenSupplier`, `capexBill`, the bill matching, `NOT_CAPITAL_NAME`, `neverSold`, the
+FIFO advance-settlement labelling and the lookback query. Do not bring any of it back
+without a way to prove completeness.
 
-**Cash out on capex is a different question, followed on the PAYMENT voucher.** An asset is
-capitalised the day it is ready and paid for on its own vouchers, often months earlier, so
-the asset ledger is the wrong place to look for money. `cashRows` is built from every
-voucher that CREDITS a bank, cash or OD ledger, taking the part of it DEBITED to an asset,
-to a machinery creditor, or to a capital advance -- the debits rather than the bank total,
-so a payment run settling one machine and three paper bills contributes only the machine.
-An **advance against a machine that has not arrived** is capex cash the day it is paid; that
-is most of what the user wanted and it never touches a fixed-asset ledger. Selling an asset
-is NOT negative cash out (that netted a disposal into spend, which the page refuses
-everywhere else), but a refund from a machinery creditor or advance IS. `capexPartyKind`
-recognises those accounts from the GROUP (Kolkata's is `Sundry Creditor - Fixed Assets`,
-Ahmedabad's advances sit under `Advance for Machinery`) and the ledger name for advances
-only -- a creditor is matched on its group alone, because the ledger name there is a
-company's name and matching it would make "Machine Oil Suppliers" a capex account. Never
-match bare `capital`: `Capital Account` is the ROOT of every chain in Tally and would make
-the whole company capex. `machinary` is in `CAPITAL_KW` because that is how the Ahmedabad
-masters spell it.
-
-**But vocabulary runs out, so the suppliers are LEARNED from the purchases.** Requiring the
-words `plant & machinery` missed `Advance for Machinery` entirely, and with it nearly all of
-the capex cash -- the cash figure read 83 L against 13 Cr of assets bought and looked merely
-small rather than broken. A first pass now reads the purchases themselves and takes every
-payable CREDITED on a voucher that DEBITS a fixed asset as a supplier of that asset
-(`seenSupplier`, kind `supplier`): evidence rather than vocabulary, so a machinery supplier
-filed in the ordinary creditors group is still counted. The page says which way each account
-was recognised, and `advanceGroups` lists every group with "advance" in it WITH a counted
-flag, so an advance account the rule still misses is visible instead of silently absent.
-
-**A COMPANY THAT SELLS MACHINES PUTS IT IN ITS NAME.** Matching creditors on their GROUP
-alone was too strict in the other direction: `Pinghu Bindex Machinery Co.,Ltd.` is a
-binding-machine maker filed under ordinary Sundry Creditors, still being paid in
-instalments, so no group said machinery, no purchase voucher existed to learn from, and it
-was absent from the page entirely. A creditor is therefore matched on its NAME too, with
-the consumables and services that ride in on the same words refused by hand
-(`NOT_CAPITAL_NAME`: spare, parts, oil, lubric, repair, service, hire, rental, freight,
-clearing, insurance...). This is the one rule here that guesses from English, so
-`capexPartyKind` returns `{kind, via}` and the page says per account whether it was
-recognised by its GROUP (a fact about the books), its NAME (an inference) or by having SOLD
-us an asset -- and a name match is listed as that one company rather than counted into
-"Sundry Creditors". `capexNameNearMiss` names what the refusal list threw out, because a
-wrong word in that list would take a real machine supplier off the page in silence.
+What is left needs no opinion. `capexFlow` = **assets capitalised + the rise in capital
+advances**: two accounts, and the CHANGE in them rather than the payments, which is what
+stops an advance and the machine it buys being counted twice -- pay 3 Cr of advance
+(advances +3 Cr, capex 3 Cr); the 5 Cr machine arrives (capitalised +5, advances -3, so only
+the 2 Cr not already advanced is new); paying the supplier later adds nothing. 3 + 2 + 0 =
+the 5 Cr machine, and `npm run test:capex` drives exactly that through three windows. It is
+**capex committed, not cash**: a machine booked but unpaid is in it, and so is one on a term
+loan the bank paid directly. An advance is a Dr-positive ASSET, so its movement is
+`-all[k]`. The only party rule still standing is `capexAdvanceKind`, which recognises the
+advance accounts themselves.
 
 **A CONSOLIDATED QUERY NAMES NO BRANCH, so `{branch:1, date:1}` cannot serve it** -- `date`
 is its second key, so a date-only filter scans the whole decade. Every page asking for both
@@ -488,28 +444,6 @@ error page throws a parser message that names neither the request nor the cause,
 what actually came back, and what usually causes it. A page that cannot explain its own
 failure costs a round of "what does this mean?" every time.
 
-**The supplier pass looks ONE YEAR BEHIND the window, and may fail without taking the page
-with it.** It only ever read the window on
-screen, so a machine bought in March and paid in April taught it nothing -- the purchase is
-what identifies the supplier and names the bill. A second narrow query (`lookFrom`,
-projecting only ledgers/bills) covers that. It carries `maxTimeMS` and a try/catch: this
-pass only improves the narrowest rule and the headline figure does not use it at all, so a
-slow lookback costs a little accuracy in one column and SAYS so (`lookbackNote`), where an
-unbounded one returned a gateway error and took the whole page down.
-
-**A PARTY IS NOT A CATEGORY, so an evidence-recognised supplier counts only on the BILL the
-asset was bought on.** `Emirates Logistics` is a freight forwarder; its clearing charges on
-one import were capitalised into a machine, which is correct accounting -- and made it a
-"machinery supplier", after which its every routine invoice counted as capex cash: ten
-ordinary payments, 1.76 Cr, none of it capital. A bill reference is exact where a party is
-not. Pass 1 therefore also records the refs raised on asset vouchers (`capexBill`, keyed
-`br|ledger|ref`), and in pass 2 a `supplier` leg contributes only what this payment
-ALLOCATES against one of those refs -- a payment naming no such bill contributes nothing.
-This applies ONLY to `supplier`: a group kept for machinery (`capital_creditor`, `advance`)
-says every rupee through it is capital, so those still count in full. What is dropped is
-totalled as `unmatchedSupplier` and stated on the page, because money deliberately left out
-of a figure has to be visible. Requires `bills` in the voucher projection.
-
 **TALLY'S BALANCE SHEET ALREADY ANSWERS TWO OF THESE QUESTIONS, so read its figure rather
 than rebuilding one.** "What have we paid for machines that have not come" is the closing
 balance of the capital-advance accounts under Current Assets, and it is in `masters.closing`
@@ -523,26 +457,6 @@ the period sits beside it for the same reason -- it is an expense and NEVER cape
 additions, advances out and depreciation are the three lines a reader of the balance sheet
 expects together. The depreciation ledgers are matched by name and the contra-asset under
 Fixed Assets is excluded, so the charge is counted once.
-
-**AN ADVANCE STOPS BEING ONE WHEN THE MACHINE TURNS UP.** The label was written the day
-the money left and never revisited, so payments for presses long since installed still read
-"machine not here yet". Every posting to an advance ledger is collected (`advPost`) and run
-FIFO in date order: a credit releases the OLDEST money sitting in the account, which is how
-an advance account actually behaves -- the first proforma paid is the first machine to
-arrive. A payment whose own money has been released becomes kind `advance_done`; part-
-released counts as still open, because the machine is not here until all of it is. The two
-total apart on the cards, so "still out against machines not here" is readable rather than
-worked out by hand. `capexFlow` is untouched by this -- it never counted payments.
-
-**WHAT a payment is and HOW we knew are two columns, not one.** The cash list had
-"paid a machinery supplier" and "paid a supplier who sold us an asset" as if they were two
-kinds of payment; they are the SAME kind -- settling a machine supplier's bill -- recognised
-two different ways, and a reader could only wonder which bucket was which. `kind` is now the
-stage of the purchase (`asset` paid straight for one, `advance` before delivery, `creditor`
-settling a bill) and `via` is the evidence (`group` / `name` / `sold`), each its own column
-and its own filter. The bill restriction keys off `via === 'sold'`, not off a kind, because
-that is what it was always really about: an account that EXISTS for machinery counts in
-full, an account inferred from one purchase counts only on that purchase's bill.
 
 **The page states its own rules** in a HOW THIS PAGE DECIDES section. There are now five and
 they are not guessable from the numbers -- the question "what is the logic behind capex
