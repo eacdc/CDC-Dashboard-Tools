@@ -59,7 +59,7 @@
     border:1px solid #e2e8f0;border-radius:7px;padding:3px 7px;background:#f8fafc}
   .tools .rng input{width:84px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:5px;
     font-size:11.5px;font-family:ui-monospace,monospace;min-width:0}
-  .tools .rng input.bad{border-color:#dc2626;background:#fef2f2}
+  .tools .rng input.bad, input.bad{border-color:#dc2626;background:#fef2f2}
   .tools .rng .dash{color:#94a3b8}
   .tools button{padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;
     font-size:11.5px;cursor:pointer;color:#475569}
@@ -109,12 +109,17 @@
       </label>
       <label>from <input id="from" type="date"></label>
       <label>to <input id="to" type="date"></label>
-      <label>ignore items under <input id="min" size="9" value="0"></label>
+      <label title="Takes 5L, 50k or plain rupees. Set it to 0 to see every entry.">ignore items under <input id="min" size="9" value="500000"></label>
       <button id="go">Load</button>
       <button id="xl" class="ghost" disabled>&#11015; Excel</button>
     </div>
     <div class="note"><strong>Branch narrows what is shown without reloading</strong> &mdash; both companies
       come down in one fetch, so switching is instant. Dates and the floor do need <em>Load</em>.
+      <strong>The floor starts at &#8377;5,00,000</strong>, so a year of chairs, printers and plug points does not
+      bury the machines &mdash; it takes <em>5L</em>, <em>50k</em> or plain rupees, and <strong>set it to 0 to see
+      every entry</strong>. It applies to <em>purchases</em>, so <strong>assets bought</strong> and
+      <strong>capex this period</strong> are of what passed it; assets sold, the advances and depreciation
+      are Tally's own figures and the floor does not touch them.
       Which ledgers count is decided by the group Tally itself put them in &mdash; anything under
       <strong>Fixed Assets</strong>, plus <strong>capital work in progress</strong> wherever it is filed. Depreciation
       and repairs are expenses, not capex: writing an asset down is not buying one. An accumulated-depreciation ledger
@@ -173,14 +178,25 @@
   // off the purchase voucher's other legs. It described which ledger the entry was made
   // against and nothing more, and was twice taken for a statement about how the machine was
   // paid for, which it never was. `funded` is still on the API; nothing on the page reads it.
-  // The window to start on: this financial year to date. Lost in an earlier edit, which
-  // left both boxes empty and the first Load answering "from and to are required".
+  // The window to open on: the WHOLE current financial year, 1 April to 31 March, rather
+  // than stopping at today -- "what have we spent this year" is a question about the year,
+  // and an end date in the future costs nothing, there being no vouchers after today.
   (function(){
     var now=new Date(), y=now.getFullYear();
     if(now.getMonth()<3) y-=1;                      // before April we are still in last FY
     $('from').value=String(y)+'-04-01';
-    $('to').value=iso(now);
+    $('to').value=String(y+1)+'-03-31';
   })();
+
+  // The floor takes 5L / 50k / plain rupees. A box it cannot read is shown red and treated
+  // as no floor: erring towards MORE rows, since a floor silently misread as nothing would
+  // hide the very purchases the reader is hunting for.
+  function minAmt(){
+    var el=$('min'), v=String(el.value||'').trim();
+    var n=v?parseAmt(v):0;
+    el.classList.toggle('bad', v!=='' && n===null);
+    return n===null?0:n;
+  }
 
   var tip=null;
   function showTip(ev,html){
@@ -230,7 +246,7 @@
     var q='/api/capex?branch=all'
          +'&from='+encodeURIComponent(d8($('from').value))
          +'&to='+encodeURIComponent(d8($('to').value))
-         +'&min='+encodeURIComponent($('min').value.trim()||'0');
+         +'&min='+encodeURIComponent(String(minAmt()));
     fetchJson(q).then(function(j){
       $('go').disabled=false;
       loaded=j; $('xl').disabled=false; render(sliceFor(j,$('branch').value));

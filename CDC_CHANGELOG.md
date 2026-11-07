@@ -1,6 +1,23 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.86 (diag) — November 2026 — Capex opens on the whole year, with a 5 lakh floor
+
+The capex page used to open on *1 April to today*; it now opens on **the whole current
+financial year**, 1 April to 31 March. "What have we spent this year" is a question about
+the year, and an end date in the future costs nothing — there are no vouchers after today.
+
+**Ignore items under** starts at **₹5,00,000**, so a year of chairs, printers and plug
+points no longer buries the machines. It takes *5L*, *50k* or plain rupees, a box it cannot
+read turns red and is treated as no floor (erring towards showing more, never fewer), and
+setting it to **0** shows every entry. The note at the top says all of this, and says what
+the floor does and does not touch: *assets bought* and *capex this period* are of what
+passed it, while assets sold, the advances and depreciation are Tally's own figures and are
+left alone.
+
+The loan page still opens on the year **to date** — a borrowing statement's closing balance
+has to stand on a day that has happened.
+
 ## v2.85 (diag) — November 2026 — No more rows of "0" and a dash in what was bought
 
 **What was bought** and **by asset group** listed thirty-nine ledgers at `0` items and no
