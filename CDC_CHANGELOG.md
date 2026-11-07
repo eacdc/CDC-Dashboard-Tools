@@ -1,6 +1,27 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.87 (voucher) — November 2026 — The printed voucher says why
+
+**The narration is on the printed voucher now.** It was on the journal layout and missing
+from the invoice layout — which is nearly every voucher anyone prints — so a sales or
+purchase voucher came out as a page of figures with nothing on it explaining what the job
+was. One block now serves both layouts, placed where Tally puts it (under the tax summary,
+above the declaration), and a narration typed over several lines stays over several lines.
+
+**And no more blank second page.** A short voucher measures exactly one A4, and floating
+point decided whether it fitted — it usually did not, so every journal downloaded as two
+pages with a hair-line of nothing on the second. A voucher that overflows by a band rather
+than a page (a narration that pushed the signature box over the edge) is now shrunk by up to
+8% to stay on one sheet; beyond that it paginates honestly, as a two-item tax invoice with a
+full HSN summary still does.
+
+**A guard that was passing on nothing.** The voucher test's stand-in for MongoDB did not
+understand `$ne`, which `/api/dataset` uses to leave out cancelled vouchers, so that query
+returned an empty list — and the three checks after it (the dashboard payload strips voucher
+details, keeps ledger amounts, keeps the `guid` the drill-down links on) were green without
+ever seeing a voucher. Fixed, and all three now actually run.
+
 ## v2.86 (diag) — November 2026 — Capex opens on the whole year, with a 5 lakh floor
 
 The capex page used to open on *1 April to today*; it now opens on **the whole current

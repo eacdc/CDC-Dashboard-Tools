@@ -350,7 +350,13 @@ Assets are classified per branch from that branch's own master, as loans are. De
 and repairs are expenses, not capex, and an accumulated-depreciation ledger filed UNDER
 the asset group is excluded by name -- writing an asset down is not buying one.
 
-**A voucher's narration is at `details.narration`, never at the top level.** The extractor's
+**A voucher's narration is at `details.narration`, never at the top level**, and
+`voucher/index.html` must PRINT it. It did on the journal layout and not on the invoice
+layout, so sales and purchase vouchers -- nearly every voucher anyone prints -- went out as a
+sheet of figures with nothing saying why. One `narrBlock()` now serves both, with
+`white-space:pre-wrap` because Tally's narration runs to several lines. `test:voucher` holds
+the narration through the sanitiser and `/api/voucher`, newlines and all, and asserts it is
+NOT at the top level. The extractor's
 voucher object is `{date, party, no, type, ledgers, party_ledgers, details, guid}` -- the
 narration, reference, GSTIN and the rest live inside `details`, whitelisted there by
 `DETAIL_SCALARS` in `ingest.js`. A Mongo projection of `narration: 1` therefore asks for a
@@ -358,6 +364,14 @@ field no voucher has and hands back `undefined` for every row, which renders as 
 column rather than as an error. Both `/api/capex` and `/api/yoy/vouchers` shipped that way;
 the capex test's fixture now writes narration where the real pull writes it, so reading the
 wrong field fails by name.
+
+**A `*_fake.js` stub that does not understand a query operator silently matches NOTHING, and
+`[].every(...)` is true.** `test_voucher_details.js` did not handle `$ne`, which
+`/api/dataset` uses to drop cancelled and optional vouchers, so the suite asserted against an
+empty list -- and its three guards (details stripped from the payload, ledger amounts kept,
+`guid` kept for the drill-down link) were green having never seen a voucher. When a stub's
+matcher is extended, check what was passing on nothing; an assertion over a collection should
+be paired with one on its length.
 
 **A group whose NAME says "Fixed Assets" is not necessarily one.** Kolkata files the
 suppliers of its machines under `Current Liabilities > Sundry Creditors > Sundry Creditor -

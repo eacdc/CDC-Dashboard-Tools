@@ -9,11 +9,18 @@ function matches(doc, filter) {
   for (const [k, cond] of Object.entries(filter)) {
     if (k === '$or') { if (!cond.some((f) => matches(doc, f))) return false; continue; }
     const val = doc[k];
-    if (cond && typeof cond === 'object' && ('$gte' in cond || '$lte' in cond || '$in' in cond || '$nin' in cond)) {
+    // $ne was missing, and a filter the stub does not understand falls through to the
+    // equality branch, where `undefined !== {$ne:true}` throws EVERY document out.
+    // /api/dataset filters `cancelled: {$ne:true}`, so this suite was asserting against an
+    // empty list -- and `[].every(...)` is true, so the three guards below it (details
+    // stripped, ledgers kept, guid kept) were green without ever seeing a voucher.
+    if (cond && typeof cond === 'object'
+        && ('$gte' in cond || '$lte' in cond || '$in' in cond || '$nin' in cond || '$ne' in cond)) {
       if ('$gte' in cond && !(val >= cond.$gte)) return false;
       if ('$lte' in cond && !(val <= cond.$lte)) return false;
       if ('$in' in cond && !cond.$in.includes(val)) return false;
       if ('$nin' in cond && cond.$nin.includes(val)) return false;
+      if ('$ne' in cond && val === cond.$ne) return false;
     } else if (val !== cond) return false;
   }
   return true;
@@ -86,7 +93,12 @@ function get(port, p) {
     ledgers: { Sale: 137800, 'Output CGST': 12402, 'Output SGST': 12402 },
     party_ledgers: { 'Aakriti Art Gallery Pvt Ltd': -162604 },
     details: {
-      partyGstin: '19AAICA7555R1ZQ', ewayBillNo: '811714091343', narration: '',
+      partyGstin: '19AAICA7555R1ZQ', ewayBillNo: '811714091343',
+      // The narration is the only part of a voucher that says WHY, and it is what the
+      // printable PDF prints. Tally lets it run over several lines, so the newline is
+      // part of the fixture: it has to survive the sanitiser and the API intact.
+      narration: 'Catalogue printing for the Winter 2026 exhibition.\nDelivered to Hungerford Street.',
+      otherReference: '',
       deliveryNote: '2678', buyersOrderNo: 'Qtn. No. 6645.2, Qtn. No. 6720.1', buyersOrderDate: '20260713, 20260713',
       partyAddress: ['Orbit Enclave, 1st Floor', '12/3A, Hungerford Street', ''],
       badField: 'should be dropped',
@@ -109,6 +121,9 @@ function get(port, p) {
   assert(storedInv.details.buyersOrderNo === 'Qtn. No. 6645.2, Qtn. No. 6720.1', 'buyer order no persisted');
   assert(storedInv.details.buyersOrderDate === '20260713, 20260713', 'buyer order date (paired) persisted');
   assert(!('badField' in storedInv.details), 'unknown detail field dropped by sanitizer');
+  assert(!('otherReference' in storedInv.details), 'a detail field Tally sent empty is dropped');
+  assert(storedInv.details.narration === 'Catalogue printing for the Winter 2026 exhibition.\nDelivered to Hungerford Street.',
+    'the narration is stored whole, newlines and all');
   assert(!('junk' in storedInv.details.items[0]), 'unknown item field dropped by sanitizer');
 
   // Master contacts persisted + sanitised (party contact block source).
@@ -139,6 +154,11 @@ function get(port, p) {
   // /api/voucher returns full detail.
   const one = (await get(port, '/api/voucher?branch=kol&no=CDC%2F2662%2F26-27')).body;
   assert(one.details && one.details.ewayBillNo === '811714091343', 'voucher endpoint returns details');
+  // What the printable voucher prints. It lives at details.narration, never at the top
+  // level, and a sales/purchase voucher went to press without it for months.
+  assert(one.details.narration === 'Catalogue printing for the Winter 2026 exhibition.\nDelivered to Hungerford Street.',
+    'the printable voucher is given the narration Tally holds, newlines and all');
+  assert(one.narration === undefined, 'the narration is NOT at the top level of a voucher');
   assert(one.details.items && one.details.items[0].hsn === '49119990', 'voucher endpoint returns line items');
   // Contact block enriched from the party's master contact at request time.
   assert(one.details.contactName === 'Vikram Bachawat', 'voucher endpoint enriches contact name from master');
