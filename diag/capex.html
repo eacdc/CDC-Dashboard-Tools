@@ -254,10 +254,11 @@
     if(!j) return j;
     var keep=function(r){return br==='all'||r.branch===br;};
     var rows=(j.rows||[]).filter(keep), cash=(j.cashRows||[]).filter(keep);
-    var sum=function(a,f){var t=0;for(var i=0;i<a.length;i++)t+=(Number(a[i][f])||0);return Math.round(t*100)/100;};
+    var sum=function(a,f){var t=0;for(var i=0;i<a.length;i++){if(a[i].interBranch)continue;
+      t+=(Number(a[i][f])||0);}return Math.round(t*100)/100;};
     var roll=function(a,keyOf,labOf,amtOf,cntOf){
       var m={},o=[];
-      for(var i=0;i<a.length;i++){var k=keyOf(a[i]);
+      for(var i=0;i<a.length;i++){if(a[i].interBranch)continue;var k=keyOf(a[i]);
         if(!m[k]){m[k]={key:k,label:labOf(a[i]),spend:0,disposal:0,count:0};o.push(m[k]);}
         m[k].spend=Math.round((m[k].spend+(amtOf?amtOf(a[i]):a[i].spend))*100)/100;
         m[k].disposal=Math.round((m[k].disposal+(a[i].disposal||0))*100)/100;
@@ -292,6 +293,7 @@
     out.capexPartyGroups=brOnly(j.capexPartyGroups);
     out.advanceGroups=brOnly(j.advanceGroups);
     out.nameNearMiss=brOnly(j.nameNearMiss);
+    out.neverSold=brOnly(j.neverSold);
     out.lookbackNote=j.lookbackNote||'';
     var fb=(j.capexFlow&&j.capexFlow.byBranch)||{};
     if(br==='all'){ out.capexFlow=j.capexFlow; }
@@ -682,6 +684,25 @@
          + '<td class="num">'+p2.ledgers+'</td></tr>';}
       h+='</tbody></table></div>';
     }
+    var ns=(j.neverSold||[]);
+    if(ns.length){
+      var nsT=0; for(var q4=0;q4<ns.length;q4++) nsT+=ns[q4].paid;
+      h+='<div class="note" style="margin-top:10px;border-color:#fde68a;background:#fffbeb;color:#92400e">'
+       + '<strong>'+esc(rupees(nsT))+' went to accounts that are treated as machine suppliers but have '
+       + 'not sold us a single asset</strong> in the whole period looked at. That is the signature of a '
+       + 'consumable filed in a machinery group &mdash; stitching wire, say, bought every month. It is '
+       + 'still counted, because the group Tally files an account in is a better authority than anything '
+       + 'guessed here; but if one of these is not capital, say so and it will come out.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Ledger</th><th>Group</th><th>Counted because</th>'
+       + '<th>Br</th><th class="num">Paid in this period</th></tr></thead><tbody>';
+      for(var q5=0;q5<ns.length;q5++){var r5=ns[q5];
+        h+='<tr><td>'+esc(r5.ledger)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(r5.group)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(VIA_SHORT[r5.via]||r5.via||'')+'</td>'
+         + '<td class="mono">'+esc(r5.branch)+'</td>'
+         + '<td class="num">'+money(r5.paid)+'</td></tr>';}
+      h+='</tbody></table></div>';
+    }
     var nm=(j.nameNearMiss||[]);
     if(nm.length){
       h+='<div class="note" style="margin-top:10px"><strong>Names that say machinery but were refused.</strong> '
@@ -741,7 +762,8 @@
 
     // A row that is purely a transfer belongs in its own section below, not in the list of
     // what was bought and sold -- it would otherwise sit there with a dash in both columns.
-    var entry=j.rows.filter(function(r){return r.spend>0||r.disposal>0;});
+    var entry=j.rows.filter(function(r){return (r.spend>0||r.disposal>0)&&!r.interBranch;});
+    var ibRows=j.rows.filter(function(r){return r.interBranch&&(r.spend>0||r.disposal>0);});
     var noNarr=0;
     for(var q=0;q<entry.length;q++) if(!entry[q].narration) noNarr++;
     h+='<section><h2>EVERY ENTRY, NEWEST FIRST</h2><div class="body">'
@@ -804,6 +826,30 @@
          }
        })
      + '</div></section>';
+
+    if(ibRows.length){
+      var ibT=0; for(var z=0;z<ibRows.length;z++) ibT+=(ibRows[z].spend||0)+(ibRows[z].disposal||0);
+      h+='<section><h2>MOVED BETWEEN OUR TWO COMPANIES &mdash; NOT A GROUP PURCHASE</h2><div class="body">'
+       + '<div class="note">These assets changed hands between Kolkata and Ahmedabad. The group owned them '
+       + 'the day before, so none of this is in the figures above &mdash; counting it would put the same '
+       + 'machine in twice, once when it was really bought from its maker and again when it crossed '
+       + 'between the companies. Recognised by the other side of the voucher being an inter-branch '
+       + 'account (<em>Branch / Divisions</em>), which is how the year-on-year panel has always dropped '
+       + 'them.</div>'
+       + '<div class="scroll"><table><thead><tr><th>Date</th><th>Item</th><th>Group</th><th>To</th>'
+       + '<th>Voucher</th><th>From</th><th class="num">Amount</th><th>Note from Tally</th>'
+       + '</tr></thead><tbody>';
+      for(var z2=0;z2<ibRows.length;z2++){var ri=ibRows[z2];
+        h+='<tr><td class="mono">'+esc(fmt8(ri.date))+'</td><td>'+esc(ri.asset)+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(ri.group)+'</td>'
+         + '<td class="mono">'+esc(ri.branch)+'</td>'
+         + '<td class="mono" style="white-space:nowrap">'+vcell(ri)+'</td>'
+         + '<td>'+esc(ri.party||'')+'</td>'
+         + '<td class="num">'+money((ri.spend||0)+(ri.disposal||0))+'</td>'
+         + '<td class="muted" style="font-size:11.5px">'+esc(ri.narration||'')+'</td></tr>';}
+      h+='<tr class="tot"><td colspan="6">Total moved between the companies</td>'
+       + '<td class="num">'+money(ibT)+'</td><td></td></tr></tbody></table></div></div></section>';
+    }
 
     // Capitalisation: WIP credited, the finished asset debited, same voucher, same money.
     // Neither a purchase nor a sale, and shown apart so it cannot be mistaken for either.
@@ -873,6 +919,8 @@
      + '<strong>2. Bought or sold.</strong> A debit to an asset is a purchase, a credit is a disposal, and '
      + 'the two are never netted. Depreciation and repairs are expenses. An accumulated-depreciation '
      + 'ledger is excluded by name: writing an asset down is not buying one.<br>'
+     + '<strong>3a. The other company is not a supplier.</strong> An asset that moved between Kolkata '
+     + 'and Ahmedabad is a transfer, not a group purchase &mdash; it is listed apart and in no total.<br>'
      + '<strong>3. Moved, not bought.</strong> Where one voucher debits one asset and credits another &mdash; '
      + 'capitalising work in progress &mdash; that much is a transfer and is in neither figure.<br>'
      + '<strong>4. Capex for the period.</strong> Assets capitalised, plus the rise in capital '

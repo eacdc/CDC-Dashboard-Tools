@@ -564,6 +564,73 @@ const V = (branch, date, pl, ld, extra) => {
   assert((half.cashRows || []).every((r) => r.kind !== 'advance_done'),
     'and in a window that ENDS before the machine arrived, neither advance is settled yet');
 
+  // ==========================================================================
+  // THE OTHER COMPANY IS NOT A SUPPLIER, and a monthly consumable in a machinery group
+  // is not a machine. Both found by reading the page's own output against itself: a die
+  // cutter Ahmedabad bought and then sent to Kolkata was counted twice, and a stitching
+  // wire supplier had over a crore of "capex" without one asset to show for it.
+  // ==========================================================================
+  fakeDb.collection('masters').docs.length = 0;
+  fakeDb.collection('vouchers').docs.length = 0;
+  fakeDb.collection('masters').docs.push({
+    branch: 'kol',
+    ledgers: { 'Fixed Assets 2026-27 (Die Cutter)': 'Gross Block (Plant & Machinery)',
+      'CDC Printers Pvt.Ltd.(Ahmedabad)': 'Branch / Divisions',
+      'Taiyebji Wires Pvt Ltd': 'Sundry Creditor - Machinery',
+      'Smitkal Machinery Co.': 'Sundry Creditor - Machinery',
+      'HDFC Current A/c': 'Bank Accounts' },
+    groups: { 'Gross Block (Plant & Machinery)': 'Gross Block', 'Gross Block': 'Fixed Assets',
+      'Fixed Assets': 'Capital Account',
+      'Branch / Divisions': 'Capital Account',
+      'Sundry Creditor - Machinery': 'Sundry Creditors',
+      'Sundry Creditors': 'Current Liabilities', 'Current Liabilities': 'Capital Account',
+      'Bank Accounts': 'Current Assets', 'Current Assets': 'Capital Account',
+      'Capital Account': null },
+    ids: {},
+  });
+  const V4 = fakeDb.collection('vouchers').docs;
+  // A real purchase from a real machine supplier.
+  V4.push(V('kol', '20260423', { 'Smitkal Machinery Co.': 780000 },
+    { 'Fixed Assets 2026-27 (Die Cutter)': -780000 },
+    { type: 'Purchase - Fixed Assets', party: 'Smitkal Machinery Co.', narration: 'platen die cutter' }));
+  // The SAME machine, taken in from the other company months later.
+  V4.push(V('kol', '20260930', { 'CDC Printers Pvt.Ltd.(Ahmedabad)': 703798 },
+    { 'Fixed Assets 2026-27 (Die Cutter)': -703798 },
+    { type: 'Purchase - Fixed Assets', party: 'CDC Printers Pvt.Ltd.(Ahmedabad)',
+      narration: 'Used Platen Die Cutting Machine Transfered from Ahmedabad Branch' }));
+  // Stitching wire, every month, from a supplier in the machinery creditors group.
+  for (const d of ['20260410', '20260510', '20260610']) {
+    V4.push(V('kol', d, { 'HDFC Current A/c': 1000000, 'Taiyebji Wires Pvt Ltd': -1000000 }, {},
+      { type: 'Bank Payments', narration: 'Ref Bill No.TWP2627' }));
+  }
+
+  // ...and paid for, so the control case below is a real one rather than a party with
+  // no payments at all.
+  V4.push(V('kol', '20260520', { 'HDFC Current A/c': 780000, 'Smitkal Machinery Co.': -780000 }, {},
+    { type: 'Bank Payments', narration: 'paid Smitkal' }));
+
+  const ibJ = await get('/api/capex?branch=kol&from=20260401&to=20261031');
+  assert(near(ibJ.additions, 780000),
+    'a machine taken in from our OTHER company is not a group purchase -- the group owned it'
+    + ' the day before, and counting it would put the same die cutter in twice (got '
+    + ibJ.additions + ')');
+  assert(near(ibJ.interBranchTotal, 703798)
+    && (ibJ.rows || []).some((r) => r.interBranch && /Transfered from Ahmedabad/.test(r.narration)),
+    'it is listed apart instead, with the voucher, so nothing goes missing in silence');
+  assert(!(ibJ.byAsset || []).some((x) => x.spend > 780000),
+    'and no rollup carries it either, or the page would disagree with its own total');
+
+  const taiy = (ibJ.neverSold || []).find((x) => /Taiyebji/.test(x.ledger));
+  assert(taiy && near(taiy.paid, 3000000),
+    'a supplier in a machinery creditors group that has never sold us a single asset is'
+    + ' NAMED with what was paid to it -- that is what a monthly consumable filed in a'
+    + ' machine group looks like (got ' + JSON.stringify(taiy) + ')');
+  assert(!(ibJ.neverSold || []).some((x) => /Smitkal/.test(x.ledger)),
+    'while a supplier that did sell us a machine raises no such question');
+  assert(near(ibJ.cashOut, 3000000 + 780000),
+    'and it is still COUNTED, because the group Tally files an account in is a better'
+    + ' authority than anything guessed here -- the doubt is reported, not acted on');
+
   server.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall good');
   process.exit(fails ? 1 : 0);
