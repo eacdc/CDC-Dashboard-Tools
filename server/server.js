@@ -2330,6 +2330,7 @@ app.get('/api/capex', async (req, res) => {
     const assetOf = {};                      // br -> { ledger: group }
     const chainOf = {};                      // br -> { ledger: lowercased chain, for matching }
     const dispOf = {};                       // br -> { ledger: chain as Tally spells it }
+    const ibOf = {};                         // br -> { ledger: 1 } for Branch / Divisions
     const excluded = new Map();              // group chain -> how many ledgers it holds
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
@@ -2365,6 +2366,11 @@ app.get('/api/capex', async (req, res) => {
       assetOf[br] = map;
       chainOf[br] = chains;
       dispOf[br] = disp;
+      // THE OTHER COMPANY IS NOT A SUPPLIER. Tally files the inter-branch account under
+      // `Branch / Divisions`, which is how the year-on-year fold already drops it.
+      const ibm = {};
+      for (const ln of Object.keys(chains)) if (chains[ln].indexOf('branch / divisions') >= 0) ibm[ln] = 1;
+      ibOf[br] = ibm;
     }
     // CASH OUT ON CAPEX DOES NOT PASS THROUGH THE ASSET LEDGER. A machine is paid for
     // long before it is capitalised -- an advance against a proforma, then the balance to
@@ -2444,6 +2450,7 @@ app.get('/api/capex', async (req, res) => {
     const rows = [];
     const cashRows = [];
     let additions = 0, disposals = 0, movedTotal = 0, cashOut = 0, unmatchedSupplier = 0;
+    let interBranchTotal = 0;
     // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
     // Every rule that tries to decide which SUPPLIER is a machinery supplier has been
     // wrong in both directions -- a freight forwarder counted in full, a machine maker
@@ -2611,6 +2618,14 @@ app.get('/api/capex', async (req, res) => {
         }
       }
 
+      // A MACHINE MOVED FROM ONE OF OUR COMPANIES TO THE OTHER IS NOT A PURCHASE. The
+      // group owned it the day before. Kolkata took a die cutter off Ahmedabad and four
+      // machines went the other way, and each was counted as bought -- on top of the
+      // original purchase from the real supplier, so the same press appeared twice.
+      const ibm = ibOf[v.branch] || {};
+      let interBranch = false;
+      for (const k of Object.keys(all)) if (ibm[k] && Math.abs(all[k]) >= 1) { interBranch = true; break; }
+
       const fl = flowOf(v.branch);
       for (const k of Object.keys(all)) {
         const pp = pm[k];
@@ -2666,14 +2681,15 @@ app.get('/api/capex', async (req, res) => {
         const sold = amt > 0 ? gross * keep : 0;
         const moved = Math.round(gross * (1 - keep) * 100) / 100;
         if (spend && spend < min) continue;
-        if (spend) {
+        if (spend && !interBranch) {
           additions = Math.round((additions + spend) * 100) / 100;
           const f2 = flowOf(v.branch);
           f2.additions = Math.round((f2.additions + spend) * 100) / 100;
         }
-        if (sold) disposals = Math.round((disposals + sold) * 100) / 100;
+        if (sold && !interBranch) disposals = Math.round((disposals + sold) * 100) / 100;
+        if (interBranch) interBranchTotal = Math.round((interBranchTotal + spend + sold) * 100) / 100;
         if (moved) movedTotal = Math.round((movedTotal + moved) * 100) / 100;
-        rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln],
+        rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln], interBranch,
           spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
           moved, movedOut: moved ? (amt > 0) : false,
           no: v.no || '', type: v.type || '',
@@ -2690,6 +2706,7 @@ app.get('/api/capex', async (req, res) => {
     const roll = (keyOf, labelOf) => {
       const m = new Map();
       for (const r of rows) {
+        if (r.interBranch) continue;          // a transfer between our own companies
         const k = keyOf(r);
         const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
         e.spend = Math.round((e.spend + r.spend) * 100) / 100;
@@ -2746,6 +2763,29 @@ app.get('/api/capex', async (req, res) => {
       if (!advStillOpen.has(r.branch + '|' + r.paidFor + '|' + r.guid)) r.kind = 'advance_done';
     }
 
+    // A MACHINE SUPPLIER THAT HAS NEVER SOLD US A MACHINE. The group and name rules take
+    // a party's word for it and then count every rupee through the account, so a monthly
+    // consumable filed in a machinery creditors group rides along for years -- stitching
+    // wire at 5-15 L a month came to over a crore of "capex" without one asset to show
+    // for it. Nothing is silently dropped, because Tally's own group is a better
+    // authority than a guess here; but a supplier that has sold us nothing over the whole
+    // period looked at is named, with what was paid, so it can be settled either way.
+    const paidTo = {};
+    for (const r of cashRows) {
+      if (r.via === 'sold') continue;        // recognised BY a sale, so the question is moot
+      const k = r.branch + '|' + r.paidFor;
+      paidTo[k] = Math.round(((paidTo[k] || 0) + r.amount) * 100) / 100;
+    }
+    const neverSold = Object.keys(paidTo)
+      .filter((k) => !seenSupplier[k] && paidTo[k] > 0)
+      .map((k) => {
+        const br = k.slice(0, k.indexOf('|')), ln = k.slice(k.indexOf('|') + 1);
+        const pp = (partyOf[br] || {})[ln] || {};
+        return { branch: br, ledger: ln, paid: paidTo[k], kind: pp.kind || '', via: pp.via || '',
+          group: pp.group || '' };
+      })
+      .sort((a, b) => b.paid - a.paid);
+
     cashRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (b.amount - a.amount));
     const cashRoll = (keyOf, labelOf) => {
       const m = new Map();
@@ -2766,9 +2806,9 @@ app.get('/api/capex', async (req, res) => {
       scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
       rows, count: rows.length,
       additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
-      moved: movedTotal,
+      moved: movedTotal, interBranchTotal,
       cashOut, cashRows, cashByMonth, cashByKind, capexPartyGroups, advanceGroups,
-      unmatchedSupplier, nameNearMiss, lookbackNote,
+      unmatchedSupplier, nameNearMiss, lookbackNote, neverSold,
       capexFlow: (() => {
         const r2 = (n) => Math.round(n * 100) / 100;
         const t = { additions: 0, advanceNet: 0, creditorNet: 0 };

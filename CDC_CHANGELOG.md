@@ -1,6 +1,30 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.80 (server, diag) — November 2026 — The other company is not a supplier, and a wire supplier is not a machine supplier
+
+Two faults found by reading the page's own two lists against each other.
+
+**A machine moved between Kolkata and Ahmedabad was counted as bought.** The group owned it
+the day before. A platen die cutter Ahmedabad bought from Smitkal in February was sent to
+Kolkata in September and counted again there; four more went the other way through the
+inter-branch account — about ₹1 Cr of machines appearing twice in a consolidated total, once
+when really bought and again when they crossed between the companies. A row whose voucher
+has an inter-branch counterparty (`Branch / Divisions`, the same test the year-on-year panel
+has always used) is now kept out of additions, disposals and every rollup, and listed in its
+own section with the voucher.
+
+**A supplier counted as capital that has never sold us an asset is now named.** Stitching
+wire bought every month from a supplier filed in a machinery creditors group came to over a
+crore of "capex" without a single fixed asset to show for it — the pattern is unmistakable
+once the payment list and the purchase list are put side by side, and nothing on the page
+was putting them side by side.
+
+The page now does: every account treated as a machine supplier that received money in the
+period but appears nowhere as the seller of an asset is listed with the total paid to it.
+It is **still counted** — the group Tally files an account in is a better authority than
+anything guessed here — but the doubt is on the page instead of in the total.
+
 ## v2.79 (server, diag) — November 2026 — "Unexpected token '<'": the capex query was scanning the whole decade
 
 The capex page started failing with `Unexpected token '<', "<!DOCTYPE "... is not valid

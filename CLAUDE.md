@@ -382,6 +382,25 @@ disposal, and the transfer is reported in its own section (`moved`, `movedOut`) 
 in either figure. A capitalisation journal nets to exactly nothing, which is the right
 answer -- the company owns what it already owned, under a different name.
 
+**THE OTHER COMPANY IS NOT A SUPPLIER.** A ledger whose chain holds `Branch / Divisions`
+is the inter-branch account -- the same test `yoySummary` uses to drop it. Kolkata took a
+platen die cutter off Ahmedabad and four machines went the other way, and every one was
+counted as bought, on top of the original purchase from its real maker, so the same press
+appeared twice in a consolidated total. A row whose voucher has an inter-branch
+counterparty is flagged `interBranch`, kept out of additions, disposals AND every rollup
+(the `roll()` helper skips them, or the page would disagree with its own total), and listed
+in its own section. `sliceFor` skips them too, which is what keeps the browser's check
+against the server honest.
+
+**A MACHINE SUPPLIER THAT HAS NEVER SOLD US A MACHINE is named, not dropped.** The group
+and name rules take an account's word for it and then count every rupee through it, so a
+monthly consumable filed in a machinery creditors group rides along for years -- stitching
+wire at 5-15 L a month came to over a crore of "capex" with not one asset to show for it.
+`neverSold` lists every party recognised by group or name (not by `via:'sold'`, where the
+question is moot) that received money in the window and appears nowhere in `seenSupplier`.
+It is still COUNTED: the group Tally files an account in is a better authority than anything
+guessed here, so the doubt is reported and the user decides.
+
 **A warning nobody can act on trains the reader to skip the ones they can.** Two on the loan
 page were doing that. Thirty interest, insurance and subvention ledgers ("Interest on Term
 Loan with HDFC Bank") were listed as near misses under *"if this is a real loan, move it
