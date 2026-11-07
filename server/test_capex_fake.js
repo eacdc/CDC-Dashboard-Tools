@@ -631,6 +631,52 @@ const V = (branch, date, pl, ld, extra) => {
     'and it is still COUNTED, because the group Tally files an account in is a better'
     + ' authority than anything guessed here -- the doubt is reported, not acted on');
 
+  // ==========================================================================
+  // AS THE BALANCE SHEET SHOWS IT. Tally already answers "what have we paid for machines
+  // that have not come" -- it is the closing balance of the advance accounts under
+  // Current Assets. Rebuilding that from the payments inside a window can only ever see
+  // the window; the balance carries everything.
+  // ==========================================================================
+  fakeDb.collection('masters').docs.length = 0;
+  fakeDb.collection('vouchers').docs.length = 0;
+  fakeDb.collection('masters').docs.push({
+    branch: 'kol',
+    ledgers: { 'Advance for Machinery - Bindex': 'Capital Advances',
+      'Plant': 'Plant & Machinery', 'Depreciation': 'Indirect Expenses',
+      'Accumulated Depreciation': 'Plant & Machinery',
+      'HDFC Current A/c': 'Bank Accounts' },
+    groups: { 'Capital Advances': 'Current Assets', 'Plant & Machinery': 'Fixed Assets',
+      'Fixed Assets': 'Capital Account', 'Current Assets': 'Capital Account',
+      'Indirect Expenses': 'Revenue Account', 'Bank Accounts': 'Current Assets',
+      'Capital Account': null, 'Revenue Account': null },
+    ids: {},
+    // Tally-raw: an asset carries a Dr, which is -ve. 2 Cr still out against machines.
+    closing: { 'Advance for Machinery - Bindex': -20000000 },
+    closingAsOn: '20261031',
+  });
+  const V5 = fakeDb.collection('vouchers').docs;
+  // Only 50 L of that was paid inside the window; the rest went out years earlier.
+  V5.push(V('kol', '20260615', { 'HDFC Current A/c': 5000000,
+    'Advance for Machinery - Bindex': -5000000 }, {}, { type: 'Bank Payments' }));
+  // A depreciation charge: an expense, never capex, but it belongs beside the additions.
+  V5.push(V('kol', '20260930', {}, { 'Depreciation': -1750000, 'Accumulated Depreciation': 1750000 },
+    { type: 'Journal', narration: 'depreciation for the period' }));
+
+  const bs = await get('/api/capex?branch=kol&from=20260401&to=20261031');
+  assert(near(bs.advanceOutstanding.total, 20000000),
+    'what is still out against machines that have not come is TALLY\'S OWN closing balance'
+    + ' -- 2 Cr, not the 50 L that happens to have been paid inside this window (got '
+    + bs.advanceOutstanding.total + ')');
+  assert(bs.advanceOutstanding.asOn === '20261031',
+    'and it is dated, because a balance means nothing without the day it stands on');
+  assert(near(bs.depreciation, 1750000),
+    'depreciation for the period is reported beside the additions, the way a balance sheet'
+    + ' reads (got ' + bs.depreciation + ')');
+  assert(near(bs.additions, 0) && !(bs.rows || []).some((r) => /Depreciation/.test(r.asset)),
+    'but it is NOT capex and reaches no addition: writing an asset down is not buying one');
+  assert(!(bs.rows || []).some((r) => r.disposal > 0),
+    'and crediting accumulated depreciation is not a disposal of the machine either');
+
   server.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall good');
   process.exit(fails ? 1 : 0);

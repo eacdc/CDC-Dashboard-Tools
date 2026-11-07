@@ -1,6 +1,27 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.81 (server, diag) — November 2026 — As the balance sheet shows it
+
+Tally's balance sheet already answers two of these questions cleanly, so the page now reads
+its figures instead of rebuilding them. A new section at the top of the money half:
+
+- **Assets added this period** — what reached the fixed-asset ledgers.
+- **Advances out — machines not come**, dated, taken straight from the closing balance of
+  the capital-advance accounts under Current Assets. Tally's own figure.
+- **Depreciation this period** — an expense, never capex, shown because the three belong
+  together.
+
+The advance figure matters most. It was being inferred from the payments inside the window,
+which can only ever see the window — an advance paid three years ago for a machine still not
+delivered appeared in Tally and in no reconstruction here. The closing balance carries
+everything still out, and it is dated, because a balance means nothing without the day it
+stands on. If any advance account has no closing stored, the page says how many rather than
+letting a half-pulled master read as a small figure.
+
+Depreciation is matched by ledger name, with the accumulated-depreciation contra under Fixed
+Assets excluded so the charge is counted once and never as a disposal of the machine.
+
 ## v2.80 (server, diag) — November 2026 — The other company is not a supplier, and a wire supplier is not a machine supplier
 
 Two faults found by reading the page's own two lists against each other.
