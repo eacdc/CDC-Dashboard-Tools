@@ -588,6 +588,31 @@ plus every posting since -- MINUS any posting after the date asked for but befor
 which the opening already contains. Both directions matter. Where the window happens to end on
 the day `masters.closing` stands, the page compares the two and says whether it reconciles.
 
+**THE ADVANCE *MOVEMENT* USES NO OPENING BALANCE AT ALL, and the advance *balance* exists for
+exactly one date.** `capexFlow.advanceNet` is the sum of the postings on the capital-advance
+ledgers inside the window (`fl.advanceNet -= all[k]`, per voucher) -- nothing is read from
+`masters.opening`. So it is complete only where the vouchers are, and it is understated by
+whatever happened before the oldest one held. `advanceOutstanding` IS a balance, and it comes
+from `masters.closing`, which stands on ONE day: `closingAsOn`, the end of the period of the
+last LIVE pull. There is no stored advance balance for any other date, and a back-fill of an
+old year deliberately does not write `opening`/`closing` (ingest.js) because one doc per
+branch would have it overwrite the current ones. **A balance "as on 1 April 2024" therefore
+does not exist in this database** -- the figure for such a window is movement, not a balance.
+Storing balances per branch PER FINANCIAL YEAR (each FY is its own Tally company,
+`... (Kolkata) - 2025-26`, and the extractor already asks for `OPENINGBALANCE`/`CLOSINGBALANCE`
+by date) is the fix, and it would retire this limitation for debtors, creditors and loans too.
+
+**A BALANCE WALKED BACK NEEDS THE STRETCH IT WALKS, and the gap is COUNTED, not assumed.**
+`/api/funds` carries Tally's opening to the start of the window posting by posting, so the
+span between `openingAsOn` and the window start must be covered by vouchers held. Where the
+oldest voucher is newer than that, the opening is wrong by whatever came first -- silently,
+because every row still adds up. Both pages now measure the uncovered stretch in DAYS and
+shout only past 31 of them: 1 April is a holiday and the books open a few days in, so a
+window opening on the 1st against a first voucher on the 10th is missing nothing, and
+shouting about it would train the reader to skip the warning that matters. Kolkata is
+back-filled to 2015-16 and Ahmedabad is not, so a window can be right for one company and a
+year short for the other -- which is exactly the case the note exists for.
+
 **Consolidated drops the inter-branch accounts** filed under Sundry Debtors or Creditors -- the
 same `Branch / Divisions` test everything else here uses. One company's receivable from the
 other is the other's payable and the group is owed nothing, so `kol` and `ahm` deliberately do

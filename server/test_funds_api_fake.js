@@ -145,6 +145,9 @@ const V = (branch, date, pl, ld, extra) => ({
   });
 
   const vs = fakeDb.collection('vouchers').docs;
+  // The books open on the 2nd: 1 April is a holiday. Touches no trade, loan or asset
+  // ledger, so it changes no figure here -- it is the fixture's oldest voucher, nothing more.
+  vs.push(V('kol', '20260402', {}, { 'Sale - Printing': 50000, 'Rounding Off': -50000 }));
   // Over the year: customers come to owe 3 Cr more, suppliers 1 Cr more.
   vs.push(V('kol', '20260901', { 'Aakriti Art Gallery': -3 * CR }, { 'Sale - Printing': 3 * CR }));
   vs.push(V('kol', '20261001', { 'Pinghu Bindex Machinery': 1 * CR }, { 'Plant & Machinery': -1 * CR }));
@@ -218,6 +221,23 @@ const V = (branch, date, pl, ld, extra) => ({
     'but consolidated drops the inter-branch account: the group is not owed money by itself');
   assert((all.notes || []).some((x) => /inter-branch/i.test(x)),
     'and the page says so, rather than leaving a reader to wonder where 7 Cr went');
+
+  // ---- A WINDOW THAT OPENS BEFORE THE VOUCHERS DO --------------------------
+  // The opening is Tally's balance walked backwards posting by posting, so starting
+  // earlier than the oldest voucher lands on a balance that is wrong by everything
+  // before it -- while every row still adds up, which is what makes it dangerous.
+  const early = await get('/api/funds?branch=kol&from=20200401&to=20270331');
+  assert(early.ok === true, 'a window reaching back past the data still answers');
+  assert((early.notes || []).some((x) => /BEFORE THE VOUCHERS DO/.test(x)),
+    'but it SAYS so, rather than quietly showing an opening that is years short');
+  assert((early.notes || []).some((x) => /days later/.test(x)),
+    'and COUNTS the uncovered stretch, since how wide it is decides whether it matters');
+  // A WINDOW OPENING A FEW DAYS BEFORE THE FIRST VOUCHER IS NORMAL -- 1 April is a
+  // holiday and the books open a few days in. Shouting about that teaches the reader
+  // to skip the warning that matters.
+  const sameYear = await get('/api/funds?branch=kol&from=20260401&to=20270331');
+  assert(!(sameYear.notes || []).some((x) => /BEFORE THE VOUCHERS DO/.test(x)),
+    'a window opening the day before the books do says nothing, because nothing is missing');
 
   // ---- what it rests on ----------------------------------------------------
   fakeDb.collection('masters').docs.push({

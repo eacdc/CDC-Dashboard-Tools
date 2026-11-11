@@ -313,9 +313,25 @@
     }
 
     if(j.notes&&j.notes.length){
-      h+='<section><h2>WHAT THESE FIGURES REST ON</h2><div class="body"><div class="note">';
-      for(var n=0;n<j.notes.length;n++) h+='&bull; '+esc(j.notes[n])+'<br>';
-      h+='</div></div></section>';
+      // A window that opens before the vouchers do makes every balance here wrong while
+      // every row still adds up, so it is not a footnote.
+      var hard=j.notes.filter(function(x){return /BEFORE THE VOUCHERS DO/.test(x);});
+      var soft=j.notes.filter(function(x){return !/BEFORE THE VOUCHERS DO/.test(x);});
+      if(hard.length){
+        h+='<section><h2>THIS WINDOW STARTS BEFORE THE DATA DOES</h2><div class="body">'
+         + '<div class="note" style="border:1px solid #fecaca;background:#fef2f2;color:#991b1b;padding:8px;border-radius:6px">';
+        for(var hh=0;hh<hard.length;hh++) h+='&bull; '+esc(hard[hh])+'<br>';
+        h+='<br><strong>An opening here is Tally&rsquo;s own balance walked backwards to the start of the '
+         + 'window, posting by posting.</strong> Start the window before the oldest voucher and the walk '
+         + 'stops early, so the opening is wrong by everything that happened before it &mdash; and every '
+         + 'row on this page still adds up, which is why it is said here rather than left to be noticed.'
+         + '</div></div></section>';
+      }
+      if(soft.length){
+        h+='<section><h2>WHAT THESE FIGURES REST ON</h2><div class="body"><div class="note">';
+        for(var n=0;n<soft.length;n++) h+='&bull; '+esc(soft[n])+'<br>';
+        h+='</div></div></section>';
+      }
     }
 
     h+='<section><h2>WHAT THIS PAGE DOES NOT SAY</h2><div class="body"><div class="note" style="line-height:1.75">'
