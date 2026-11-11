@@ -31,6 +31,7 @@ npm run test:proj              # what a party still owes: the receivables engine
                                # lifted out of the portal (projEngine.js) and run in Node
 npm run test:loans             # loan movement arithmetic, and /api/loans end to end
 npm run test:capex             # fixed-asset additions: what, when, and how funded
+npm run test:funds             # funds flow: the arithmetic, then /api/funds end to end
 npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
@@ -548,6 +549,49 @@ and Projected, and from the landing page before any upload. The portal embeds
 copy of the loan arithmetic in `portal/index.html` is the drift `plEngine.js` /
 `projEngine.js` exist to prevent. Both pages fetch `/api/...` at an absolute path, which is
 what lets them work equally standalone and embedded.
+
+`/diag/funds.html` (`GET /api/funds`) is the funds flow: where the money went over a period
+and how much of it was borrowed. Three balances read off Tally's own accounts -- what
+customers owe us, what we owe suppliers, what we owe banks -- plus what was capitalised. The
+CHANGE in each says where funds were absorbed and where they came from.
+
+**It calls `computeLoans` and `computeCapex`, and must keep doing so.** Those were lifted out
+of `/api/loans` and `/api/capex` for this page: a second derivation of "what was capitalised"
+or "what is outstanding" is a second answer waiting to disagree with the page that owns the
+question, and the capex rules alone took four wrong answers to get right. The routes are now
+thin wrappers over those functions. `npm run test:funds` asserts the capex half IS the capex
+page's figure.
+
+**A receivable arrives from Tally NEGATIVE** -- it is a Dr -- and the sign is turned exactly
+once, at the edge, in `fundsFlow.js`. Receivables are reported Dr-positive and payables and
+loans Cr-positive, for the reason the loan page gives: "payables: -4,10,00,000" is a figure
+that gets misread. One missing turn here puts what customers owe us on the wrong side of the
+statement and inverts the whole thing.
+
+**WHICH COLUMN A LINE FALLS IN IS DECIDED BY ITS SIGN, never by what the line is.** Trade that
+releases money funds the business as surely as a loan does, and a year of repaying debt
+absorbs funds as surely as a machine. A statement that files each line on a fixed side
+reports a year of deleveraging as though nothing happened -- `side()` in `fundsFlow.js`, and a
+test drives the mirror-image year.
+
+**STOCK IS NOT IN IT, deliberately**, because the inventory in Tally is not maintained closely
+enough to put a figure on, and a working-capital statement carrying a number nobody trusts is
+worse than one that says it has none. Cash, taxes and the rest of the balance sheet are out
+too. **So `residual` is a BALANCING FIGURE and is never to be labelled profit** -- it is what
+the tracked uses cost beyond the tracked borrowing and nothing more. It appears on the page as
+*met from within the business*, with the caveat beside it, so the two columns visibly add up;
+calling it profit would be a claim neither the file nor the page can support.
+
+**The opening stands at the close of the day BEFORE the window starts** (`dayBefore`), and each
+balance is built the way the loan page builds one: Tally's own opening on the day it stands,
+plus every posting since -- MINUS any posting after the date asked for but before that day,
+which the opening already contains. Both directions matter. Where the window happens to end on
+the day `masters.closing` stands, the page compares the two and says whether it reconciles.
+
+**Consolidated drops the inter-branch accounts** filed under Sundry Debtors or Creditors -- the
+same `Branch / Divisions` test everything else here uses. One company's receivable from the
+other is the other's payable and the group is owed nothing, so `kol` and `ahm` deliberately do
+not add to `all`, and the page says so.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
