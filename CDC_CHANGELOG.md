@@ -1,6 +1,28 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.89 (server, diag) — November 2026 — A window that reaches back further than the data now says so
+
+Asking either page for a window that starts before the oldest voucher held produced figures
+that were quietly short, with every row still adding up — nothing on screen said the data
+did not reach that far. Both now say it:
+
+- **Funds flow** carries Tally's own balance back to the start of the window posting by
+  posting, so it needs vouchers over that whole stretch. Where it does not have them, the
+  page leads with it instead of footnoting it.
+- **Capex** computes the change in advances purely from the postings inside the window — no
+  opening balance enters that figure at all — so a window reaching back past the data
+  understates it. The page now says so.
+
+**The gap is counted in days, and only a real one is reported.** 1 April is a holiday and
+the books open a few days into the year, so a window opening on the 1st against a first
+voucher on the 10th is missing nothing; warning about that would teach the reader to skip
+the warning that matters. Past a month it is reported with the number of days, because how
+wide the gap is decides whether it can explain anything.
+
+This matters most across the two companies: Kolkata is back-filled to 2015-16 and Ahmedabad
+is not, so a consolidated window can be complete for one and a year short for the other.
+
 ## v2.88 (server, diag, portal) — November 2026 — Funds flow: where the money went, and how much of it was borrowed
 
 A new page, **Funds flow**, beside Loans and Capex in the portal's own top bar and on the

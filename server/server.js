@@ -2572,6 +2572,25 @@ async function computeCapex(db, { branch, from, to, min }) {
   // balance sheet under Current Assets, and it answers "what have we paid for machines
   // that have not come" without depending on any rule here. Rebuilding it from the
   // payments in a window could only ever see the window; the balance carries everything.
+  // The advance MOVEMENT is the postings in the window and nothing else -- no opening
+  // balance enters it -- so it is understated by exactly whatever we do not hold. Said
+  // here because "change in advances" is read as a complete figure, and over a window
+  // reaching back past the oldest voucher it is not.
+  const coverage = [];
+  for (const br of branches) {
+    const f0 = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+    const first0 = f0.length ? f0[0].date : null;
+    if (first0 && from < first0) {
+      // Counted, not eyeballed. A few days at the head of a window is the books opening
+      // after the 1st and means nothing; a year is a year of this page's figures missing.
+      const days = Math.round((Date.UTC(+first0.slice(0, 4), +first0.slice(4, 6) - 1, +first0.slice(6, 8))
+        - Date.UTC(+from.slice(0, 4), +from.slice(4, 6) - 1, +from.slice(6, 8))) / 86400000);
+      if (days > 31) {
+        coverage.push(`${br}: this window starts ${from}, and the oldest ${br} voucher held is ${first0} -- ${days} days later. Anything capitalised or advanced in that stretch is in no figure here.`);
+      }
+    }
+  }
+
   const advOut = [];
   let advOutTotal = 0, advAsOn = null, advMissing = 0;
   for (const br of branches) {
@@ -2597,6 +2616,7 @@ async function computeCapex(db, { branch, from, to, min }) {
     additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
     moved: movedTotal, interBranchTotal, depreciation, depreciationByBranch: depBr,
     advanceOutstanding: { asOn: advAsOn, total: advOutTotal, rows: advOut, missing: advMissing },
+    coverage,
     advanceGroups,
     capexFlow: (() => {
       const r2 = (n) => Math.round(n * 100) / 100;
@@ -2753,6 +2773,27 @@ app.get('/api/funds', async (req, res) => {
       const first = f.length ? f[0].date : null;
       if (openings[br].asOn && first && first > openings[br].asOn) {
         notes.push(`${br}: the oldest voucher held (${first}) is newer than the day Tally's openings stand on (${openings[br].asOn}), so anything posted in between is in neither half of these balances.`);
+      }
+      // THE WALK NEEDS THE STRETCH IT WALKS. An opening here is Tally's own balance on
+      // the day it stands, carried to the start of the window posting by posting -- so
+      // the stretch between those two days has to be covered by vouchers we hold. If the
+      // oldest voucher is newer than the start of that stretch, the walk begins late and
+      // the opening is wrong by whatever happened first, while every row still adds up.
+      //
+      // HOW WIDE the gap is decides whether it can explain anything, so it is counted
+      // rather than eyeballed off two dates -- the same reasoning the loan page applies
+      // to its own gap. A few days is normal and means nothing: 1 April is a holiday and
+      // the books open a few days into the year, so a window opening on the 1st when the
+      // first voucher is on the 10th is not missing anything. A year is another matter,
+      // and that is the real case here -- Kolkata is back-filled to 2015 and Ahmedabad is
+      // not, so a window can be right for one company and a year short for the other.
+      const walkFrom = openings[br].asOn ? (out.openAt < openings[br].asOn ? out.openAt : openings[br].asOn) : out.openAt;
+      if (first && walkFrom < first) {
+        const days = Math.round((Date.UTC(+first.slice(0, 4), +first.slice(4, 6) - 1, +first.slice(6, 8))
+          - Date.UTC(+walkFrom.slice(0, 4), +walkFrom.slice(4, 6) - 1, +walkFrom.slice(6, 8))) / 86400000);
+        if (days > 31) {
+          notes.push(`${br}: THIS WINDOW STARTS BEFORE THE VOUCHERS DO. These balances are carried back to ${walkFrom}, but the oldest ${br} voucher held is ${first} -- ${days} days later. Everything posted in that stretch is in no figure here, so the ${br} opening is understated and so is the change over the window. /api/meta says how far back each company reaches.`);
+        }
       }
     }
     if (ibDropped) {

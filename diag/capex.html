@@ -607,6 +607,18 @@
     }
     h+='</div></section>';
 
+    // A window reaching back past the oldest voucher we hold understates every figure on
+    // this page, and every row still adds up, so nothing on screen would show it.
+    if(j.coverage&&j.coverage.length){
+      h+='<section><h2>THIS WINDOW REACHES BACK FURTHER THAN THE DATA</h2><div class="body">'
+       + '<div class="note" style="border:1px solid #fecaca;background:#fef2f2;color:#991b1b;padding:8px;border-radius:6px">'
+       + '<strong>Every figure below is understated.</strong> ';
+      for(var cv=0;cv<j.coverage.length;cv++) h+=esc(j.coverage[cv])+' ';
+      h+='The advance movement in particular is the postings inside the window and nothing '
+       + 'else &mdash; no opening balance goes into it &mdash; so whatever was advanced before the '
+       + 'first voucher we hold is in no figure here.</div></div></section>';
+    }
+
     // The advance accounts the rule did NOT pick up are no longer listed here: 146 staff
     // advances and the advance income tax drowned the one row that mattered. The list is
     // still built, and is a sheet in the workbook -- it is how "Advance for Machinery" was
