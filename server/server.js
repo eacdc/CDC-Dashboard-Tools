@@ -13,6 +13,7 @@ const { suggestAliases, newProfiles, addVoucher, finalizeProfiles } = require('.
 const yoy = require('./yoySummary');
 const E = require('./plEngine');
 const LM = require('./loanMovement');
+const FF = require('./fundsFlow');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -2008,6 +2009,189 @@ app.get('/api/yoy/vouchers', async (req, res) => {
 // looking in only one of them is how PCFC accounts stayed invisible for a year.
 //
 // The arithmetic is in loanMovement.js and has no database in it; this is the adapter.
+// The borrowing statement, lifted out of the route for the same reason as computeCapex:
+// /api/funds needs the opening and closing a reader will see on the loan page, and a
+// second derivation of them is a second answer waiting to disagree.
+async function computeLoans(db, { branch, bucket, from, to }) {
+  const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
+  const aliases = await readAliasMap(db);
+
+  // EACH COMPANY IS CLASSIFIED BY ITS OWN MASTER, AND A LOAN IS KEYED BY BRANCH.
+  // The merged hierarchy is Kolkata-first, so a ledger NAME that is a Bank OD in
+  // Kolkata and something else entirely in Ahmedabad reads as a loan for both -- and
+  // this endpoint then took Ahmedabad's opening and Ahmedabad's postings for that name
+  // as loan figures. Tally's own report shows what that cost: Kolkata has
+  // "Citi Bank, (Kolkata)" opening 6.36 Cr and Ahmedabad has "Citi Bank, (Ahmedabad)"
+  // opening 1.41 L, two different accounts -- while this page showed ONE row carrying a
+  // phantom 39.35 Cr, which is what Ahmedabad's same-named ledger holds OUTSIDE its
+  // loan group. Tally reports each company separately for exactly this reason.
+  //
+  // So: classify per branch from that branch's own groups, and key every loan
+  // `branch|ledger`. A facility recorded in both companies is then two rows that add
+  // up, which is what consolidation means, instead of one row that may be a double
+  // count or a collision and nobody can tell which.
+  const ledgerMeta = {};                   // 'br|ledger' -> meta
+  const nearMisses = [];
+  let interestLike = 0;      // named like a loan, but interest/insurance: never a borrowing
+  const perBranch = {};
+  for (const br of branches) {
+    const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
+    const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
+    const lub = E.buildLookups(xdb);
+    const nameOf = {};                     // raw voucher name -> 'br|ledger'
+    for (const ln of Object.keys(xdb.ledgers || {})) {
+      const chain = E.getChain(ln, xdb, lub);
+      const kind = LM.loanKind(ln, chain);
+      const key = br + '|' + ln;
+      if (kind) {
+        ledgerMeta[key] = { kind, group: chain.join(' > '), name: ln, branch: br, branches: [br] };
+        // The vouchers keep whatever name was typed, so an account renamed in Tally is
+        // asked for under every spelling merged into it -- scoped to this branch, so a
+        // merge saved for a party cannot weld two companies' bank accounts together.
+        for (const v of aliasVariants(aliases, ln)) nameOf[v] = key;
+      } else if (LM.nearMiss(ln, chain)) {
+        nearMisses.push({ ledger: ln, branch: br, group: chain.join(' > ') });
+      } else if (LM.notBorrowingByName(ln)
+        && (chain.join('>').toLowerCase().indexOf('loan') >= 0 || /loan|od|overdraft|pcfc|pcre/i.test(ln))) {
+        interestLike++;
+      }
+    }
+    perBranch[br] = { master: mb, nameOf, wanted: Object.keys(nameOf) };
+  }
+  const wanted = Object.keys(ledgerMeta);
+
+  if (!wanted.length) {
+    return { ok: true, branch, bucket, from, to, scale: 'cr-positive',
+      loans: [], periods: [], byKind: [], total: { opening: 0, drawn: 0, repaid: 0, closing: 0 },
+      nearMisses,
+      note: 'No ledger in either company sits under a loan group (Secured Loans, Unsecured Loans, Bank OD/OCC, Loans (Liability)). Either nothing is borrowed, or the masters have not been pulled -- /api/meta says which.' };
+  }
+
+  // The openings Tally itself carries, on the day they stand. Cr-positive, so they are
+  // taken as stored: `masters.opening` is Tally-raw, where a liability is +ve.
+  const openings = {};
+  const closings = {};
+  for (const br of branches) {
+    const mm = perBranch[br].master;
+    const nameOf = perBranch[br].nameOf;
+    const seen = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
+    const asOn = (seen.length === 1 && DATE8.test(seen[0])) ? seen[0] : null;
+    const amounts = {};
+    if (asOn && mm && mm.opening) {
+      for (const raw of Object.keys(mm.opening)) {
+        const canon = nameOf[raw];
+        if (canon && mm.opening[raw]) amounts[canon] = (amounts[canon] || 0) + mm.opening[raw];
+      }
+    }
+    openings[br] = { asOn, amounts };
+    // Tally's OWN closing balance, as at the day it was asked for. This is what makes
+    // the page self-checking: our opening plus every posting we hold must land on it,
+    // per account, with nothing to reconcile by hand. Only arrives once the pipeline
+    // has been re-run with the dated openings request.
+    const cAsOn = (mm && DATE8.test(String(mm.closingAsOn || ''))) ? String(mm.closingAsOn) : null;
+    const cAmt = {};
+    if (cAsOn && mm.closing) {
+      for (const raw of Object.keys(mm.closing)) {
+        const canon = nameOf[raw];
+        if (canon && mm.closing[raw]) cAmt[canon] = (cAmt[canon] || 0) + mm.closing[raw];
+      }
+    }
+    closings[br] = { asOn: cAsOn, amounts: cAmt };
+  }
+
+  // Rows must reach back to whichever is earlier: the window start, or the day the
+  // openings stand on. Both directions matter -- see buildLoanMovement.
+  let queryFrom = from;
+  for (const br of branches) {
+    const a = openings[br].asOn;
+    if (a && a < queryFrom) queryFrom = a;
+  }
+  // ONE QUERY PER BRANCH, each asking only for the names that are loans in THAT
+  // company. A single query over both would have to accept a name that is a loan in
+  // either, which is the collision this endpoint exists to have stopped making.
+  const rows = [];
+  for (const br of branches) {
+    const want = perBranch[br].wanted;
+    if (!want.length) continue;
+    const nameOf = perBranch[br].nameOf;
+    const raw = await db.collection('vouchers').aggregate([
+      { $match: { branch: br, date: { $gte: queryFrom, $lte: to }, ...LIVE_ONLY } },
+      { $project: { branch: 1, date: 1, kv: { $concatArrays: [
+        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+      { $unwind: '$kv' },
+      { $match: { 'kv.k': { $in: want } } },
+      { $group: { _id: { k: '$kv.k', d: '$date' },
+        // +ve = Cr = borrowed; -ve = Dr = repaid. Kept apart rather than netted, or a
+        // drawdown and a repayment on the same day would cancel and both would vanish
+        // from a report whose whole subject is the two of them.
+        drawn: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } },
+        repaid: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, { $multiply: ['$kv.v', -1] }, 0] } } } },
+    ], { allowDiskUse: true }).toArray();
+    for (const r of raw) {
+      const key = nameOf[r._id.k];
+      if (!key) continue;
+      rows.push({ ledger: key, branch: br, date: String(r._id.d || ''),
+        drawn: r.drawn || 0, repaid: r.repaid || 0 });
+    }
+  }
+
+  const out = LM.buildLoanMovement({ ledgerMeta, openings, closings, rows, from, to, bucket });
+  // What the figures do and do not rest on, said rather than assumed. A branch whose
+  // openings never arrived gives movement, not a balance, and that has to be on the
+  // page and not in a comment here.
+  const notes = [];
+  for (const br of branches) {
+    if (!openings[br].asOn) {
+      notes.push(`${br}: Tally's opening balances have not been pulled (or the day they stand on is ambiguous), so the opening shown is the movement held before ${from}, not a balance. Run the pipeline once and ask again.`);
+    }
+  }
+  // THE OPENING MUST NOT PREDATE THE VOUCHERS. A balance here is Tally's opening on
+  // its own day plus every posting since, so if the oldest voucher we hold is NEWER
+  // than that day, the postings in between are in neither half and the balance is
+  // wrong by exactly whatever happened in them. On a sweeping OD, where hundreds of
+  // crores move each way per year, that is the difference between a usable figure and
+  // a meaningless one -- and it is silent, because every row still adds up.
+  // The same check the party-balance reading makes; it belongs here more, not less.
+  const firstOf = {};
+  for (const br of branches) {
+    const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+    firstOf[br] = f.length ? f[0].date : null;
+    const asOn = openings[br].asOn;
+    if (asOn && firstOf[br] && firstOf[br] > asOn) {
+      // How WIDE the gap is decides whether it can explain anything, so it is counted
+      // rather than left to be eyeballed off two dates. And a day on which nothing was
+      // posted leaves nothing out -- the guard cannot tell an empty day from a missing
+      // one, so it must not claim the balances are wrong, only that this much is
+      // unaccounted for. Overstating it is how a page stops being believed.
+      const days = Math.max(1, Math.round((Date.UTC(+firstOf[br].slice(0, 4), +firstOf[br].slice(4, 6) - 1, +firstOf[br].slice(6, 8))
+        - Date.UTC(+asOn.slice(0, 4), +asOn.slice(4, 6) - 1, +asOn.slice(6, 8))) / 86400000));
+      const scale = days <= 3
+        ? `That is ${days} day(s). If nothing was posted in them this is fine and changes no figure here; if something was, it is missing from every balance below.`
+        : `That is ${days} days of postings in neither half, so every balance below is out by whatever happened in them -- and on an OD or CC account that can be the whole difference, because a sweeping account is paid down by postings we do not hold.`;
+      // THE CROSS-CHECK ALREADY ANSWERS THIS. If every account with a Tally closing
+      // balance comes out at that figure here, then opening-plus-postings reconstructs
+      // the books end to end and whatever happened in the gap changed nothing. Repeating
+      // the warning anyway, under a green "checked against Tally" verdict, teaches the
+      // reader to skip both. It is reported, but as a settled question.
+      const tc = out.tallyCheck || {};
+      const proven = tc.compared >= 5 && tc.agree === tc.compared;
+      notes.push(proven
+        ? `${br}: the opening balances stand on ${asOn} and the oldest ${br} voucher held is ${firstOf[br]}, a ${days}-day gap -- but all ${tc.compared} account(s) still reconcile to Tally's own closing balance, so nothing was posted in it that moves a figure here. Back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}) would close the gap on paper; no number below depends on it.`
+        : `${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. ${scale} Settle it by back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}), which is cheap and removes the question.`);
+    }
+  }
+  if (nearMisses.length) {
+    notes.push(`${nearMisses.length} ledger(s) are NAMED like a borrowing but are not under a loan group, so they are NOT counted: ${nearMisses.slice(0, 8).map((x) => `"${x.ledger}" (${x.group})`).join(', ')}. If one of those is a real loan, move it under a loan group in Tally or tell us.`);
+  }
+  if (interestLike) {
+    notes.push(`${interestLike} interest, insurance and subvention ledger(s) name a loan ("Interest on Term Loan with HDFC Bank") and are left out as a matter of course -- interest owed is not money borrowed. They are not listed, and nothing needs doing about them.`);
+  }
+  return { ok: true, branch, scale: 'cr-positive',
+    scaleNote: 'A loan outstanding is POSITIVE. drawn = borrowed (Cr), repaid = paid back (Dr). closing = opening + drawn - repaid.',
+    ...out, nearMisses, notes, firstVoucher: firstOf };
+}
+
 app.get('/api/loans', async (req, res) => {
   try {
     const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
@@ -2025,183 +2209,7 @@ app.get('/api/loans', async (req, res) => {
     }
 
     const db = await getDb();
-    const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
-    const aliases = await readAliasMap(db);
-
-    // EACH COMPANY IS CLASSIFIED BY ITS OWN MASTER, AND A LOAN IS KEYED BY BRANCH.
-    // The merged hierarchy is Kolkata-first, so a ledger NAME that is a Bank OD in
-    // Kolkata and something else entirely in Ahmedabad reads as a loan for both -- and
-    // this endpoint then took Ahmedabad's opening and Ahmedabad's postings for that name
-    // as loan figures. Tally's own report shows what that cost: Kolkata has
-    // "Citi Bank, (Kolkata)" opening 6.36 Cr and Ahmedabad has "Citi Bank, (Ahmedabad)"
-    // opening 1.41 L, two different accounts -- while this page showed ONE row carrying a
-    // phantom 39.35 Cr, which is what Ahmedabad's same-named ledger holds OUTSIDE its
-    // loan group. Tally reports each company separately for exactly this reason.
-    //
-    // So: classify per branch from that branch's own groups, and key every loan
-    // `branch|ledger`. A facility recorded in both companies is then two rows that add
-    // up, which is what consolidation means, instead of one row that may be a double
-    // count or a collision and nobody can tell which.
-    const ledgerMeta = {};                   // 'br|ledger' -> meta
-    const nearMisses = [];
-    let interestLike = 0;      // named like a loan, but interest/insurance: never a borrowing
-    const perBranch = {};
-    for (const br of branches) {
-      const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
-      const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
-      const lub = E.buildLookups(xdb);
-      const nameOf = {};                     // raw voucher name -> 'br|ledger'
-      for (const ln of Object.keys(xdb.ledgers || {})) {
-        const chain = E.getChain(ln, xdb, lub);
-        const kind = LM.loanKind(ln, chain);
-        const key = br + '|' + ln;
-        if (kind) {
-          ledgerMeta[key] = { kind, group: chain.join(' > '), name: ln, branch: br, branches: [br] };
-          // The vouchers keep whatever name was typed, so an account renamed in Tally is
-          // asked for under every spelling merged into it -- scoped to this branch, so a
-          // merge saved for a party cannot weld two companies' bank accounts together.
-          for (const v of aliasVariants(aliases, ln)) nameOf[v] = key;
-        } else if (LM.nearMiss(ln, chain)) {
-          nearMisses.push({ ledger: ln, branch: br, group: chain.join(' > ') });
-        } else if (LM.notBorrowingByName(ln)
-          && (chain.join('>').toLowerCase().indexOf('loan') >= 0 || /loan|od|overdraft|pcfc|pcre/i.test(ln))) {
-          interestLike++;
-        }
-      }
-      perBranch[br] = { master: mb, nameOf, wanted: Object.keys(nameOf) };
-    }
-    const wanted = Object.keys(ledgerMeta);
-
-    if (!wanted.length) {
-      return res.json({ ok: true, branch, bucket, from, to, scale: 'cr-positive',
-        loans: [], periods: [], byKind: [], total: { opening: 0, drawn: 0, repaid: 0, closing: 0 },
-        nearMisses,
-        note: 'No ledger in either company sits under a loan group (Secured Loans, Unsecured Loans, Bank OD/OCC, Loans (Liability)). Either nothing is borrowed, or the masters have not been pulled -- /api/meta says which.' });
-    }
-
-    // The openings Tally itself carries, on the day they stand. Cr-positive, so they are
-    // taken as stored: `masters.opening` is Tally-raw, where a liability is +ve.
-    const openings = {};
-    const closings = {};
-    for (const br of branches) {
-      const mm = perBranch[br].master;
-      const nameOf = perBranch[br].nameOf;
-      const seen = [...new Set([].concat(mm ? mm.openingAsOn : []).map((x) => String(x || '')))];
-      const asOn = (seen.length === 1 && DATE8.test(seen[0])) ? seen[0] : null;
-      const amounts = {};
-      if (asOn && mm && mm.opening) {
-        for (const raw of Object.keys(mm.opening)) {
-          const canon = nameOf[raw];
-          if (canon && mm.opening[raw]) amounts[canon] = (amounts[canon] || 0) + mm.opening[raw];
-        }
-      }
-      openings[br] = { asOn, amounts };
-      // Tally's OWN closing balance, as at the day it was asked for. This is what makes
-      // the page self-checking: our opening plus every posting we hold must land on it,
-      // per account, with nothing to reconcile by hand. Only arrives once the pipeline
-      // has been re-run with the dated openings request.
-      const cAsOn = (mm && DATE8.test(String(mm.closingAsOn || ''))) ? String(mm.closingAsOn) : null;
-      const cAmt = {};
-      if (cAsOn && mm.closing) {
-        for (const raw of Object.keys(mm.closing)) {
-          const canon = nameOf[raw];
-          if (canon && mm.closing[raw]) cAmt[canon] = (cAmt[canon] || 0) + mm.closing[raw];
-        }
-      }
-      closings[br] = { asOn: cAsOn, amounts: cAmt };
-    }
-
-    // Rows must reach back to whichever is earlier: the window start, or the day the
-    // openings stand on. Both directions matter -- see buildLoanMovement.
-    let queryFrom = from;
-    for (const br of branches) {
-      const a = openings[br].asOn;
-      if (a && a < queryFrom) queryFrom = a;
-    }
-    // ONE QUERY PER BRANCH, each asking only for the names that are loans in THAT
-    // company. A single query over both would have to accept a name that is a loan in
-    // either, which is the collision this endpoint exists to have stopped making.
-    const rows = [];
-    for (const br of branches) {
-      const want = perBranch[br].wanted;
-      if (!want.length) continue;
-      const nameOf = perBranch[br].nameOf;
-      const raw = await db.collection('vouchers').aggregate([
-        { $match: { branch: br, date: { $gte: queryFrom, $lte: to }, ...LIVE_ONLY } },
-        { $project: { branch: 1, date: 1, kv: { $concatArrays: [
-          { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
-          { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
-        { $unwind: '$kv' },
-        { $match: { 'kv.k': { $in: want } } },
-        { $group: { _id: { k: '$kv.k', d: '$date' },
-          // +ve = Cr = borrowed; -ve = Dr = repaid. Kept apart rather than netted, or a
-          // drawdown and a repayment on the same day would cancel and both would vanish
-          // from a report whose whole subject is the two of them.
-          drawn: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } },
-          repaid: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, { $multiply: ['$kv.v', -1] }, 0] } } } },
-      ], { allowDiskUse: true }).toArray();
-      for (const r of raw) {
-        const key = nameOf[r._id.k];
-        if (!key) continue;
-        rows.push({ ledger: key, branch: br, date: String(r._id.d || ''),
-          drawn: r.drawn || 0, repaid: r.repaid || 0 });
-      }
-    }
-
-    const out = LM.buildLoanMovement({ ledgerMeta, openings, closings, rows, from, to, bucket });
-    // What the figures do and do not rest on, said rather than assumed. A branch whose
-    // openings never arrived gives movement, not a balance, and that has to be on the
-    // page and not in a comment here.
-    const notes = [];
-    for (const br of branches) {
-      if (!openings[br].asOn) {
-        notes.push(`${br}: Tally's opening balances have not been pulled (or the day they stand on is ambiguous), so the opening shown is the movement held before ${from}, not a balance. Run the pipeline once and ask again.`);
-      }
-    }
-    // THE OPENING MUST NOT PREDATE THE VOUCHERS. A balance here is Tally's opening on
-    // its own day plus every posting since, so if the oldest voucher we hold is NEWER
-    // than that day, the postings in between are in neither half and the balance is
-    // wrong by exactly whatever happened in them. On a sweeping OD, where hundreds of
-    // crores move each way per year, that is the difference between a usable figure and
-    // a meaningless one -- and it is silent, because every row still adds up.
-    // The same check the party-balance reading makes; it belongs here more, not less.
-    const firstOf = {};
-    for (const br of branches) {
-      const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
-      firstOf[br] = f.length ? f[0].date : null;
-      const asOn = openings[br].asOn;
-      if (asOn && firstOf[br] && firstOf[br] > asOn) {
-        // How WIDE the gap is decides whether it can explain anything, so it is counted
-        // rather than left to be eyeballed off two dates. And a day on which nothing was
-        // posted leaves nothing out -- the guard cannot tell an empty day from a missing
-        // one, so it must not claim the balances are wrong, only that this much is
-        // unaccounted for. Overstating it is how a page stops being believed.
-        const days = Math.max(1, Math.round((Date.UTC(+firstOf[br].slice(0, 4), +firstOf[br].slice(4, 6) - 1, +firstOf[br].slice(6, 8))
-          - Date.UTC(+asOn.slice(0, 4), +asOn.slice(4, 6) - 1, +asOn.slice(6, 8))) / 86400000));
-        const scale = days <= 3
-          ? `That is ${days} day(s). If nothing was posted in them this is fine and changes no figure here; if something was, it is missing from every balance below.`
-          : `That is ${days} days of postings in neither half, so every balance below is out by whatever happened in them -- and on an OD or CC account that can be the whole difference, because a sweeping account is paid down by postings we do not hold.`;
-        // THE CROSS-CHECK ALREADY ANSWERS THIS. If every account with a Tally closing
-        // balance comes out at that figure here, then opening-plus-postings reconstructs
-        // the books end to end and whatever happened in the gap changed nothing. Repeating
-        // the warning anyway, under a green "checked against Tally" verdict, teaches the
-        // reader to skip both. It is reported, but as a settled question.
-        const tc = out.tallyCheck || {};
-        const proven = tc.compared >= 5 && tc.agree === tc.compared;
-        notes.push(proven
-          ? `${br}: the opening balances stand on ${asOn} and the oldest ${br} voucher held is ${firstOf[br]}, a ${days}-day gap -- but all ${tc.compared} account(s) still reconcile to Tally's own closing balance, so nothing was posted in it that moves a figure here. Back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}) would close the gap on paper; no number below depends on it.`
-          : `${br}: the opening balances stand on ${asOn} but the OLDEST ${br} voucher held is ${firstOf[br]}. ${scale} Settle it by back-filling ${br} (pipeline: -From ${asOn} -To ${firstOf[br]}), which is cheap and removes the question.`);
-      }
-    }
-    if (nearMisses.length) {
-      notes.push(`${nearMisses.length} ledger(s) are NAMED like a borrowing but are not under a loan group, so they are NOT counted: ${nearMisses.slice(0, 8).map((x) => `"${x.ledger}" (${x.group})`).join(', ')}. If one of those is a real loan, move it under a loan group in Tally or tell us.`);
-    }
-    if (interestLike) {
-      notes.push(`${interestLike} interest, insurance and subvention ledger(s) name a loan ("Interest on Term Loan with HDFC Bank") and are left out as a matter of course -- interest owed is not money borrowed. They are not listed, and nothing needs doing about them.`);
-    }
-    res.json({ ok: true, branch, scale: 'cr-positive',
-      scaleNote: 'A loan outstanding is POSITIVE. drawn = borrowed (Cr), repaid = paid back (Dr). closing = opening + drawn - repaid.',
-      ...out, nearMisses, notes, firstVoucher: firstOf });
+    res.json(await computeLoans(db, { branch, bucket, from, to }));
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -2289,6 +2297,321 @@ function assetDepth(chain) {
   return -1;
 }
 
+// The capex figures, lifted out of the route so a second page cannot answer the same
+// question differently. /api/capex is a thin wrapper over this, and /api/funds asks it
+// for `capexFlow` rather than re-deriving which postings are capital -- the rules above
+// (where a group chain roots, the asset-to-asset transfer, the inter-branch counterparty)
+// took four wrong answers to get right and must exist in exactly one place.
+async function computeCapex(db, { branch, from, to, min }) {
+  const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
+  // Per branch from its OWN master, for the same reason the loan page does it: one
+  // ledger name can be a fixed asset in one company and something else in the other.
+  const assetOf = {};                      // br -> { ledger: group }
+  const chainOf = {};                      // br -> { ledger: lowercased chain, for matching }
+  const dispOf = {};                       // br -> { ledger: chain as Tally spells it }
+  const ibOf = {};                         // br -> { ledger: 1 } for Branch / Divisions
+  const closeOf = {};                      // br -> Tally's own closing balances and their date
+  const depOf = {};                        // br -> { ledger: 1 } for the depreciation charge
+  const excluded = new Map();              // group chain -> how many ledgers it holds
+  for (const br of branches) {
+    const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
+    const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
+    const lub = E.buildLookups(xdb);
+    const map = {};
+    const chains = {};
+    const disp = {};
+    for (const ln of Object.keys(xdb.ledgers || {})) {
+      const chain = E.getChain(ln, xdb, lub);
+      const cs = chain.join('>').toLowerCase();
+      chains[ln] = cs;
+      disp[ln] = chain.join(' > ');
+      // Fixed Assets, plus capital work in progress wherever it is filed. Depreciation
+      // is an expense and sits under Indirect Expenses, so it never reaches here; an
+      // accumulated-depreciation ledger filed UNDER Fixed Assets is excluded by name,
+      // because writing an asset down is not buying one.
+      const depth = assetDepth(chain);
+      if (depth < 0) {
+        // Named like an asset group but filed under a liability: worth reporting, not
+        // worth counting. See assetDepth.
+        if (MENTIONS_ASSET.some((a) => cs.indexOf(a) >= 0)) {
+          const k = br + '|' + chain.join(' > ');
+          excluded.set(k, (excluded.get(k) || 0) + 1);
+        }
+        continue;
+      }
+      const nm = ln.toLowerCase();
+      if (nm.indexOf('depreciation') >= 0 || nm.indexOf('depriciation') >= 0
+        || nm.indexOf('amorti') >= 0) continue;
+      map[ln] = chain.join(' > ');
+    }
+    assetOf[br] = map;
+    chainOf[br] = chains;
+    dispOf[br] = disp;
+    closeOf[br] = { bal: (mb && mb.closing) || null, asOn: (mb && mb.closingAsOn) || null };
+    // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
+    // because that is how a balance sheet reads: what came in, what was written down.
+    const dep = {};
+    for (const ln of Object.keys(xdb.ledgers || {})) {
+      const nm2 = ln.toLowerCase();
+      if (nm2.indexOf('depreciation') < 0 && nm2.indexOf('depriciation') < 0
+        && nm2.indexOf('amortis') < 0 && nm2.indexOf('amortiz') < 0) continue;
+      if ((chains[ln] || '').indexOf('fixed assets') >= 0) continue;   // the contra-asset, not the charge
+      dep[ln] = 1;
+    }
+    depOf[br] = dep;
+    // THE OTHER COMPANY IS NOT A SUPPLIER. Tally files the inter-branch account under
+    // `Branch / Divisions`, which is how the year-on-year fold already drops it.
+    const ibm = {};
+    for (const ln of Object.keys(chains)) if (chains[ln].indexOf('branch / divisions') >= 0) ibm[ln] = 1;
+    ibOf[br] = ibm;
+  }
+  // CASH OUT ON CAPEX DOES NOT PASS THROUGH THE ASSET LEDGER. A machine is paid for
+  // long before it is capitalised -- an advance against a proforma, then the balance to
+  // the supplier -- and both of those touch a CREDITOR or an ADVANCE account, never the
+  // fixed asset. So the money is followed through those instead, and the two kinds are
+  // kept apart because an advance is cash gone on a machine that has not arrived.
+  const partyOf = {};                      // br -> { ledger: {kind, via, group} }
+  const advGroups = new Map();             // every group saying "advance", counted or not
+  for (const br of branches) {
+    const chains = chainOf[br] || {};
+    const amap = assetOf[br] || {};
+    const pm = {};
+    for (const ln of Object.keys(chains)) {
+      if (amap[ln]) continue;              // the asset itself, already counted
+      const r = capexAdvanceKind(ln, chains[ln]);
+      if (!r) continue;
+      pm[ln] = { kind: r.kind, via: r.via, group: (dispOf[br] || {})[ln] || chains[ln] };
+    }
+    partyOf[br] = pm;
+    for (const ln of Object.keys(chains)) {
+      if (amap[ln]) continue;
+      if (chains[ln].indexOf('advance') < 0 && String(ln).toLowerCase().indexOf('advance') < 0) continue;
+      const g = (dispOf[br] || {})[ln] || chains[ln];
+      const k = br + '|' + g;
+      const e = advGroups.get(k) || { branch: br, group: g, ledgers: 0, counted: false };
+      e.ledgers++; if (pm[ln]) e.counted = true;
+      advGroups.set(k, e);
+    }
+  }
+  const advanceGroups = [...advGroups.values()].sort((a, b) => b.ledgers - a.ledgers);
+
+  const excludedGroups = [...excluded.entries()]
+    .map(([k, n]) => ({ branch: k.split('|')[0], group: k.slice(k.indexOf('|') + 1), ledgers: n }))
+    .sort((a, b) => b.ledgers - a.ledgers);
+  const anyAssets = branches.some((br) => Object.keys(assetOf[br]).length);
+  if (!anyAssets) {
+    return { ok: true, branch, from, to, rows: [], count: 0, additions: 0, disposals: 0, net: 0,
+      byGroup: [], byMonth: [], byAsset: [], byFunding: [], excludedGroups: [],
+      capexFlow: { additions: 0, advanceNet: 0, total: 0, byBranch: {} },
+      note: 'No ledger in either company sits under Fixed Assets. Either nothing is capitalised there, or the masters have not been pulled -- /api/meta says which.' };
+  }
+
+  const match = { date: { $gte: from, $lte: to }, ...LIVE_ONLY };
+  if (branch !== 'all') match.branch = branch;
+  const vs = await db.collection('vouchers').find(match)
+    // NARRATION IS NOT A TOP-LEVEL FIELD. The extractor puts it inside `details`
+    // (details.narration), so projecting `narration: 1` asks for a field no voucher
+    // has and every row comes back blank -- which is exactly how it shipped.
+    .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
+      'details.narration': 1, 'details.reference': 1, 'details.partyName': 1,
+      ledgers: 1, party_ledgers: 1 })
+    .toArray();
+
+  // How the voucher paid for it, from its own other legs. Named rather than guessed:
+  // the order matters, because a machine bought on a term loan usually also touches a
+  // creditor, and the loan is the thing worth knowing.
+  const FUND = [
+    { kw: ['secured loans', 'unsecured loans', 'bank od', 'bank occ', 'loans (liability)'], as: 'loan' },
+    { kw: ['sundry creditors'], as: 'credit' },
+    { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
+  ];
+  const rows = [];
+  let additions = 0, disposals = 0, movedTotal = 0;
+  let interBranchTotal = 0, depreciation = 0;
+  const depBr = {};
+  // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
+  // Every rule that tries to decide which SUPPLIER is a machinery supplier has been
+  // wrong in both directions -- a freight forwarder counted in full, a machine maker
+  // left out altogether. This measure does not ask. It needs only three groups Tally
+  // itself keeps: fixed assets, capital advances, machinery creditors.
+  //
+  //    assets capitalised  +  rise in advances  -  rise in what is owed
+  //
+  // It is the CHANGE in those balances, never the payments, and that is what keeps a
+  // machine from being counted twice. Pay a 3 Cr advance: advances rise 3 Cr, nothing is
+  // capitalised, so 3 Cr. The machine arrives at 5 Cr with 2 Cr still owed: 5
+  // capitalised, advances FALL 3, owed rises 2 -- 5 - 3 - 2 = nothing, which is right,
+  // because the 3 went out last year and the 2 has not gone yet. Pay the 2: owed falls
+  // 2, so 2. Over the three periods 3 + 0 + 2 = the 5 Cr machine, each rupee landing in
+  // the period it actually left.
+  const flowBr = {};
+  const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0 }));
+  // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
+  // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
+  // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
+  // a company that files neither would have its payments silently missing. So the
+  // purchases themselves are read first, and every ledger CREDITED on a voucher that
+  // DEBITS a fixed asset is taken as a supplier of that asset -- evidence rather than
+  // vocabulary. Collected here, used by the cash pass below.
+  for (const v of vs) {
+    const map = assetOf[v.branch] || {};
+    const pm = partyOf[v.branch] || {};
+    const chs = chainOf[v.branch] || {};
+    const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
+
+    // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
+    // because that is how a balance sheet reads: what came in, what was written down.
+    const dpm = depOf[v.branch] || {};
+    for (const k of Object.keys(all)) if (dpm[k]) {
+      depreciation = Math.round((depreciation - all[k]) * 100) / 100;
+      depBr[v.branch] = Math.round(((depBr[v.branch] || 0) - all[k]) * 100) / 100;
+    }
+
+    // A MACHINE MOVED FROM ONE OF OUR COMPANIES TO THE OTHER IS NOT A PURCHASE. The
+    // group owned it the day before. Kolkata took a die cutter off Ahmedabad and four
+    // machines went the other way, and each was counted as bought -- on top of the
+    // original purchase from the real supplier, so the same press appeared twice.
+    const ibm = ibOf[v.branch] || {};
+    let interBranch = false;
+    for (const k of Object.keys(all)) if (ibm[k] && Math.abs(all[k]) >= 1) { interBranch = true; break; }
+
+    // The movement in the capital-advance accounts, which is half of the period figure.
+    const fl = flowOf(v.branch);
+    for (const k of Object.keys(all)) {
+      const pp = pm[k];
+      if (!pp) continue;
+      // An advance is an ASSET, Dr-positive: paying one makes it rise, adjusting it
+      // against a delivered machine makes it fall.
+      if (pp.kind === 'advance') fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
+    }
+
+    const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
+    if (!hits.length) continue;
+    // How the ENTRY WAS BOOKED -- which says nothing about when the money moved. See
+    // FUND below.
+    let funded = 'other';
+    const chains = chs;
+    const others = Object.keys(all).filter((k) => !map[k]);
+    outer:
+    for (const f of FUND) {
+      for (const o of others) {
+        const c = chains[o] || '';
+        for (const kw of f.kw) if (c.indexOf(kw) >= 0) { funded = f.as; break outer; }
+      }
+    }
+    // MONEY MOVING BETWEEN TWO ASSET ACCOUNTS IS NEITHER A PURCHASE NOR A SALE.
+    // When the Ahmedabad factory was finished, one journal credited every
+    // work-in-progress ledger it had been accumulated in and debited the finished
+    // asset. Read leg by leg that is a 44 Cr "disposal" of machines nobody sold, and
+    // the same 44 Cr counted a SECOND time as assets bought -- the building and every
+    // machine in it appeared twice, once as WIP and once as itself.
+    //
+    // So the asset legs of a voucher are weighed against each other first: whatever is
+    // debited to one asset and credited from another is a TRANSFER, and only the excess
+    // on either side is a real purchase or a real disposal. A journal that capitalises
+    // WIP balances exactly nets to nothing, which is the correct answer -- the company
+    // owns what it already owned, under a different name.
+    let drTot = 0, crTot = 0;
+    for (const ln of hits) { const a = all[ln]; if (a < 0) drTot -= a; else crTot += a; }
+    const internal = Math.min(drTot, crTot);
+    const drKeep = drTot > 0 ? (drTot - internal) / drTot : 0;
+    const crKeep = crTot > 0 ? (crTot - internal) / crTot : 0;
+    for (const ln of hits) {
+      const amt = all[ln];
+      // -ve = Dr = the asset went UP: that is the purchase. +ve = Cr = a disposal.
+      const gross = Math.abs(amt);
+      const keep = amt < 0 ? drKeep : crKeep;
+      const spend = amt < 0 ? gross * keep : 0;
+      const sold = amt > 0 ? gross * keep : 0;
+      const moved = Math.round(gross * (1 - keep) * 100) / 100;
+      if (spend && spend < min) continue;
+      if (spend && !interBranch) {
+        additions = Math.round((additions + spend) * 100) / 100;
+        const f2 = flowOf(v.branch);
+        f2.additions = Math.round((f2.additions + spend) * 100) / 100;
+      }
+      if (sold && !interBranch) disposals = Math.round((disposals + sold) * 100) / 100;
+      if (interBranch) interBranchTotal = Math.round((interBranchTotal + spend + sold) * 100) / 100;
+      if (moved) movedTotal = Math.round((movedTotal + moved) * 100) / 100;
+      rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln], interBranch,
+        spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
+        moved, movedOut: moved ? (amt > 0) : false,
+        no: v.no || '', type: v.type || '',
+        party: v.party || ((v.details || {}).partyName) || '',
+        narration: (((v.details || {}).narration) || '').slice(0, 300),
+        reference: ((v.details || {}).reference) || '',
+        guid: v.guid || '',
+        funded: spend ? funded : (sold ? 'disposal' : 'moved') });
+    }
+  }
+  rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)
+    || (b.spend - a.spend) || a.asset.localeCompare(b.asset));
+
+  const roll = (keyOf, labelOf) => {
+    const m = new Map();
+    for (const r of rows) {
+      if (r.interBranch) continue;          // a transfer between our own companies
+      const k = keyOf(r);
+      const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
+      e.spend = Math.round((e.spend + r.spend) * 100) / 100;
+      e.disposal = Math.round((e.disposal + r.disposal) * 100) / 100;
+      if (r.spend) e.count++;
+      m.set(k, e);
+    }
+    return [...m.values()];
+  };
+  const byGroup = roll((r) => r.group, (r) => r.group).sort((a, b) => b.spend - a.spend);
+  const byMonth = roll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
+    .sort((a, b) => (a.key < b.key ? -1 : 1));
+  const byAsset = roll((r) => r.branch + '|' + r.asset, (r) => r.asset).sort((a, b) => b.spend - a.spend);
+  const byFunding = roll((r) => r.funded, (r) => r.funded)
+    .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
+
+  // WHAT THE BALANCE SHEET SHOWS. The advance accounts' own closing balances, straight
+  // out of Tally's masters rather than rebuilt from payments: that is the figure on the
+  // balance sheet under Current Assets, and it answers "what have we paid for machines
+  // that have not come" without depending on any rule here. Rebuilding it from the
+  // payments in a window could only ever see the window; the balance carries everything.
+  const advOut = [];
+  let advOutTotal = 0, advAsOn = null, advMissing = 0;
+  for (const br of branches) {
+    const cl = closeOf[br] || {};
+    const pm2 = partyOf[br] || {};
+    for (const ln of Object.keys(pm2)) {
+      if (pm2[ln].kind !== 'advance') continue;
+      if (!cl.bal || !(ln in cl.bal)) { advMissing++; continue; }
+      // Tally-raw: an asset carries a Dr, which is -ve. Outstanding is the Dr side.
+      const outstanding = Math.round(-(Number(cl.bal[ln]) || 0) * 100) / 100;
+      if (Math.abs(outstanding) < 1) continue;
+      advAsOn = advAsOn || cl.asOn || null;
+      advOutTotal = Math.round((advOutTotal + outstanding) * 100) / 100;
+      advOut.push({ branch: br, ledger: ln, outstanding, asOn: cl.asOn || null });
+    }
+  }
+  advOut.sort((a, b) => b.outstanding - a.outstanding);
+
+
+  return { ok: true, branch, from, to, min,
+    scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
+    rows, count: rows.length,
+    additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
+    moved: movedTotal, interBranchTotal, depreciation, depreciationByBranch: depBr,
+    advanceOutstanding: { asOn: advAsOn, total: advOutTotal, rows: advOut, missing: advMissing },
+    advanceGroups,
+    capexFlow: (() => {
+      const r2 = (n) => Math.round(n * 100) / 100;
+      const t = { additions: 0, advanceNet: 0 };
+      for (const br of Object.keys(flowBr)) {
+        t.additions += flowBr[br].additions;
+        t.advanceNet += flowBr[br].advanceNet;
+        flowBr[br].total = r2(flowBr[br].additions + flowBr[br].advanceNet);
+      }
+      return { additions: r2(t.additions), advanceNet: r2(t.advanceNet),
+        total: r2(t.additions + t.advanceNet), byBranch: flowBr };
+    })(),
+    byGroup, byMonth, byAsset, byFunding, excludedGroups };
+}
+
 app.get('/api/capex', async (req, res) => {
   try {
     const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
@@ -2299,312 +2622,160 @@ app.get('/api/capex', async (req, res) => {
     const min = Math.max(0, Number(req.query.min) || 0);
 
     const db = await getDb();
+    res.json(await computeCapex(db, { branch, from, to, min }));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ---- funds flow: where the money went, and how much of it was borrowed ----
+// GET /api/funds?branch=all|kol|ahm&from=YYYYMMDD&to=YYYYMMDD
+//
+// Three balances read off Tally's own accounts -- owed to us, owed by us, owed to banks --
+// and what was spent on machines. The CHANGE in each over the window says where funds were
+// absorbed and where they came from. The loan and capex figures come from the SAME
+// functions the loan and capex pages are built on, never from a second derivation.
+//
+// STOCK IS NOT IN IT, deliberately: the inventory in Tally is not maintained closely
+// enough to put a figure on, and a working-capital statement carrying a number nobody
+// trusts is worse than one that says it has none. See fundsFlow.js.
+app.get('/api/funds', async (req, res) => {
+  try {
+    const branch = ['all', 'kol', 'ahm'].includes(String(req.query.branch)) ? String(req.query.branch) : 'all';
+    const from = DATE8.test(String(req.query.from || '')) ? String(req.query.from) : null;
+    const to = DATE8.test(String(req.query.to || '')) ? String(req.query.to) : null;
+    if (!from || !to) return res.status(400).json({ ok: false, error: 'from and to are required as YYYYMMDD' });
+    if (to < from) return res.status(400).json({ ok: false, error: `to (${to}) is before from (${from})` });
+
+    const db = await getDb();
     const branches = branch === 'all' ? ['kol', 'ahm'] : [branch];
-    // Per branch from its OWN master, for the same reason the loan page does it: one
-    // ledger name can be a fixed asset in one company and something else in the other.
-    const assetOf = {};                      // br -> { ledger: group }
-    const chainOf = {};                      // br -> { ledger: lowercased chain, for matching }
-    const dispOf = {};                       // br -> { ledger: chain as Tally spells it }
-    const ibOf = {};                         // br -> { ledger: 1 } for Branch / Divisions
-    const closeOf = {};                      // br -> Tally's own closing balances and their date
-    const depOf = {};                        // br -> { ledger: 1 } for the depreciation charge
-    const excluded = new Map();              // group chain -> how many ledgers it holds
+    const aliases = await readAliasMap(db);
+
+    // Which ledgers are trade, per branch from that branch's OWN master -- the rule the
+    // loan and capex pages follow, and for the same reason: one name can be a customer in
+    // one company and something else in the other.
+    const openings = {};
+    const tallyClose = {};
+    const wantOf = {};                       // br -> { debtor: [names], creditor: [names] }
+    const counts = {};                       // br -> how many ledgers each side holds
+    let ibDropped = 0;
     for (const br of branches) {
       const mb = readMaster(await db.collection('masters').findOne({ branch: br }));
-      const xdb = mb || { ledgers: {}, groups: {}, ids: {} };
-      const lub = E.buildLookups(xdb);
-      const map = {};
-      const chains = {};
-      const disp = {};
-      for (const ln of Object.keys(xdb.ledgers || {})) {
-        const chain = E.getChain(ln, xdb, lub);
-        const cs = chain.join('>').toLowerCase();
-        chains[ln] = cs;
-        disp[ln] = chain.join(' > ');
-        // Fixed Assets, plus capital work in progress wherever it is filed. Depreciation
-        // is an expense and sits under Indirect Expenses, so it never reaches here; an
-        // accumulated-depreciation ledger filed UNDER Fixed Assets is excluded by name,
-        // because writing an asset down is not buying one.
-        const depth = assetDepth(chain);
-        if (depth < 0) {
-          // Named like an asset group but filed under a liability: worth reporting, not
-          // worth counting. See assetDepth.
-          if (MENTIONS_ASSET.some((a) => cs.indexOf(a) >= 0)) {
-            const k = br + '|' + chain.join(' > ');
-            excluded.set(k, (excluded.get(k) || 0) + 1);
-          }
-          continue;
-        }
-        const nm = ln.toLowerCase();
-        if (nm.indexOf('depreciation') >= 0 || nm.indexOf('depriciation') >= 0
-          || nm.indexOf('amorti') >= 0) continue;
-        map[ln] = chain.join(' > ');
+      const xd = mb || { ledgers: {}, groups: {}, ids: {} };
+      const lu = E.buildLookups(xd);
+      // THE OTHER COMPANY IS NOT A CUSTOMER. An inter-branch account filed under Sundry
+      // Debtors is a real receivable for one company and cancels against the other's
+      // payable, so a consolidated figure that keeps it counts money the group does not
+      // have. Same test yoySummary uses, and dropped only from the consolidated view --
+      // read on its own, a branch really is owed that money.
+      const ib = E.findIBLedgers(xd) || {};
+      const sideOf = {};                     // canonical ledger -> 'debtor' | 'creditor'
+      for (const ln of Object.keys(xd.ledgers || {})) {
+        const chain = E.getChain(ln, xd, lu).join('>').toLowerCase();
+        const sd = chain.indexOf('sundry debtors') >= 0 ? 'debtor'
+          : (chain.indexOf('sundry creditors') >= 0 ? 'creditor' : null);
+        if (!sd) continue;
+        if (branch === 'all' && ib[ln]) { ibDropped++; continue; }
+        sideOf[ln] = sd;
       }
-      assetOf[br] = map;
-      chainOf[br] = chains;
-      dispOf[br] = disp;
-      closeOf[br] = { bal: (mb && mb.closing) || null, asOn: (mb && mb.closingAsOn) || null };
-      // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
-      // because that is how a balance sheet reads: what came in, what was written down.
-      const dep = {};
-      for (const ln of Object.keys(xdb.ledgers || {})) {
-        const nm2 = ln.toLowerCase();
-        if (nm2.indexOf('depreciation') < 0 && nm2.indexOf('depriciation') < 0
-          && nm2.indexOf('amortis') < 0 && nm2.indexOf('amortiz') < 0) continue;
-        if ((chains[ln] || '').indexOf('fixed assets') >= 0) continue;   // the contra-asset, not the charge
-        dep[ln] = 1;
+      // The vouchers keep whatever spelling was typed, so every name merged into a ledger
+      // is asked for too -- scoped to this branch, as the loan page scopes it.
+      const want = { debtor: [], creditor: [] };
+      const rawSide = {};
+      for (const ln of Object.keys(sideOf)) {
+        for (const v of aliasVariants(aliases, ln)) { want[sideOf[ln]].push(v); rawSide[v] = sideOf[ln]; }
       }
-      depOf[br] = dep;
-      // THE OTHER COMPANY IS NOT A SUPPLIER. Tally files the inter-branch account under
-      // `Branch / Divisions`, which is how the year-on-year fold already drops it.
-      const ibm = {};
-      for (const ln of Object.keys(chains)) if (chains[ln].indexOf('branch / divisions') >= 0) ibm[ln] = 1;
-      ibOf[br] = ibm;
-    }
-    // CASH OUT ON CAPEX DOES NOT PASS THROUGH THE ASSET LEDGER. A machine is paid for
-    // long before it is capitalised -- an advance against a proforma, then the balance to
-    // the supplier -- and both of those touch a CREDITOR or an ADVANCE account, never the
-    // fixed asset. So the money is followed through those instead, and the two kinds are
-    // kept apart because an advance is cash gone on a machine that has not arrived.
-    const partyOf = {};                      // br -> { ledger: {kind, via, group} }
-    const advGroups = new Map();             // every group saying "advance", counted or not
-    for (const br of branches) {
-      const chains = chainOf[br] || {};
-      const amap = assetOf[br] || {};
-      const pm = {};
-      for (const ln of Object.keys(chains)) {
-        if (amap[ln]) continue;              // the asset itself, already counted
-        const r = capexAdvanceKind(ln, chains[ln]);
-        if (!r) continue;
-        pm[ln] = { kind: r.kind, via: r.via, group: (dispOf[br] || {})[ln] || chains[ln] };
-      }
-      partyOf[br] = pm;
-      for (const ln of Object.keys(chains)) {
-        if (amap[ln]) continue;
-        if (chains[ln].indexOf('advance') < 0 && String(ln).toLowerCase().indexOf('advance') < 0) continue;
-        const g = (dispOf[br] || {})[ln] || chains[ln];
-        const k = br + '|' + g;
-        const e = advGroups.get(k) || { branch: br, group: g, ledgers: 0, counted: false };
-        e.ledgers++; if (pm[ln]) e.counted = true;
-        advGroups.set(k, e);
-      }
-    }
-    const advanceGroups = [...advGroups.values()].sort((a, b) => b.ledgers - a.ledgers);
+      wantOf[br] = want;
+      counts[br] = { debtor: Object.values(sideOf).filter((x) => x === 'debtor').length,
+        creditor: Object.values(sideOf).filter((x) => x === 'creditor').length };
 
-    const excludedGroups = [...excluded.entries()]
-      .map(([k, n]) => ({ branch: k.split('|')[0], group: k.slice(k.indexOf('|') + 1), ledgers: n }))
-      .sort((a, b) => b.ledgers - a.ledgers);
-    const anyAssets = branches.some((br) => Object.keys(assetOf[br]).length);
-    if (!anyAssets) {
-      return res.json({ ok: true, branch, from, to, rows: [], additions: 0, disposals: 0, net: 0,
-        byGroup: [], byMonth: [], byFunding: [],
-        note: 'No ledger in either company sits under Fixed Assets. Either nothing is capitalised there, or the masters have not been pulled -- /api/meta says which.' });
+      // Tally's own opening and closing for those ledgers, taken raw (a Dr is -ve).
+      const sum = (bag, names) => {
+        let t = 0;
+        for (const raw of Object.keys(bag || {})) if (names[raw] && bag[raw]) t += bag[raw];
+        return t;
+      };
+      const isD = {}; const isC = {};
+      for (const v of Object.keys(rawSide)) (rawSide[v] === 'debtor' ? isD : isC)[v] = 1;
+      const seen = [...new Set([].concat(mb ? mb.openingAsOn : []).map((x) => String(x || '')))];
+      const asOn = (seen.length === 1 && DATE8.test(seen[0])) ? seen[0] : null;
+      openings[br] = { asOn,
+        debtor: asOn ? sum(mb && mb.opening, isD) : 0,
+        creditor: asOn ? sum(mb && mb.opening, isC) : 0 };
+      const cAsOn = (mb && DATE8.test(String(mb.closingAsOn || ''))) ? String(mb.closingAsOn) : null;
+      tallyClose[br] = { asOn: cAsOn,
+        debtor: cAsOn ? sum(mb && mb.closing, isD) : 0,
+        creditor: cAsOn ? sum(mb && mb.closing, isC) : 0 };
     }
 
-    const match = { date: { $gte: from, $lte: to }, ...LIVE_ONLY };
-    if (branch !== 'all') match.branch = branch;
-    const vs = await db.collection('vouchers').find(match)
-      // NARRATION IS NOT A TOP-LEVEL FIELD. The extractor puts it inside `details`
-      // (details.narration), so projecting `narration: 1` asks for a field no voucher
-      // has and every row comes back blank -- which is exactly how it shipped.
-      .project({ _id: 0, branch: 1, date: 1, no: 1, type: 1, party: 1, guid: 1,
-        'details.narration': 1, 'details.reference': 1, 'details.partyName': 1,
-        ledgers: 1, party_ledgers: 1 })
-      .toArray();
+    // Postings must reach back to whichever is earlier: the window start, or the day the
+    // openings stand on -- the balance is built from both halves.
+    let queryFrom = from;
+    for (const br of branches) if (openings[br].asOn && openings[br].asOn < queryFrom) queryFrom = openings[br].asOn;
+    let queryTo = to;
+    for (const br of branches) if (openings[br].asOn && openings[br].asOn > queryTo) queryTo = openings[br].asOn;
 
-    // How the voucher paid for it, from its own other legs. Named rather than guessed:
-    // the order matters, because a machine bought on a term loan usually also touches a
-    // creditor, and the loan is the thing worth knowing.
-    const FUND = [
-      { kw: ['secured loans', 'unsecured loans', 'bank od', 'bank occ', 'loans (liability)'], as: 'loan' },
-      { kw: ['sundry creditors'], as: 'credit' },
-      { kw: ['bank accounts', 'cash-in-hand', 'cash in hand'], as: 'cash' },
-    ];
+    // ONE AGGREGATION PER BRANCH PER SIDE, grouped by DATE. Grouping by ledger as well
+    // would return a row per party per day -- hundreds of thousands over a year -- and
+    // nothing here asks which customer: the statement is about totals.
     const rows = [];
-    let additions = 0, disposals = 0, movedTotal = 0;
-    let interBranchTotal = 0, depreciation = 0;
-    const depBr = {};
-    // ---- CAPEX FOR THE PERIOD, WITHOUT GUESSING AT ANYTHING -------------------
-    // Every rule that tries to decide which SUPPLIER is a machinery supplier has been
-    // wrong in both directions -- a freight forwarder counted in full, a machine maker
-    // left out altogether. This measure does not ask. It needs only three groups Tally
-    // itself keeps: fixed assets, capital advances, machinery creditors.
-    //
-    //    assets capitalised  +  rise in advances  -  rise in what is owed
-    //
-    // It is the CHANGE in those balances, never the payments, and that is what keeps a
-    // machine from being counted twice. Pay a 3 Cr advance: advances rise 3 Cr, nothing is
-    // capitalised, so 3 Cr. The machine arrives at 5 Cr with 2 Cr still owed: 5
-    // capitalised, advances FALL 3, owed rises 2 -- 5 - 3 - 2 = nothing, which is right,
-    // because the 3 went out last year and the 2 has not gone yet. Pay the 2: owed falls
-    // 2, so 2. Over the three periods 3 + 0 + 2 = the 5 Cr machine, each rupee landing in
-    // the period it actually left.
-    const flowBr = {};
-    const flowOf = (br) => (flowBr[br] || (flowBr[br] = { additions: 0, advanceNet: 0 }));
-    // A LEDGER THAT SUPPLIED A MACHINE IS A MACHINERY SUPPLIER, whatever its group is
-    // called. Names and groups only go so far: Ahmedabad's advances sit under `Advance
-    // for Machinery` and Kolkata's creditors under `Sundry Creditor - Fixed Assets`, but
-    // a company that files neither would have its payments silently missing. So the
-    // purchases themselves are read first, and every ledger CREDITED on a voucher that
-    // DEBITS a fixed asset is taken as a supplier of that asset -- evidence rather than
-    // vocabulary. Collected here, used by the cash pass below.
-    for (const v of vs) {
-      const map = assetOf[v.branch] || {};
-      const pm = partyOf[v.branch] || {};
-      const chs = chainOf[v.branch] || {};
-      const all = Object.assign({}, v.party_ledgers || {}, v.ledgers || {});
-
-      // Depreciation is an EXPENSE and never capex, but it belongs beside the additions
-      // because that is how a balance sheet reads: what came in, what was written down.
-      const dpm = depOf[v.branch] || {};
-      for (const k of Object.keys(all)) if (dpm[k]) {
-        depreciation = Math.round((depreciation - all[k]) * 100) / 100;
-        depBr[v.branch] = Math.round(((depBr[v.branch] || 0) - all[k]) * 100) / 100;
-      }
-
-      // A MACHINE MOVED FROM ONE OF OUR COMPANIES TO THE OTHER IS NOT A PURCHASE. The
-      // group owned it the day before. Kolkata took a die cutter off Ahmedabad and four
-      // machines went the other way, and each was counted as bought -- on top of the
-      // original purchase from the real supplier, so the same press appeared twice.
-      const ibm = ibOf[v.branch] || {};
-      let interBranch = false;
-      for (const k of Object.keys(all)) if (ibm[k] && Math.abs(all[k]) >= 1) { interBranch = true; break; }
-
-      // The movement in the capital-advance accounts, which is half of the period figure.
-      const fl = flowOf(v.branch);
-      for (const k of Object.keys(all)) {
-        const pp = pm[k];
-        if (!pp) continue;
-        // An advance is an ASSET, Dr-positive: paying one makes it rise, adjusting it
-        // against a delivered machine makes it fall.
-        if (pp.kind === 'advance') fl.advanceNet = Math.round((fl.advanceNet - all[k]) * 100) / 100;
-      }
-
-      const hits = Object.keys(all).filter((k) => map[k] && Math.abs(all[k]) >= 1);
-      if (!hits.length) continue;
-      // How the ENTRY WAS BOOKED -- which says nothing about when the money moved. See
-      // FUND below.
-      let funded = 'other';
-      const chains = chs;
-      const others = Object.keys(all).filter((k) => !map[k]);
-      outer:
-      for (const f of FUND) {
-        for (const o of others) {
-          const c = chains[o] || '';
-          for (const kw of f.kw) if (c.indexOf(kw) >= 0) { funded = f.as; break outer; }
-        }
-      }
-      // MONEY MOVING BETWEEN TWO ASSET ACCOUNTS IS NEITHER A PURCHASE NOR A SALE.
-      // When the Ahmedabad factory was finished, one journal credited every
-      // work-in-progress ledger it had been accumulated in and debited the finished
-      // asset. Read leg by leg that is a 44 Cr "disposal" of machines nobody sold, and
-      // the same 44 Cr counted a SECOND time as assets bought -- the building and every
-      // machine in it appeared twice, once as WIP and once as itself.
-      //
-      // So the asset legs of a voucher are weighed against each other first: whatever is
-      // debited to one asset and credited from another is a TRANSFER, and only the excess
-      // on either side is a real purchase or a real disposal. A journal that capitalises
-      // WIP balances exactly nets to nothing, which is the correct answer -- the company
-      // owns what it already owned, under a different name.
-      let drTot = 0, crTot = 0;
-      for (const ln of hits) { const a = all[ln]; if (a < 0) drTot -= a; else crTot += a; }
-      const internal = Math.min(drTot, crTot);
-      const drKeep = drTot > 0 ? (drTot - internal) / drTot : 0;
-      const crKeep = crTot > 0 ? (crTot - internal) / crTot : 0;
-      for (const ln of hits) {
-        const amt = all[ln];
-        // -ve = Dr = the asset went UP: that is the purchase. +ve = Cr = a disposal.
-        const gross = Math.abs(amt);
-        const keep = amt < 0 ? drKeep : crKeep;
-        const spend = amt < 0 ? gross * keep : 0;
-        const sold = amt > 0 ? gross * keep : 0;
-        const moved = Math.round(gross * (1 - keep) * 100) / 100;
-        if (spend && spend < min) continue;
-        if (spend && !interBranch) {
-          additions = Math.round((additions + spend) * 100) / 100;
-          const f2 = flowOf(v.branch);
-          f2.additions = Math.round((f2.additions + spend) * 100) / 100;
-        }
-        if (sold && !interBranch) disposals = Math.round((disposals + sold) * 100) / 100;
-        if (interBranch) interBranchTotal = Math.round((interBranchTotal + spend + sold) * 100) / 100;
-        if (moved) movedTotal = Math.round((movedTotal + moved) * 100) / 100;
-        rows.push({ date: v.date, branch: v.branch, asset: ln, group: map[ln], interBranch,
-          spend: Math.round(spend * 100) / 100, disposal: Math.round(sold * 100) / 100,
-          moved, movedOut: moved ? (amt > 0) : false,
-          no: v.no || '', type: v.type || '',
-          party: v.party || ((v.details || {}).partyName) || '',
-          narration: (((v.details || {}).narration) || '').slice(0, 300),
-          reference: ((v.details || {}).reference) || '',
-          guid: v.guid || '',
-          funded: spend ? funded : (sold ? 'disposal' : 'moved') });
-      }
-    }
-    rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)
-      || (b.spend - a.spend) || a.asset.localeCompare(b.asset));
-
-    const roll = (keyOf, labelOf) => {
-      const m = new Map();
-      for (const r of rows) {
-        if (r.interBranch) continue;          // a transfer between our own companies
-        const k = keyOf(r);
-        const e = m.get(k) || { key: k, label: labelOf(r), spend: 0, disposal: 0, count: 0 };
-        e.spend = Math.round((e.spend + r.spend) * 100) / 100;
-        e.disposal = Math.round((e.disposal + r.disposal) * 100) / 100;
-        if (r.spend) e.count++;
-        m.set(k, e);
-      }
-      return [...m.values()];
-    };
-    const byGroup = roll((r) => r.group, (r) => r.group).sort((a, b) => b.spend - a.spend);
-    const byMonth = roll((r) => r.date.slice(0, 6), (r) => LM.bucketLabel(r.date.slice(0, 6), 'month'))
-      .sort((a, b) => (a.key < b.key ? -1 : 1));
-    const byAsset = roll((r) => r.branch + '|' + r.asset, (r) => r.asset).sort((a, b) => b.spend - a.spend);
-    const byFunding = roll((r) => r.funded, (r) => r.funded)
-      .filter((x) => x.key !== 'moved').sort((a, b) => b.spend - a.spend);
-
-    // WHAT THE BALANCE SHEET SHOWS. The advance accounts' own closing balances, straight
-    // out of Tally's masters rather than rebuilt from payments: that is the figure on the
-    // balance sheet under Current Assets, and it answers "what have we paid for machines
-    // that have not come" without depending on any rule here. Rebuilding it from the
-    // payments in a window could only ever see the window; the balance carries everything.
-    const advOut = [];
-    let advOutTotal = 0, advAsOn = null, advMissing = 0;
     for (const br of branches) {
-      const cl = closeOf[br] || {};
-      const pm2 = partyOf[br] || {};
-      for (const ln of Object.keys(pm2)) {
-        if (pm2[ln].kind !== 'advance') continue;
-        if (!cl.bal || !(ln in cl.bal)) { advMissing++; continue; }
-        // Tally-raw: an asset carries a Dr, which is -ve. Outstanding is the Dr side.
-        const outstanding = Math.round(-(Number(cl.bal[ln]) || 0) * 100) / 100;
-        if (Math.abs(outstanding) < 1) continue;
-        advAsOn = advAsOn || cl.asOn || null;
-        advOutTotal = Math.round((advOutTotal + outstanding) * 100) / 100;
-        advOut.push({ branch: br, ledger: ln, outstanding, asOn: cl.asOn || null });
+      for (const sd of ['debtor', 'creditor']) {
+        const want = wantOf[br][sd];
+        if (!want.length) continue;
+        const raw = await db.collection('vouchers').aggregate([
+          { $match: { branch: br, date: { $gte: queryFrom, $lte: queryTo }, ...LIVE_ONLY } },
+          { $project: { date: 1, kv: { $concatArrays: [
+            { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+            { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+          { $unwind: '$kv' },
+          { $match: { 'kv.k': { $in: want } } },
+          { $group: { _id: '$date', amt: { $sum: '$kv.v' } } },
+        ], { allowDiskUse: true, maxTimeMS: 55000 }).toArray();
+        for (const r of raw) rows.push({ branch: br, date: String(r._id || ''), [sd]: r.amt || 0, [sd === 'debtor' ? 'creditor' : 'debtor']: 0 });
       }
     }
-    advOut.sort((a, b) => b.outstanding - a.outstanding);
 
+    const loans = await computeLoans(db, { branch, bucket: 'month', from, to });
+    const capex = await computeCapex(db, { branch, from, to, min: 0 });
+    const out = FF.buildFundsFlow({
+      from, to, openings, rows,
+      loans: { opening: (loans.total || {}).opening || 0, closing: (loans.total || {}).closing || 0 },
+      capex: capex.capexFlow || { additions: 0, advanceNet: 0 },
+    });
 
-    res.json({ ok: true, branch, from, to, min,
-      scaleNote: 'A purchase DEBITS the asset (Tally -ve) and is reported as `spend`; a credit to the same ledger is a disposal and is kept apart, never netted. Where one voucher debits one asset and credits another -- capitalising work in progress -- that much is a transfer and is neither.',
-      rows, count: rows.length,
-      additions, disposals, net: Math.round((additions - disposals) * 100) / 100,
-      moved: movedTotal, interBranchTotal, depreciation, depreciationByBranch: depBr,
-      advanceOutstanding: { asOn: advAsOn, total: advOutTotal, rows: advOut, missing: advMissing },
-      advanceGroups,
-      capexFlow: (() => {
-        const r2 = (n) => Math.round(n * 100) / 100;
-        const t = { additions: 0, advanceNet: 0 };
-        for (const br of Object.keys(flowBr)) {
-          t.additions += flowBr[br].additions;
-          t.advanceNet += flowBr[br].advanceNet;
-          flowBr[br].total = r2(flowBr[br].additions + flowBr[br].advanceNet);
-        }
-        return { additions: r2(t.additions), advanceNet: r2(t.advanceNet),
-          total: r2(t.additions + t.advanceNet), byBranch: flowBr };
-      })(),
-      byGroup, byMonth, byAsset, byFunding, excludedGroups });
+    // WHAT THE FIGURES REST ON, said rather than assumed -- the same guards the loan page
+    // carries, because the trade balances are built the same way and fail the same ways.
+    const notes = [];
+    for (const br of branches) {
+      if (!openings[br].asOn) {
+        notes.push(`${br}: Tally's opening balances have not been pulled, so the receivable and payable shown as "opening" are the movement held before ${from}, not balances. The CHANGE over the window is still right. Run the pipeline once and ask again.`);
+      }
+      const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+      const first = f.length ? f[0].date : null;
+      if (openings[br].asOn && first && first > openings[br].asOn) {
+        notes.push(`${br}: the oldest voucher held (${first}) is newer than the day Tally's openings stand on (${openings[br].asOn}), so anything posted in between is in neither half of these balances.`);
+      }
+    }
+    if (ibDropped) {
+      notes.push(`${ibDropped} inter-branch account(s) filed under Sundry Debtors or Creditors are left out of the consolidated figures: one company's receivable from the other is the other's payable, and the group is owed nothing.`);
+    }
+
+    // CHECKED AGAINST TALLY, per the capex page's rule that a balance is worth more when
+    // the page proves it. Only possible when the window ends on the very day Tally's own
+    // closing stands on -- any other day has nothing to compare with.
+    const checks = [];
+    for (const br of branches) {
+      const c = tallyClose[br];
+      if (!c.asOn || c.asOn !== to) continue;
+      const mine = FF.tradePosition({ [br]: openings[br] }, rows.filter((r) => r.branch === br), to);
+      checks.push({ branch: br, asOn: c.asOn,
+        receivables: { ours: mine.receivables, tally: Math.round(-c.debtor * 100) / 100 },
+        payables: { ours: mine.payables, tally: Math.round(c.creditor * 100) / 100 } });
+    }
+
+    res.json({ ok: true, branch, ...out,
+      ledgerCounts: counts, checks, notes,
+      loanAccounts: (loans.loans || []).length,
+      capexRows: capex.count || 0 });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

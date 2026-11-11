@@ -1,6 +1,39 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.88 (server, diag, portal) — November 2026 — Funds flow: where the money went, and how much of it was borrowed
+
+A new page, **Funds flow**, beside Loans and Capex in the portal's own top bar and on the
+landing page before any upload.
+
+It opens with the three balances Tally itself keeps, at each end of the period: **what
+customers owe us**, **what we owe suppliers** (and the net of the two — the money tied up in
+trade), and **what we owe banks**. Then the change in each over the period, set against what
+was spent on machines:
+
+- money tied up in trade went up or down by this much,
+- machines and buildings capitalised came to this,
+- advances for machines not yet here moved by this,
+- and borrowing rose or fell by this.
+
+The headline is the question behind it: *of everything absorbed this period, this much came
+from new borrowing* — with the share as a percentage.
+
+**The two columns balance**, because a funds-flow statement that does not is read as an error.
+The line that closes them is called **met from within the business** and is labelled on the
+page as a balancing figure rather than a measurement — it is what the tracked uses cost beyond
+the tracked borrowing, and this page has no way to break it down.
+
+**Stock is not in it, by design.** The inventory in Tally is not maintained closely enough to
+put a figure on, and a working-capital statement carrying a number nobody trusts is worse than
+one that says it has none. Cash at bank, taxes and the rest of the balance sheet are out too,
+and the page says so on its face.
+
+The loan and capex halves are **the loan page's and the capex page's own figures**, asked for
+from the same code rather than worked out again, so the three pages cannot drift apart. Where
+the window ends on the day Tally's stored closing stands, the page checks its receivables and
+payables against Tally's own and says whether they reconcile.
+
 ## v2.87 (voucher) — November 2026 — The printed voucher says why
 
 **The narration is on the printed voucher now.** It was on the journal layout and missing
