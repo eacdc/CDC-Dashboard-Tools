@@ -989,7 +989,20 @@ $openFrom = ""; $openTo = ""; $legacyBalancesOk = $false
 # so if the company will not say when its books begin, we do not ask for openings at all.
 $openingAsOn = ""
 try {
-    $me = Get-OpenCompanyRows | Where-Object { $_.Company -eq $Company } | Select-Object -First 1
+    # THE ROW FOR THIS COMPANY, found by walking the list -- never by piping it.
+    # Get-OpenCompanyRows returns `,$rows`, so a pipe receives the WHOLE list as one
+    # object: Where-Object then passed all of it through whenever the name was anywhere in
+    # it, `.Books` enumerated every company's date, and the `@()[0]` below quietly took the
+    # FIRST OPEN COMPANY'S. With one company open that is the right one, which is why it
+    # went unseen; with 2019-20 open beside it, the 2023-24 pull announced openings "as at
+    # 20190401". A live sync run while an older year is open would have stored the live
+    # opening under the older year's date -- and every balance built as opening + postings
+    # since that day would then count a whole year twice.
+    $openNow = Get-OpenCompanyRows
+    $me = $null
+    foreach ($coRow in $openNow) {
+        if ("$(@($coRow.Company)[0])" -eq $Company) { $me = $coRow; break }
+    }
     if ($me) {
         # Every field is unwrapped with @()[0]: Tally can answer one twice (attribute
         # and element both), and the array that makes travels all the way to Mongo,

@@ -1,6 +1,23 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.92 (pipeline) — November 2026 — The extractor read the wrong company's "books begin" date when several were open
+
+With several companies open in one Tally, the extractor took the date the books begin from
+the **first company in Tally's list**, not from the company it was pulling. It showed up
+when the old years were opened together: the 2023-24 pull announced its openings "as at
+20190401", which is 2019-20's date.
+
+- **The balances pulled for the trial balance were not affected.** Each year's balances are
+  asked for with that year's own dates, written out in full.
+- **What it could have affected** is the single opening balance the loan, funds-flow and
+  party-balance pages use for the live company, if a daily sync ran while an older year was
+  open in the same Tally. That opening would be stored under the older year's date and a
+  year of postings added on top. The next sync after this fix stores it correctly again.
+
+Old years should not be left open in the Tally the daily sync reads; open them for a
+back-fill and close them afterwards.
+
 ## v2.91 (pipeline) — November 2026 — run_backfill.ps1 stopped before it started
 
 `run_backfill.ps1` failed at once with *Cannot convert value "System.Object[]" to type
