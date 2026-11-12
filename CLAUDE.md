@@ -679,6 +679,13 @@ its own state key (`#balances`). A day the Day Book will not answer for is colle
 exit 5 -- it used to return an empty list and be indistinguishable from a day with no
 entries, so a year could be ticked off with a hole in it. Exit 6 = balances-only got none.
 
+**PowerShell variable names ignore case, so a local must never share a name with a
+parameter.** `run_backfill.ps1` had `[switch]$Plan` and a list called `$plan`: the same
+variable, and a list cannot go into a switch, so the script died with "Cannot convert
+System.Object[] to SwitchParameter" before pulling anything -- on its first real run, since
+nothing here can execute it. The list is `$planRows` now. When adding a parameter or a
+local to any pipeline script, check the other for the name in ANY casing.
+
 **Still not collected** (deliberately out of scope, listed so nobody assumes otherwise):
 gross Dr/Cr where one voucher hits a ledger on both sides (netted in the extractor), cost
 centres, stock items / godowns / stock valuation, bank reconciliation dates and instrument
