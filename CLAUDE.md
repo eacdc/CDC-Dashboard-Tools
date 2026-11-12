@@ -686,6 +686,19 @@ System.Object[] to SwitchParameter" before pulling anything -- on its first real
 nothing here can execute it. The list is `$planRows` now. When adding a parameter or a
 local to any pipeline script, check the other for the name in ANY casing.
 
+**`Get-OpenCompanyRows` returns `,$rows` and must be WALKED, never piped.** Piped, the
+whole list arrives as one object: `Where-Object { $_.Company -eq $Company }` passes all of
+it whenever the name is anywhere in it, `.Books` enumerates every company's date, and
+`@()[0]` takes the FIRST OPEN company's. With one company open that is the right answer, so
+it went unseen until old years were opened beside each other and the 2023-24 pull announced
+its openings "as at 20190401". The per-year snapshots were unaffected (each names its own
+window explicitly), but `openingAsOn` -- the day `masters.opening` is labelled with -- was
+wrong whenever an older company sat earlier in the list, and a live sync in that state
+stores the live opening under the older year's date, which makes every `opening + postings
+since openingAsOn` reader (loans, funds, party balance) count a year twice. Assign the list
+and `foreach` it, as the safety block and `-ListCompanies` always did. **Operationally: old
+years should not be left open in the Tally the daily sync reads.**
+
 **Still not collected** (deliberately out of scope, listed so nobody assumes otherwise):
 gross Dr/Cr where one voucher hits a ledger on both sides (netted in the extractor), cost
 centres, stock items / godowns / stock valuation, bank reconciliation dates and instrument
