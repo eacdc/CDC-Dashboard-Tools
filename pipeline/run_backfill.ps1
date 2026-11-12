@@ -26,6 +26,13 @@
     STEP 2 - run it (hours, not minutes - one Tally request per day of history):
         powershell -ExecutionPolicy Bypass -File .\run_backfill.ps1 -Branch kol -FromFY 2015 -ToFY 2024
 
+    BALANCES ONLY - for years whose vouchers are already in Mongo (minutes, not hours):
+        powershell -ExecutionPolicy Bypass -File .\run_backfill.ps1 -Branch kol -FromFY 2015 -ToFY 2024 -BalancesOnly
+    Stores each year's opening and closing balance of every ledger, its chart of accounts
+    and its voucher types - what a trial balance as on any date in that year is built from
+    and checked against. Tracked separately from the voucher back-fill, so a year already
+    marked done there is still pulled here.
+
     Company names default to "CDC PRINTERS {FY}" (e.g. "CDC PRINTERS 2015-16").
     Where a year's company is named differently, override just that year:
         -Companies "2019-20=CDC PRINTERS PVT LTD 2019-20","2020-21=CDC 2020-21"
@@ -43,6 +50,7 @@ param(
     [string]$IngestToken = $env:CDC_INGEST_TOKEN,
     [string]$OutDir,                                # default: .\tally_export (same as run_daily)
     [int]$MinLedgers = 50,                          # safety floor passed through to the extractor
+    [switch]$BalancesOnly,                          # balances + voucher types only, no vouchers
     [switch]$Plan,                                  # print what would be pulled, then stop
     [switch]$Force,                                 # re-pull years already marked done
     [switch]$ContinueOnError                        # keep going if one year fails (default: stop)
@@ -88,7 +96,11 @@ if (Test-Path $statePath) {
         foreach ($p in $raw.PSObject.Properties) { $state[$p.Name] = $p.Value }
     } catch { Write-Warning ("Could not read {0} ({1}) - starting with an empty state." -f $statePath, $_.Exception.Message) }
 }
-function StateKey([int]$y) { return ("{0}/{1}" -f $Branch, (FyLabel $y)) }
+# A balances-only pass is its own piece of work: a year whose VOUCHERS are done has not
+# thereby had its balances pulled, so the two are ticked off under different keys.
+$stateSuffix = ""
+if ($BalancesOnly) { $stateSuffix = "#balances" }
+function StateKey([int]$y) { return ("{0}/{1}{2}" -f $Branch, (FyLabel $y), $stateSuffix) }
 function SaveState() {
     ($state | ConvertTo-Json -Depth 4) | Set-Content -Path $statePath -Encoding ASCII
 }
@@ -132,6 +144,7 @@ foreach ($row in $plan) {
         '-Branch',$Branch, '-Company',$row.Company,
         '-TallyUrl',$TallyUrl, '-OutDir',$OutDir, '-MinLedgers',$MinLedgers
     )
+    if ($BalancesOnly) { $argv += @('-BalancesOnly') }
     if ($IngestUrl)   { $argv += @('-IngestUrl',$IngestUrl) }
     if ($IngestToken) { $argv += @('-IngestToken',$IngestToken) }
     try {
@@ -141,6 +154,12 @@ foreach ($row in $plan) {
         # as done would quietly leave a hole in the history.
         if ($LASTEXITCODE -eq 2) {
             throw ("company '{0}' is not loaded in this Tally (master came back below the {1}-ledger safety floor)." -f $row.Company, $MinLedgers)
+        }
+        if ($LASTEXITCODE -eq 5) {
+            throw "Tally did not answer for one or more days of this year (listed above). What was read is stored; the year is NOT marked done. Re-run it once Tally is idle."
+        }
+        if ($LASTEXITCODE -eq 6) {
+            throw ("Tally gave no balances for '{0}'. Is that company open and idle at 'Gateway of Tally'?" -f $row.Company)
         }
         if ($LASTEXITCODE -ne 0) { throw ("extractor exited with code {0}." -f $LASTEXITCODE) }
     } catch {
@@ -158,7 +177,7 @@ foreach ($row in $plan) {
     # Only mark a year done once it actually reached Mongo. Without -IngestUrl the
     # files are on disk but NOT loaded, so the year stays open until loader.js runs.
     if ($IngestUrl) {
-        $state[("{0}/{1}" -f $Branch, $row.FY)] = (Get-Date).ToString('s')
+        $state[("{0}/{1}{2}" -f $Branch, $row.FY, $stateSuffix)] = (Get-Date).ToString('s')
         SaveState
     }
     $okCount++

@@ -32,6 +32,16 @@
                    -IngestUrl "https://your-api.onrender.com" -IngestToken "SECRET"
         (for every year in one go, use run_backfill.ps1 instead)
 
+    RUN (balances + voucher types ONLY, no vouchers - minutes, not hours):
+        powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 `
+                   -BalancesOnly -Historical -FromDate 20190401 -ToDate 20200331 -Branch kol `
+                   -Company "CDC PRINTERS 2019-20" `
+                   -IngestUrl "https://your-api.onrender.com" -IngestToken "SECRET"
+        Stores that company-year's opening and closing balance of every ledger, the chart
+        of accounts as it stood, and the voucher-type master - what a trial balance as on
+        any date in that year is built from and checked against. Drop -Historical for the
+        LIVE company. (for every old year in one go: run_backfill.ps1 -BalancesOnly)
+
     RUN (the wrong company went into a branch - wipe it and re-ingest clean):
         powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -Reset `
                    -FromDate 20250401 -ToDate 20260820 -Branch kol `
@@ -67,6 +77,10 @@ param(
     [switch]$Incremental,                # ALTERID-based true-incremental sync (needs -IngestUrl)
     [switch]$Historical,                 # pulling an OLD financial-year company: merge its master
                                          #   instead of replacing the live one (see run_backfill.ps1)
+    [switch]$BalancesOnly,               # pull masters + per-year opening/closing balances +
+                                         #   voucher types and push them WITHOUT any vouchers.
+                                         #   For giving an already back-filled year the balances
+                                         #   a trial balance needs, in minutes instead of hours.
     [switch]$ListCompanies,              # print the companies this Tally knows about, then exit
     [switch]$ListCompaniesJson,          # the same, as JSON on stdout and nothing else, so a
                                          #   caller can decide which port serves which company
@@ -145,6 +159,11 @@ if (-not $AllowBranchMismatch) {
     }
 }
 
+# ---- guard: a balances-only run pulls no vouchers, so it cannot be any voucher mode ----
+if ($BalancesOnly -and ($Incremental -or $VoucherNos -or $Reset -or $ResetAll)) {
+    throw "-BalancesOnly pulls balances and no vouchers: it cannot be combined with -Incremental, -VoucherNos, -Reset or -ResetAll."
+}
+
 # ---- guard: historical pulls must never drive the incremental machinery ----
 # ALTERID is a per-COMPANY counter and sync_state stores one high-water mark per
 # BRANCH. Running -Incremental against an old financial-year company would write
@@ -169,6 +188,12 @@ try {
 } catch { Write-Warning ("Could not raise TLS to 1.2: {0}" -f $_.Exception.Message) }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# Days the Day Book would not answer for. A failed day used to return an empty list and
+# be indistinguishable from a day with no entries, so a year could be marked done with a
+# hole in it. They are collected, tried once more at the end, and whatever still fails is
+# reported, sent to the server with the period it belongs to, and fails the run.
+$script:FailedDays = New-Object System.Collections.ArrayList
 
 # ---- helpers (unchanged from the CSV extractor) ----
 function xval($node) {
@@ -488,7 +513,11 @@ function Get-DayVouchers([string]$ymd) {
 </ENVELOPE>
 "@
     $out = New-Object System.Collections.ArrayList
-    try { $raw = Post-Tally $payload } catch { Write-Warning ("  {0} : request failed - {1}" -f $ymd, $_.Exception.Message); return $out }
+    try { $raw = Post-Tally $payload } catch {
+        Write-Warning ("  {0} : request failed - {1}" -f $ymd, $_.Exception.Message)
+        [void]$script:FailedDays.Add($ymd)
+        return $out
+    }
     [xml]$xml = $raw
     foreach ($v in $xml.SelectNodes("//VOUCHER")) { $o = ConvertTo-VoucherObject $v; if ($o) { [void]$out.Add($o) } }
     return $out
@@ -876,6 +905,48 @@ foreach ($g in $gx.SelectNodes("//GROUP")) {
 }
 Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 
+# ---- voucher types: which vouchers post to the books at all -----------------
+# A Sales Order carries ledger amounts and posts nothing. Tally decides that by the
+# RESERVED type a voucher type was created from, and a type can be named anything
+# ("Purchase - Fixed Assets", "Journal - Export"), so the name on the voucher cannot say.
+# This is the master that can: name -> parent, walked to its root by the server.
+#
+# Its own request, tried once, short: nothing about the voucher sync may wait on it, and
+# without it the server falls back to judging by name and says that it did.
+$vtypeToParent = @{}
+$vtypePayload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
+  <TYPE>Collection</TYPE><ID>VchTypeList</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="VchTypeList" ISMODIFY="No">
+        <TYPE>VoucherType</TYPE>
+        <FETCH>NAME,PARENT</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+try {
+    [xml]$vx = Post-Tally $vtypePayload 1 60
+    foreach ($t in $vx.SelectNodes("//VOUCHERTYPE")) {
+        # NAME is both an attribute and a child here, as on COMPANY: read it explicitly.
+        $vn = CompField $t "NAME"; if (-not $vn) { continue }
+        $vp = ""
+        $pe = $t.SelectSingleNode("PARENT"); if ($pe) { $vp = xval $pe }
+        $vtypeToParent[$vn] = $vp
+    }
+    Write-Host ("  Voucher types: {0}" -f $vtypeToParent.Count)
+} catch {
+    Write-Warning ("  Voucher types not fetched: {0}" -f $_.Exception.Message)
+    Write-Warning "  The sync is unaffected -- the trial balance will judge which vouchers post by their type NAMES, and say so."
+}
+
 # ---- what each party owed when the books opened -----------------------------
 # CLOSINGBALANCE is not reachable this way and the attempt is abandoned: Tally has to
 # walk every posting to work one out, and 886 ledgers that come back BY NAME in two
@@ -913,6 +984,7 @@ Write-Host ("  Groups  : {0}" -f $groupToParent.Count)
 # sync again.
 $ledgerOpening = @{}
 $ledgerClosing = @{}
+$openFrom = ""; $openTo = ""; $legacyBalancesOk = $false
 # The date FIRST: an opening balance whose day is unknown cannot be added to anything,
 # so if the company will not say when its books begin, we do not ask for openings at all.
 $openingAsOn = ""
@@ -987,6 +1059,7 @@ if ($openingAsOn -and $ledgerToGroup.Count -ge $MinLedgers) {
             $cb = ToAmount (xval $l.CLOSINGBALANCE)
             if ($cb -ne 0) { $ledgerClosing[$on] = $cb }
         }
+        $legacyBalancesOk = $true
         Write-Host ("  Openings: {0} ledgers carry one as at {1}, and {2} carry a closing as at {3} -- both asked for BY DATE, so neither can be the wrong period's" -f $ledgerOpening.Count, $openingAsOn, $ledgerClosing.Count, $openTo)
     } catch {
         Write-Warning ("  Ledger openings not fetched: {0}" -f $_.Exception.Message)
@@ -1025,6 +1098,107 @@ if ($ledgerToGroup.Count -lt $MinLedgers) {
         Write-Warning ("  (could not list that Tally's open companies: {0})" -f $_.Exception.Message)
     }
     exit 2
+}
+
+# ---- balance snapshots: one per financial year this pull covers -------------
+# The block above keeps ONE opening and ONE closing, for the live company, because that is
+# all the masters document can hold. A trial balance as on any date needs the opening of
+# the PERIOD the date falls in -- and a revenue ledger starts every financial year at nil,
+# so no adding-up of vouchers recovers an old year's opening. So each financial year this
+# pull covers is asked for by name: opening as at its first day, closing as at its last
+# (or as at -ToDate, for the year still running). The server keeps them per period, keyed
+# branch|from, so an old year's pull writes its own slot and cannot touch another's.
+#
+# The closing is the half that proves the rest: opening + every voucher we hold for the
+# period must equal it, ledger by ledger. Where it does, that year is completely captured.
+#
+#   -Incremental          only the year -ToDate falls in (one request a day, not several)
+#   a full / historical   every year from -FromDate (or the day the books begin) to -ToDate
+#   -VoucherNos, -DryRun  none
+#
+# Same discipline as the request above: its own request, ONE attempt, and the voucher sync
+# never waits on it. A deliberate -Historical or -BalancesOnly run is given longer, since
+# balances are the whole reason it is being run.
+function Get-FyStartYear([string]$ymd) {
+    $y = [int]$ymd.Substring(0, 4); $m = [int]$ymd.Substring(4, 2)
+    if ($m -lt 4) { $y = $y - 1 }
+    return $y
+}
+function Get-BalanceSnapshot([string]$from, [string]$to, [int]$timeoutSec) {
+    $res = @{ ok = $false; opening = @{}; closing = @{} }
+    $snapPayload = @"
+<ENVELOPE>
+  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>
+  <TYPE>Collection</TYPE><ID>LedgerBalances</ID></HEADER>
+  <BODY><DESC>
+    <STATICVARIABLES>
+      <SVCURRENTCOMPANY>$Company</SVCURRENTCOMPANY>
+      <SVFROMDATE TYPE="Date">$from</SVFROMDATE>
+      <SVTODATE TYPE="Date">$to</SVTODATE>
+      <SVEXPORTFORMAT>`$`$SysName:XML</SVEXPORTFORMAT>
+    </STATICVARIABLES>
+    <TDL><TDLMESSAGE>
+      <COLLECTION NAME="LedgerBalances" ISMODIFY="No">
+        <TYPE>Ledger</TYPE>
+        <FETCH>NAME,OPENINGBALANCE,CLOSINGBALANCE</FETCH>
+      </COLLECTION>
+    </TDLMESSAGE></TDL>
+  </DESC></BODY>
+</ENVELOPE>
+"@
+    try {
+        [xml]$sx = Post-Tally $snapPayload 1 $timeoutSec
+        foreach ($l in $sx.SelectNodes("//LEDGER")) {
+            $on = xval $l.NAME; if (-not $on) { continue }
+            # Raw Tally sign: -ve = Dr, +ve = Cr. Nil balances are left out.
+            $ob = ToAmount (xval $l.OPENINGBALANCE)
+            if ($ob -ne 0) { $res.opening[$on] = $ob }
+            $cb = ToAmount (xval $l.CLOSINGBALANCE)
+            if ($cb -ne 0) { $res.closing[$on] = $cb }
+        }
+        $res.ok = $true
+    } catch {
+        Write-Warning ("  Balances {0}..{1} not fetched: {2}" -f $from, $to, $_.Exception.Message)
+    }
+    return $res
+}
+$snapshots = New-Object System.Collections.ArrayList
+if (-not $VoucherNos -and -not $DryRun) {
+    $snapLow = $FromDate
+    if ($openingAsOn -and ([int]$openingAsOn -gt [int]$snapLow)) { $snapLow = $openingAsOn }
+    if ($Incremental) { $snapLow = $ToDate }
+    $snapTimeout = 60
+    if ($Historical -or $BalancesOnly) { $snapTimeout = 300 }
+    $fyFirst = Get-FyStartYear $snapLow
+    $fyLast  = Get-FyStartYear $ToDate
+    for ($fyY = $fyFirst; $fyY -le $fyLast; $fyY++) {
+        $sFrom = "{0}0401" -f $fyY
+        if ($openingAsOn -and ([int]$openingAsOn -gt [int]$sFrom)) { $sFrom = $openingAsOn }
+        $sTo = "{0}0331" -f ($fyY + 1)
+        if ([int]$ToDate -lt [int]$sTo) { $sTo = $ToDate }
+        if ([int]$sTo -lt [int]$sFrom) { continue }
+        $sOpen = $null; $sClose = $null
+        if ($legacyBalancesOk -and $sFrom -eq $openFrom -and $sTo -eq $openTo) {
+            # The request above asked for exactly this window: use its answer, do not ask twice.
+            $sOpen = $ledgerOpening; $sClose = $ledgerClosing
+        } else {
+            $snap = Get-BalanceSnapshot $sFrom $sTo $snapTimeout
+            if ($snap.ok) { $sOpen = $snap.opening; $sClose = $snap.closing }
+        }
+        if ($null -eq $sOpen) { continue }
+        # A period with no balance at all is the shape of a failed answer, not of a company
+        # with nothing in it. It is not sent, and the server would not store it if it were.
+        if (($sOpen.Count + $sClose.Count) -eq 0) {
+            Write-Warning ("  Balances {0}..{1}: Tally answered with none -- not sent." -f $sFrom, $sTo)
+            continue
+        }
+        $oOpen = [ordered]@{}
+        foreach ($ln in ($sOpen.Keys | Sort-Object)) { $oOpen[$ln] = $sOpen[$ln] }
+        $oClose = [ordered]@{}
+        foreach ($ln in ($sClose.Keys | Sort-Object)) { $oClose[$ln] = $sClose[$ln] }
+        [void]$snapshots.Add([ordered]@{ from = $sFrom; to = $sTo; company = $Company; opening = $oOpen; closing = $oClose })
+        Write-Host ("  Balances {0}..{1}: {2} ledgers open with one, {3} close with one" -f $sFrom, $sTo, $oOpen.Count, $oClose.Count)
+    }
 }
 
 # ---- party classification -------------------------------------------------
@@ -1080,6 +1254,50 @@ $masterObj = [ordered]@{ ledgers = $mLedgers; groups = $mGroups; contacts = $mCo
                          opening = $mOpening; openingAsOn = $openingAsOn;
                          closing = $mClosing; closingAsOn = $ToDate;
                          openingAsOnDerived = $false }
+# Voucher types and the per-year balance snapshots ride INSIDE the master, so they travel
+# wherever it does -- /ingest, /sync, a targeted push, or a file loader.js pushes later --
+# with no second transport to keep in step.
+$mVtypes = [ordered]@{}
+foreach ($vn in ($vtypeToParent.Keys | Sort-Object)) { $mVtypes[$vn] = $vtypeToParent[$vn] }
+if ($mVtypes.Count -gt 0) { $masterObj.vtypes = $mVtypes }
+$masterObj.snapshots = $snapshots.ToArray()
+
+# ======================================================================
+# BALANCES-ONLY MODE - masters, voucher types and balances; no vouchers.
+# ======================================================================
+# For a year whose vouchers are already in Mongo. Re-pulling them is a Tally request per
+# day of the year; this is three or four requests in all.
+if ($BalancesOnly) {
+    if ($snapshots.Count -eq 0) {
+        Write-Warning "Balances-only: Tally gave no balances for any period in the range, so there is nothing to store. Is the company idle at 'Gateway of Tally'? Nothing was pushed."
+        exit 6
+    }
+    $balTag  = "{0}_{1}_to_{2}_balances" -f $Branch, $FromDate, $ToDate
+    $balPath = Join-Path $OutDir ("{0}_Master.json" -f $balTag)
+    [System.IO.File]::WriteAllText($balPath, ($masterObj | ConvertTo-Json -Depth 6 -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host ("Wrote {0}" -f $balPath)
+    if ($IngestUrl) {
+        # No from/to on purpose: nothing about any voucher changed, so the server has no
+        # year-on-year figures to rebuild on the strength of this push.
+        $bPayload = [ordered]@{ branch = $Branch; vouchers = @(); master = $masterObj }
+        if ($Historical) { $bPayload.masterMode = 'merge' }
+        $bBody = $bPayload | ConvertTo-Json -Depth 12 -Compress
+        $bHeaders = @{ 'Content-Type' = 'application/json' }
+        if ($IngestToken) { $bHeaders['x-ingest-token'] = $IngestToken }
+        try {
+            $bResp = Invoke-WebRequest -Uri ("{0}/ingest" -f $IngestUrl.TrimEnd('/')) -Method Post -Body $bBody -Headers $bHeaders -UseBasicParsing
+            Write-Host ("  Balances pushed: {0}" -f $bResp.Content)
+        } catch {
+            Write-Warning ("  Balances push FAILED: {0}" -f $_.Exception.Message)
+            Write-Warning ("  The file is on disk at {0}; fix the URL/token and re-run." -f $balPath)
+            exit 3
+        }
+    } else {
+        Write-Host "No -IngestUrl given: balances written locally only."
+    }
+    Write-Host "Balances-only run complete."
+    return
+}
 
 # ======================================================================
 # INCREMENTAL MODE - short-circuits the full pull below.
@@ -1120,6 +1338,27 @@ for ($d = $start; $d -le $end; $d = $d.AddDays(1)) {
     Write-Host ("  {0} : {1} vouchers" -f $ymd, $dayV.Count)
     Start-Sleep -Milliseconds 200
 }
+
+# One more try for any day the Day Book would not answer for. A failed day contributed
+# nothing above, so a second answer cannot double anything.
+if ($script:FailedDays.Count -gt 0) {
+    $retryDays = @($script:FailedDays.ToArray() | Sort-Object -Unique)
+    $script:FailedDays.Clear()
+    Write-Warning ("  {0} day(s) did not answer -- trying each once more: {1}" -f $retryDays.Count, ($retryDays -join ', '))
+    foreach ($ymd in $retryDays) {
+        $dayV = Get-DayVouchers $ymd
+        foreach ($o in $dayV) {
+            [void]$txnsOut.Add($o)
+            if ($EmitCsv) { [void]$csvDay.Add([PSCustomObject][ordered]@{ 'Date'=$o.date;'Vch Type'=$o.type;'Vch No.'=$o.no;'Party'=$o.party }) }
+        }
+        Write-Host ("  {0} : {1} vouchers (second attempt)" -f $ymd, $dayV.Count)
+        Start-Sleep -Milliseconds 200
+    }
+}
+# What STILL failed goes to the server with the period it belongs to, so a trial balance
+# that does not reconcile can say which days to look at. Always sent by a pull that read
+# vouchers -- an empty list is how an earlier failure gets cleared.
+$masterObj.failedDays = @($script:FailedDays.ToArray() | Sort-Object -Unique)
 
 Write-Host ""
 Write-Host ("TOTAL vouchers: {0}" -f $txnsOut.Count)
@@ -1275,4 +1514,15 @@ if ($IngestUrl) {
     } else {
         Write-Host "Push them from an internet-connected machine with: node server/loader.js"
     }
+}
+
+# A day the Day Book never answered for is a hole in the books, however cleanly the rest
+# arrived. Everything that WAS read has been written and pushed above; the exit code says
+# the range is not whole, so run_backfill does not tick the year off and a caller that
+# trusts the code is not told a lie.
+if ($script:FailedDays.Count -gt 0) {
+    $still = @($script:FailedDays.ToArray() | Sort-Object -Unique)
+    Write-Warning ("{0} day(s) could NOT be read from Tally and are missing from this pull: {1}" -f $still.Count, ($still -join ', '))
+    Write-Warning "Re-run just those days (-FromDate <day> -ToDate <day>) once Tally is idle at 'Gateway of Tally'."
+    exit 5
 }

@@ -1022,6 +1022,55 @@ Covered by `npm run test:alias` (rename found, sister concerns refused, GSTIN ty
 survived, 3,300 ledgers in ~0.2 s) and `npm run test:browser:alias` (the panel end
 to end in Chromium).
 
+## TRIAL BALANCE AS ON ANY DATE (`/diag/tb.html`, `GET /api/tb`)
+
+**What is stored, and why it had to change.** Tally keeps one company per financial year
+for the old years, and all of them land in one MongoDB database: every voucher in
+`vouchers` (keyed `branch:guid`), and ONE `masters` document per branch. One document can
+hold one opening and one closing, so only the live company ever had balances; a back-fill
+of an old year was forbidden to write its own (they would have replaced the current ones).
+A revenue ledger starts every financial year at nil, so an old year's opening cannot be
+recovered by adding vouchers up either. The `balances` collection fixes that: one snapshot
+per branch per period, keyed `branch|from`.
+
+| In each snapshot | From Tally | Used for |
+|---|---|---|
+| `opening` | `OPENINGBALANCE`, asked for BY DATE as at the period's first day | the start of every balance |
+| `closing` | `CLOSINGBALANCE`, as at the period's last day (or the day of the pull, for the year still running) | the check |
+| `ledgers`, `groups` | that company's own chart of accounts | grouping each ledger where it sat THAT year |
+| `vtypes` | voucher type -> the type it was created from | deciding which vouchers post |
+| `failedDays` | days the Day Book would not answer for | saying where to look when the check fails |
+
+**The balance of a ledger as on D** = `opening[ledger]` + every posting to it from the
+period's first day to D. Signs are Tally's, raw: -ve = Dr, +ve = Cr.
+
+**Which vouchers count.** Not cancelled, not optional (as everywhere), and not of a type
+that posts nothing to the books: Memorandum, Reversing Journal, Sales/Purchase Order, Job
+Work In/Out Order, Delivery Note, Receipt Note, Rejections In/Out, Stock Journal, Physical
+Stock, Material In/Out, Attendance. A type is judged by the RESERVED type at the root of
+its parent chain, from that year's voucher-type master, never by its name - "Purchase -
+Fixed Assets" is a Purchase, and a type created from Sales Order is an order whatever it is
+called. Payroll posts. Where the master does not hold a type (renamed or deleted since) the
+name is used, by prefix, and the page says so.
+
+**The check.** Whatever date is asked for, the same sum is also carried to the day the
+snapshot's closing stands on and compared with Tally's closing, ledger by ledger (0.50
+tolerance). All agree -> the year is completely captured. Any differ -> they are listed,
+largest first. A ledger Tally closes with a balance that no voucher of ours touches is in
+that list too.
+
+**Two differences that are not capture faults**, shown separately: *openings that do not
+balance among themselves* (Tally's own "Difference in opening balances"), and - if the
+closing difference is not equal to the opening one - *a voucher whose debits and credits
+are unequal*.
+
+**What it does not do.** No consolidated trial balance: the two branches are separate
+Tally companies and there is no Tally figure to check a combined one against. No answer
+for a date in a year with no snapshot: a neighbouring year's opening would produce a full,
+balanced, wrong statement. Debit and Credit columns are the net per voucher (the extractor
+nets a ledger that appears on both sides of one voucher), so they can be slightly under
+Tally's gross turnover on such a ledger; the closing balance is unaffected.
+
 ## CRITICAL FIXES HISTORY
 
 1. **Cashflow sign convention** — Receipt raw, Payment *-1, Contra *-1 then check sign

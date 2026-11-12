@@ -106,7 +106,7 @@ var e=React.createElement,useState=React.useState,useRef=React.useRef;
 // how the landing badge stayed at v1.1 for months while the other two moved -- and a
 // stale badge is worse than none, because it is read as proof that a deploy did not
 // land. They all read these globals now. Bump the version HERE and nowhere else.
-window.CDC_VER='v1.23';window.CDC_BUILD='07-Nov-2026';
+window.CDC_VER='v1.24';window.CDC_BUILD='07-Nov-2026';
 var APP_VERSION=window.CDC_VER;var APP_BUILD=window.CDC_BUILD;
 try{if('caches' in window){caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}}catch(_){}
 var TPG={'Capital Account':null,'Revenue Account':null,'Current Assets':'Capital Account','Current Liabilities':'Capital Account','Fixed Assets':'Capital Account','Loans (Liability)':'Capital Account','Investments':'Capital Account','Suspense A/c':'Capital Account','Misc. Expenses (ASSET)':'Capital Account','Branch / Divisions':'Capital Account','Direct Incomes':'Revenue Account','Direct Expenses':'Revenue Account','Indirect Incomes':'Revenue Account','Indirect Expenses':'Revenue Account','Sales Accounts':'Revenue Account','Purchase Accounts':'Revenue Account','Reserves & Surplus':'Capital Account'};
@@ -2728,13 +2728,14 @@ function Portal(){
   if(!built&&solo){
       var SOLO={loans:['🏦 Loan movement','../diag/loans.html','#b45309'],
                 capex:['🏭 Capex','../diag/capex.html','#0f766e'],
-                funds:['📊 Funds flow','../diag/funds.html','#7c3aed']};
+                funds:['📊 Funds flow','../diag/funds.html','#7c3aed'],
+                tb:['⚖ Trial balance','../diag/tb.html','#1d4ed8']};
       var cur=SOLO[solo]||SOLO.loans;
       return e('div',{style:{minHeight:'100vh',background:'#fff'}},
         e('div',{style:{display:'flex',alignItems:'center',gap:'10px',padding:'10px 20px',borderBottom:'2px solid #e2e8f0',background:'#f8fafc',position:'sticky',top:0,zIndex:200,flexWrap:'wrap'}},
           e('span',{style:{fontSize:'11px',fontWeight:700,color:'#0f172a',fontFamily:'monospace',letterSpacing:'1px',marginRight:'6px'}},'CDC FINANCE'),
           e('button',{onClick:function(){setSolo(null);},title:'Back to the upload screen, where P&L, Cashflow, Projection and the rest are loaded',style:{padding:'8px 16px',borderRadius:'8px',border:'1px solid #cbd5e1',background:'#fff',color:'#475569',fontSize:'12px',fontFamily:'monospace',fontWeight:700,cursor:'pointer'}},'↩ Back to portal'),
-          ['loans','capex','funds'].map(function(k4){var it=SOLO[k4];
+          ['loans','capex','funds','tb'].map(function(k4){var it=SOLO[k4];
             return e('button',{key:k4,onClick:function(){if(solo!==k4)setSolo(k4);},style:{padding:'8px 18px',borderRadius:'8px',border:solo===k4?('2px solid '+it[2]):'1px solid #e2e8f0',background:solo===k4?it[2]:'#fff',color:solo===k4?'#fff':'#475569',fontSize:'12px',fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'0.5px'}},it[0]);}),
           e('span',{style:{marginLeft:'auto',fontSize:'10px',color:'#94a3b8',fontFamily:'monospace'}},'reads the database directly \u2014 no upload needed')),
         e('iframe',{key:solo,src:cur[1],title:cur[0],style:{display:'block',width:'100%',height:'calc(100vh - 54px)',border:'none',background:'#fff'}}));
@@ -2750,7 +2751,7 @@ function Portal(){
           e('h1',{style:{fontSize:'22px',fontWeight:700,margin:'4px 0 0'}},'One Upload → Every View'),
           e('p',{style:{color:'#64748b',fontSize:'12px',marginTop:'4px'}},'P&L · Cashflow · Ledger Audit · Projection · Receivables · Payables · Pred vs Actual'),
           e('div',{style:{marginTop:'8px',display:'flex',gap:'8px',justifyContent:'center'}},
-            [['🏦 Loan movement','loans','#b45309'],['🏭 Capex','capex','#0f766e'],['📊 Funds flow','funds','#7c3aed']].map(function(lk){
+            [['🏦 Loan movement','loans','#b45309'],['🏭 Capex','capex','#0f766e'],['📊 Funds flow','funds','#7c3aed'],['⚖ Trial balance','tb','#1d4ed8']].map(function(lk){
               return e('button',{key:lk[1],onClick:function(){setSolo(lk[1]);},style:{padding:'5px 12px',borderRadius:'999px',border:'1px solid #e2e8f0',background:'#fff',color:lk[2],fontSize:'10px',fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'0.5px'}},lk[0]);})),
           e('div',{style:{marginTop:'8px',padding:'4px 10px',display:'inline-block',background:'#ecfdf5',border:'1px solid #a7f3d0',borderRadius:'12px',fontSize:'10px',fontFamily:'monospace',color:'#047857',letterSpacing:'1px'}},window.CDC_VER+' · '+window.CDC_BUILD)),
         e('div',{style:{display:'flex',borderRadius:'8px',overflow:'hidden',border:'1px solid #cbd5e1',marginBottom:'14px'}},
@@ -2803,6 +2804,7 @@ function Portal(){
     : active==='loans' ? embedded('../diag/loans.html','Loan movement')
     : active==='capex' ? embedded('../diag/capex.html','Capex')
     : active==='funds' ? embedded('../diag/funds.html','Funds flow')
+    : active==='tb' ? embedded('../diag/tb.html','Trial balance')
     : e(window.CDC_PROJ.Dash,{data:projData,onReset:reset,overrides:projOverrides});
   return e('div',{className:cbusy?'cdcwait':'',style:{minHeight:'100vh',background:'#fff'}},
     e('div',{style:{display:'flex',alignItems:'center',gap:'10px',padding:'10px 20px',borderBottom:'2px solid #e2e8f0',background:'#f8fafc',position:'sticky',top:0,zIndex:200,flexWrap:'wrap'}},
@@ -2812,6 +2814,7 @@ function Portal(){
       navBtn('loans','🏦 Loans','#b45309','Loan movement: opening, drawn, repaid and closing for every loan, by day / week / month. Reads the database directly -- no upload needed.'),
       navBtn('capex','🏭 Capex','#0f766e','Fixed assets bought: what, when, for how much, and how it was funded. Reads the database directly -- no upload needed.'),
       navBtn('funds','📊 Funds flow','#7c3aed','Where the money went and how much of it was borrowed: the change in receivables less payables, in borrowing, and what was spent on machines. Reads the database directly -- no upload needed.'),
+      navBtn('tb','⚖ Trial balance','#1d4ed8','Every ledger balance as on any date, one company at a time, with the proof beside it: opening plus every voucher held, compared with the closing Tally itself reports, ledger by ledger. Reads the database directly -- no upload needed.'),
       active==='proj'?e('div',{style:{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}},e('span',{style:{fontSize:'9px',color:'#94a3b8',fontFamily:'monospace'}},'as-of'),e('input',{type:'date',value:asOf,onChange:function(ev){rebuildProj(ev.target.value);},style:{padding:'4px 8px',border:'1px solid #e2e8f0',borderRadius:'6px',fontFamily:'monospace',fontSize:'11px'}})):null,
       active==='proj'?e('div',{style:{display:'flex',gap:'2px',marginLeft:'2px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},['all','kol','ahm'].map(function(__b){var __lbl=__b==='all'?'Consol':(__b==='kol'?'KOL':'AHM');var __t='pb:'+__b;return e('span',{key:__b,onClick:function(){if(projBranch!==__b)runChromeBusy(__t,function(){chooseProjBranch(__b);});},style:{padding:'5px 10px',cursor:cbusy===__t?'progress':'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:projBranch===__b?'#be185d':'#f1f5f9',color:projBranch===__b?'#fff':'#475569'}},busyLabel(cbusy===__t,__lbl));})):null,
       active==='proj'?e('div',{title:'How receipts are matched to bills. Bill-wise settles the exact bill Tally booked the receipt against (Agst Ref); FIFO ignores those references and clears the oldest bill first, as the dashboard did before.',style:{display:'flex',gap:'2px',marginLeft:'6px',border:'1px solid #cbd5e1',borderRadius:'6px',overflow:'hidden'}},[['billwise','🧾 Bill-wise'],['fifo','⏳ FIFO']].map(function(__m){var __t='am:'+__m[0];return e('span',{key:__m[0],onClick:function(){if(allocMode!==__m[0])runChromeBusy(__t,function(){chooseAllocMode(__m[0]);});},style:{padding:'5px 10px',cursor:cbusy===__t?'progress':'pointer',fontSize:'10px',fontFamily:'monospace',fontWeight:600,background:allocMode===__m[0]?'#7c3aed':'#f1f5f9',color:allocMode===__m[0]?'#fff':'#475569'}},busyLabel(cbusy===__t,__m[1]));})):null,

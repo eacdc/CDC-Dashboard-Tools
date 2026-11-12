@@ -520,6 +520,72 @@ in on its own, a restart still needs a person:
   session — and Tally — running. *Sign out* ends the session, Tally dies with it, and
   the watchdog then has nowhere to run.
 
+## Balances for a trial balance
+
+A trial balance as on any date is each ledger's **opening for that financial year** plus
+every voucher from the first day of the year to the date. The vouchers are already in the
+database; the openings, per year, are what this step collects. Each year also brings its
+**closing** balances, and that is what proves the capture: opening + every voucher held
+must equal Tally's own closing, ledger by ledger. The result is at `/diag/tb.html`
+(Trial balance in the portal's top bar).
+
+Every command below is copy-pasteable; the only thing to replace is `REAL_TOKEN`.
+
+**1. The live company** (covers every financial year since its books began). Open it in
+Tally, leave Tally idle at *Gateway of Tally*, and run once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -BalancesOnly `
+  -FromDate 20250401 -Branch kol -Company "CDC PRINTERS 2025-26" `
+  -TallyUrl "http://127.0.0.1:9019" `
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "REAL_TOKEN"
+```
+
+and the same for Ahmedabad:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\TallyToJson.ps1 -BalancesOnly `
+  -FromDate 20250401 -Branch ahm -Company "CDC PRINTERS PVT LTD. (Ahmedabad) - 2025-26" `
+  -TallyUrl "http://127.0.0.1:9019" `
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "REAL_TOKEN"
+```
+
+After this the daily sync keeps the current year's balances fresh by itself; nothing more
+to schedule.
+
+**2. Each old year** (Kolkata, 2015-16 onward). The vouchers are already back-filled, so
+this pulls balances only: minutes for all ten years, not hours. Open the old companies in
+Tally (several can be open at once), then:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_backfill.ps1 -Branch kol -FromFY 2015 -ToFY 2024 -BalancesOnly `
+  -TallyUrl "http://127.0.0.1:9019" `
+  -IngestUrl "https://cdc-finance-automated.onrender.com" -IngestToken "REAL_TOKEN"
+```
+
+A year whose company is not open is skipped and named; open it and re-run, finished years
+are not repeated. Where a year's company has a different name, add
+`-Companies "2019-20=Exact Company Name"` exactly as for the voucher back-fill.
+
+**3. Read the verdict.** Open `/diag/tb.html`. Each year that was pulled is a chip at the
+top; click one. The first section says either **CHECKED AGAINST TALLY** - every ledger's
+opening plus vouchers equals Tally's closing, that year is completely captured - or
+**DOES NOT MATCH TALLY**, with the ledgers that differ and by how much.
+
+What a mismatch means, in the order worth checking:
+
+| What you see | What it is |
+|---|---|
+| A handful of ledgers out, on a year back-filled long ago | Vouchers edited or added in Tally after the back-fill. Re-pull that year (`run_backfill.ps1 -Force`, without `-BalancesOnly`). |
+| A warning sign on the year's chip | The Day Book did not answer for some days when the year was pulled; the days are listed on the page. Re-pull just those days. |
+| Nearly every ledger out | The balances and the vouchers are from different companies (`-Branch`/`-Company` mismatch), or the wrong year's company answered. Check the company name shown under the heading. |
+| Only the current year, by small amounts | Vouchers entered today after the last sync. The next sync closes it. |
+| "Difference in opening balances" | Tally's own openings for that year do not balance among themselves. Tally shows the same figure on its own trial balance; it is in the books, not in the capture. |
+
+`TallyToJson.ps1` exits `5` when the Day Book would not answer for one or more days (what
+was read is still stored; the days are listed and sent to the server), and `6` when a
+`-BalancesOnly` run got no balances at all (the company is not open, or Tally is not idle).
+
 ## Notes for this testing copy
 
 - **Branches:** `run_daily.ps1` loads both:

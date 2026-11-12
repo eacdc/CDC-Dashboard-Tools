@@ -28,6 +28,8 @@ function getDb() {
       await db.collection('vouchers').createIndex({ date: 1 });
       await db.collection('vouchers').createIndex({ branch: 1, guid: 1 }, { unique: true });
       await db.collection('masters').createIndex({ branch: 1 }, { unique: true });
+      // One balance snapshot per branch per period; read by branch, newest period first.
+      await db.collection('balances').createIndex({ branch: 1, from: 1 });
       await db.collection('sync_state').createIndex({ branch: 1 }, { unique: true });
       console.log(`Mongo connected: db="${DB_NAME}"`);
       return db;

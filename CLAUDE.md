@@ -32,6 +32,7 @@ npm run test:proj              # what a party still owes: the receivables engine
 npm run test:loans             # loan movement arithmetic, and /api/loans end to end
 npm run test:capex             # fixed-asset additions: what, when, and how funded
 npm run test:funds             # funds flow: the arithmetic, then /api/funds end to end
+npm run test:tb                # trial balance: the rules, then ingest -> /api/tb end to end
 npm run test:meta              # /api/meta coverage windows
                                # (test:yoy also covers /diag, the party explainer)
 npm run test:reset             # /admin/reset scoping
@@ -617,6 +618,72 @@ year short for the other -- which is exactly the case the note exists for.
 same `Branch / Divisions` test everything else here uses. One company's receivable from the
 other is the other's payable and the group is owed nothing, so `kol` and `ahm` deliberately do
 not add to `all`, and the page says so.
+
+`/diag/tb.html` (`GET /api/tb`, `/api/tb/coverage`) is the trial balance as on any date,
+one company at a time, and the proof that the capture is whole. `server/trialBalance.js`
+holds the arithmetic with no database in it; `npm run test:tb` drives it and then the real
+ingest end to end.
+
+**BALANCES ARE STORED PER PERIOD, in `balances`, keyed `branch|from`.** `masters` is one
+document per branch and can hold one opening and one closing, which is why only the live
+company ever had any and why a back-fill was forbidden to write its own. A revenue ledger
+starts each financial year at nil, so an old year's opening cannot be rebuilt from vouchers
+either. Each snapshot holds that period's `opening`, `closing`, its OWN chart of accounts
+(`ledgers`/`groups` whole -- not `histLedgers`' "names the live master lacks", since a
+ledger alive today may have sat under another group then) and its `vtypes`. They ride
+INSIDE the master payload (`master.snapshots`), so `/ingest`, `/sync`, a targeted push and
+`loader.js` all carry them with no second transport; `storeSnapshots` runs in BOTH master
+modes. `masters.opening`/`closing` are untouched and every existing reader still uses them.
+
+**An empty snapshot is the shape of a failed pull and is never stored** -- it would read as
+every ledger at nil and make every statement for that year confidently wrong. The extractor
+does not send one and `cleanSnapshots` drops one. Same reasoning as `/sync` refusing to
+empty a day on a pull that brought nothing.
+
+**WHICH VOUCHERS POST is decided by the reserved type at the ROOT of the voucher type's
+parent chain** (`vtypes`, a separate `VoucherType` request), never by the name: "Purchase -
+Fixed Assets" is a Purchase, a type created from Sales Order is an order. `NON_ACCOUNTING_BASE`
+in `trialBalance.js` is matched exactly against that root. It is NOT the portal's `NOPOST`:
+that list is about what moves a party's bills and includes Payroll, which posts to the books.
+A type the master does not hold is judged by name prefix and REPORTED (`typesJudgedBy`,
+the `guessed` note) -- a guess must not look like a fact.
+
+**NO PERIOD, NO ANSWER.** `pickSnapshot` returns the latest period starting on or before
+the date, only while the date is inside that period's financial year; otherwise `/api/tb`
+answers `noPeriod` and lists what is held. Never fall back to a neighbouring year's opening.
+
+**THE CHECK IS MADE AT `snapshot.to`, WHATEVER DATE WAS ASKED FOR**, in the same aggregation
+(two cut-offs, `lo`/`hi`, grouped by a period flag). Opening + every posting to that day
+against Tally's closing, per ledger, including ledgers Tally closes with a balance that no
+voucher of ours touches. `openingDifference` (Tally's own openings not balancing) and
+`closingDifference - openingDifference` (a voucher of ours not balancing) are reported
+apart, because the first is in the books and the second is a capture fault.
+
+**A ledger the chart holds under NO group sits under `Primary`** (`Profit & Loss A/c`); only
+a ledger the chart does not hold at all counts as `unclassified`.
+
+**No consolidated trial balance.** The branches are separate Tally companies, so there is no
+Tally figure to check a combined one against, and an unchecked statement is not what this
+page is for.
+
+**Extractor (cannot be run here -- no PowerShell in this sandbox; keep edits surgical and
+ASCII).** Per-FY snapshots are dated requests like the legacy opening one: ONE attempt,
+60s (300s under `-Historical`/`-BalancesOnly`), never fatal. `-Incremental` asks only for
+the year `-ToDate` falls in; a full or historical pull asks for every year from `-FromDate`
+(or `BOOKSFROM`) to `-ToDate`; a window identical to the legacy request reuses its answer.
+`-BalancesOnly` pushes masters + snapshots + voucher types with NO vouchers and NO
+`from`/`to` (so no year-on-year rebuild is triggered) -- it is how an already back-filled
+year gets its balances in minutes; `run_backfill.ps1 -BalancesOnly` loops the years under
+its own state key (`#balances`). A day the Day Book will not answer for is collected in
+`$script:FailedDays`, retried once, sent as `master.failedDays`, and fails the run with
+exit 5 -- it used to return an empty list and be indistinguishable from a day with no
+entries, so a year could be ticked off with a hole in it. Exit 6 = balances-only got none.
+
+**Still not collected** (deliberately out of scope, listed so nobody assumes otherwise):
+gross Dr/Cr where one voucher hits a ledger on both sides (netted in the extractor), cost
+centres, stock items / godowns / stock valuation, bank reconciliation dates and instrument
+details, foreign-currency amounts and rates, the bill-wise breakup of opening balances
+(the Bills CSV backup covers 31 March 2025), and who entered or altered a voucher.
 
 `/diag/ledger.html` settles an argument about ONE ledger: export it out of Tally and the
 page names the vouchers that differ, by number. Reach for it the moment a party's balance
