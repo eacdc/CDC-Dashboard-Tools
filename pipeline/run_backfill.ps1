@@ -106,12 +106,15 @@ function SaveState() {
 }
 
 # ---- build the plan -------------------------------------------------------
-$plan = @()
+# NOT `$plan`: PowerShell variable names ignore case, so that IS the -Plan switch, and a
+# list cannot be stored in a switch ("Cannot convert System.Object[] to SwitchParameter").
+# The script died on this line before it pulled anything.
+$planRows = @()
 for ($y = $FromFY; $y -le $ToFY; $y++) {
     $lbl = FyLabel $y
     $company = if ($override.ContainsKey($lbl)) { $override[$lbl] } else { $CompanyPattern -replace '\{FY\}', $lbl }
     $done = (-not $Force) -and $state.ContainsKey((StateKey $y))
-    $plan += [PSCustomObject]@{
+    $planRows += [PSCustomObject]@{
         FY       = $lbl
         From     = ("{0}0401" -f $y)
         To       = ("{0}0331" -f ($y + 1))
@@ -121,7 +124,7 @@ for ($y = $FromFY; $y -le $ToFY; $y++) {
 }
 
 Say ("backfill plan  branch={0}  FY {1}..{2}  mode={3}" -f $Branch, (FyLabel $FromFY), (FyLabel $ToFY), $(if ($IngestUrl) { "api" } else { "files-only" }))
-$plan | Format-Table -AutoSize | Out-String | Write-Host
+$planRows | Format-Table -AutoSize | Out-String | Write-Host
 if (-not $IngestUrl) {
     Say "WARN: no -IngestUrl / CDC_INGEST_URL - each year will be written to disk only."
     Say ("      Push each year later with: node server\loader.js --dir {0} --branch {1} --historical" -f $OutDir, $Branch)
@@ -131,7 +134,7 @@ if ($Plan) { Say "-Plan given: stopping before any pull."; return }
 
 # ---- run it ---------------------------------------------------------------
 $okCount = 0; $failCount = 0; $skipCount = 0
-foreach ($row in $plan) {
+foreach ($row in $planRows) {
     if ($row.Skip) { Say ("--- FY {0}: already done, skipping (use -Force to redo) ---" -f $row.FY); $skipCount++; continue }
     Say ("--- FY {0}  ({1}..{2})  company '{3}' ---" -f $row.FY, $row.From, $row.To, $row.Company)
     $failed = $false

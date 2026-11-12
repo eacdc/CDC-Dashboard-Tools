@@ -1,6 +1,14 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.91 (pipeline) — November 2026 — run_backfill.ps1 stopped before it started
+
+`run_backfill.ps1` failed at once with *Cannot convert value "System.Object[]" to type
+"System.Management.Automation.SwitchParameter"*. PowerShell ignores letter case in variable
+names, so the script's list of years, `$plan`, was the same variable as its `-Plan` switch,
+and a list cannot be stored in a switch. The list has been renamed. Nothing was pulled or
+sent by the failed runs, so there is nothing to undo: pull the file again and re-run.
+
 ## v2.90 (pipeline, server, diag, portal) — November 2026 — Trial balance as on any date, checked against Tally
 
 **The question was whether the capture is complete, and now the system can answer it
