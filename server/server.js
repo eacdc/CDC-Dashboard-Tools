@@ -14,6 +14,7 @@ const yoy = require('./yoySummary');
 const E = require('./plEngine');
 const LM = require('./loanMovement');
 const FF = require('./fundsFlow');
+const TB = require('./trialBalance');
 
 const PORT = process.env.PORT || 3000;
 const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
@@ -2817,6 +2818,139 @@ app.get('/api/funds', async (req, res) => {
       ledgerCounts: counts, checks, notes,
       loanAccounts: (loans.loans || []).length,
       capexRows: capex.count || 0 });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ---- trial balance as on any date, checked against Tally ---------------------
+// GET /api/tb/coverage                      which periods can be answered for, per company
+// GET /api/tb?branch=kol|ahm&date=YYYYMMDD  the trial balance, and whether it reconciles
+//
+// One company at a time, deliberately. Tally has no consolidated trial balance -- the two
+// branches are separate companies -- so a consolidated one here would have nothing to be
+// checked against, and the whole point of this report is that it is CHECKED: every answer
+// carries the comparison of opening + every posting held against Tally's own closing for
+// the period, ledger by ledger. See trialBalance.js.
+async function tbSnapshots(db, branch) {
+  const rows = await db.collection('balances').find({ branch }).toArray();
+  return rows.filter((r) => r && DATE8.test(String(r.from || ''))).sort((a, b) => (a.from < b.from ? -1 : 1));
+}
+app.get('/api/tb/coverage', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const out = {};
+    for (const br of ['kol', 'ahm']) {
+      const snaps = await tbSnapshots(db, br);
+      const f = await db.collection('vouchers').find({ branch: br }).sort({ date: 1 }).limit(1).toArray();
+      const l = await db.collection('vouchers').find({ branch: br }).sort({ date: -1 }).limit(1).toArray();
+      out[br] = {
+        firstVoucher: f.length ? f[0].date : null,
+        lastVoucher: l.length ? l[0].date : null,
+        periods: snaps.map((sn) => ({
+          from: sn.from, to: sn.to, fy: TB.fyLabel(sn.from), company: sn.company || null,
+          ledgers: sn.ledgerCount || Object.keys(sn.ledgers || {}).length,
+          openings: Object.keys(sn.opening || {}).length,
+          closings: Object.keys(sn.closing || {}).length,
+          voucherTypes: sn.vtypes ? Object.keys(sn.vtypes).length : 0,
+          failedDays: sn.failedDays || [],
+          pulledAt: sn.pulledAt || null,
+        })),
+      };
+    }
+    res.json({ ok: true, branches: out });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/tb', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase();
+    if (!['kol', 'ahm'].includes(branch)) {
+      return res.status(400).json({ ok: false, error: 'branch must be kol or ahm. A trial balance is one company at a time: Tally has no consolidated one to check a combined figure against.' });
+    }
+    const date = DATE8.test(String(req.query.date || '')) ? String(req.query.date) : null;
+    if (!date) return res.status(400).json({ ok: false, error: 'date is required as YYYYMMDD' });
+
+    const db = await getDb();
+    const snaps = await tbSnapshots(db, branch);
+    const snap = TB.pickSnapshot(snaps, date);
+    if (!snap) {
+      // NO PERIOD, NO ANSWER. The nearest period's opening pressed into service would
+      // produce a full, plausible, balanced statement that is simply not this date's.
+      return res.json({ ok: false, noPeriod: true, branch, date,
+        periods: snaps.map((sn) => ({ from: sn.from, to: sn.to, fy: TB.fyLabel(sn.from), company: sn.company || null })),
+        error: snaps.length
+          ? `No balances are stored for the period ${date} falls in. Stored for ${branch}: ${snaps.map((sn) => TB.fyLabel(sn.from)).join(', ')}. Open that year's company in Tally and run the balances pull for it (pipeline/SETUP.md, "Balances for a trial balance").`
+          : `No balances have been pulled for ${branch} yet. Run the pipeline once (any pull now carries them), and for old years run the balances pull per year (pipeline/SETUP.md, "Balances for a trial balance").` });
+    }
+
+    // Two cut-offs in one pass: the date asked for, and the day Tally's closing stands on.
+    const lo = date < snap.to ? date : snap.to;
+    const hi = date < snap.to ? snap.to : date;
+    const win = { branch, date: { $gte: snap.from, $lte: hi }, ...LIVE_ONLY };
+
+    // WHICH VOUCHERS POST. Decided by the reserved type at the root of each voucher type's
+    // chain, from the master as it stood in this period's company; a name that master does
+    // not hold is judged by its prefix and REPORTED, because that is a guess.
+    const master = readMaster(await db.collection('masters').findOne({ branch }));
+    const vtypes = snap.vtypes || (master && master.vtypes) || null;
+    const typeRows = await db.collection('vouchers').aggregate([
+      { $match: win },
+      { $group: { _id: '$type', n: { $sum: 1 } } },
+    ], { maxTimeMS: 55000 }).toArray();
+    const excluded = [], guessed = [];
+    let voucherCount = 0;
+    for (const t of typeRows) {
+      const name = String(t._id || '');
+      const verdict = TB.postsToBooks(name, vtypes);
+      if (verdict.how === 'name') guessed.push({ type: name, vouchers: t.n, treatedAs: verdict.posts ? 'posting' : 'not posting' });
+      if (verdict.posts) voucherCount += t.n;
+      else excluded.push({ type: name, base: verdict.base, vouchers: t.n });
+    }
+
+    const raw = await db.collection('vouchers').aggregate([
+      { $match: excluded.length ? { ...win, type: { $nin: excluded.map((x) => x.type) } } : win },
+      { $project: { date: 1, kv: { $concatArrays: [
+        { $objectToArray: { $ifNull: ['$party_ledgers', {}] } },
+        { $objectToArray: { $ifNull: ['$ledgers', {}] } }] } } },
+      { $unwind: '$kv' },
+      { $group: { _id: { k: '$kv.k', p: { $cond: [{ $lte: ['$date', lo] }, 0, 1] } },
+        // Kept apart, never netted: -ve = Dr, +ve = Cr, exactly as Tally stores them.
+        dr: { $sum: { $cond: [{ $lt: ['$kv.v', 0] }, '$kv.v', 0] } },
+        cr: { $sum: { $cond: [{ $gt: ['$kv.v', 0] }, '$kv.v', 0] } } } },
+    ], { allowDiskUse: true, maxTimeMS: 55000 }).toArray();
+
+    const acc = new Map();
+    for (const r of raw) {
+      const k = String(r._id.k);
+      let m = acc.get(k);
+      if (!m) { m = { ledger: k, dr: 0, cr: 0, drCheck: 0, crCheck: 0 }; acc.set(k, m); }
+      const early = r._id.p === 0;
+      // Up to `lo` counts for both. Between the two cut-offs it counts only for whichever
+      // of them is the later one.
+      if (early || date > snap.to) { m.dr += r.dr || 0; m.cr += r.cr || 0; }
+      if (early || snap.to > date) { m.drCheck += r.dr || 0; m.crCheck += r.cr || 0; }
+    }
+
+    const out = TB.buildTrialBalance({ snapshot: snap, moves: [...acc.values()], date });
+
+    const notes = [];
+    if (!vtypes) {
+      notes.push('The voucher-type master has not been pulled for this period, so which vouchers post to the books was judged from the type NAMES. Run the pipeline once and it will be judged from Tally\'s own master.');
+    } else if (guessed.length) {
+      notes.push(`${guessed.length} voucher type(s) used in this period are not in the voucher-type master (renamed or deleted in Tally since) and were judged from their names: ${guessed.slice(0, 6).map((g) => `"${g.type}" (${g.treatedAs})`).join(', ')}.`);
+    }
+    if (date > snap.to) {
+      notes.push(`This statement stands on ${date}, but Tally's balances were last pulled as at ${snap.to}. Postings after that day are in it; Tally's own word for them arrives with the next pull.`);
+    }
+    if (snap.failedDays && snap.failedDays.length) {
+      notes.push(`The Day Book did not answer for ${snap.failedDays.length} day(s) when this period was pulled (${snap.failedDays.slice(0, 8).join(', ')}), so their vouchers are missing. Re-pull those days.`);
+    }
+    if (out.unclassified) {
+      notes.push(`${out.unclassified} ledger(s) posted to in this period are not in this period's chart of accounts, and sit outside every group.`);
+    }
+    res.json({ ok: true, branch, ...out, vouchers: voucherCount,
+      excludedTypes: excluded.sort((a, b) => b.vouchers - a.vouchers),
+      typesJudgedBy: vtypes ? 'master' : 'name', notes,
+      pulledAt: snap.pulledAt || null });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

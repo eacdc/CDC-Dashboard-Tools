@@ -148,6 +148,84 @@ function unionMaps(base, extra) {
   return out;
 }
 
+// ---- balance snapshots: one per branch per period ---------------------------
+// `masters` is one document per branch, so it can hold ONE opening and ONE closing --
+// the live company's. That is why a back-fill was forbidden to write its balances (they
+// would have replaced the current ones), and why no old year had an opening at all. A
+// trial balance as on any date needs the opening of the period that date falls in, and
+// CDC keeps one Tally company per financial year, so the balances are kept the way Tally
+// keeps them: per period, keyed `branch|from`, where a historical pull writes its own
+// year's slot and can never touch another's.
+//
+// Each snapshot also carries the chart of accounts and the voucher-type master AS THEY
+// STOOD in that company -- a ledger that has since moved group, or a voucher type since
+// renamed, must read in 2019 the way it read in 2019.
+const DATE8 = /^\d{8}$/;
+function cleanAmounts(bag) {
+  const out = {};
+  if (!bag || typeof bag !== 'object' || Array.isArray(bag)) return out;
+  for (const [k, v] of Object.entries(bag)) {
+    const n = Math.round((Number(v) || 0) * 100) / 100;
+    if (k && n) out[k] = n;
+  }
+  return out;
+}
+function cleanNameMap(bag) {
+  const out = {};
+  if (!bag || typeof bag !== 'object' || Array.isArray(bag)) return null;
+  for (const [k, v] of Object.entries(bag)) if (k) out[k] = (v == null || v === '') ? null : String(v);
+  return Object.keys(out).length ? out : null;
+}
+// PowerShell's ConvertTo-Json unwraps a one-element array, so a single snapshot can
+// arrive as a bare object; and a date can arrive as a one-element array of itself.
+function one(x) { return Array.isArray(x) ? x[0] : x; }
+function cleanSnapshots(master) {
+  const raw = master && master.snapshots;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? [raw] : []);
+  const out = [];
+  for (const sn of list) {
+    if (!sn || typeof sn !== 'object') continue;
+    const from = String(one(sn.from) || ''), to = String(one(sn.to) || '');
+    if (!DATE8.test(from) || !DATE8.test(to) || to < from) continue;
+    const opening = cleanAmounts(sn.opening), closing = cleanAmounts(sn.closing);
+    // AN EMPTY SNAPSHOT IS THE SHAPE OF A FAILED PULL, not of a company with no balances.
+    // Stored, it would read as "every ledger opened and closed at nil" and every trial
+    // balance for that year would be confidently wrong -- so it is not stored, the same
+    // way /sync will not empty a day on the strength of a pull that brought nothing.
+    if (!Object.keys(opening).length && !Object.keys(closing).length) continue;
+    out.push({ from, to, company: String(one(sn.company) || ''), opening, closing });
+  }
+  return out;
+}
+async function storeSnapshots(db, branch, master) {
+  const snaps = cleanSnapshots(master);
+  if (!snaps.length) return 0;
+  const vtypes = cleanNameMap(master.vtypes);
+  const hasFailed = Object.prototype.hasOwnProperty.call(master, 'failedDays');
+  const failed = hasFailed
+    ? (Array.isArray(master.failedDays) ? master.failedDays : [master.failedDays]).map(String).filter((d) => DATE8.test(d))
+    : null;
+  for (const sn of snaps) {
+    const set = {
+      branch, from: sn.from, to: sn.to, company: sn.company,
+      opening: sn.opening, closing: sn.closing,
+      // That company's own chart, whole: not the "names the live master lacks" that
+      // histLedgers keeps, because a ledger still alive today may have sat under a
+      // different group then.
+      ledgers: master.ledgers, groups: master.groups,
+      ledgerCount: Object.keys(master.ledgers || {}).length,
+      pulledAt: new Date(),
+    };
+    if (vtypes) set.vtypes = vtypes;
+    // Days the Day Book would not answer for, kept WITH the period they belong to, so a
+    // reconciliation that fails can say where to look. Written only by a pull that
+    // actually read vouchers; a balances-only run has no opinion and leaves it alone.
+    if (failed) set.failedDays = failed.filter((d) => d >= sn.from && d <= sn.to);
+    await db.collection('balances').updateOne({ _id: `${branch}|${sn.from}` }, { $set: set }, { upsert: true });
+  }
+  return snaps.length;
+}
+
 // Build the $set for the masters collection.
 //
 // mode 'replace' (default) is the normal live sync: `ledgers`/`groups`/`contacts`/
@@ -193,6 +271,10 @@ async function masterSet(db, branch, master, mode) {
   if (contacts) set.contacts = contacts;
   // Ledger GUIDs (name -> stable Tally id) so the dashboard can merge renamed parties.
   if (master.ids && typeof master.ids === 'object') set.ids = master.ids;
+  // Voucher type -> the type it was created from. Which vouchers post to the books is
+  // decided by the reserved type at the root of that chain, never by the name.
+  const vt = cleanNameMap(master.vtypes);
+  if (vt) set.vtypes = vt;
   // What each party owes, in Tally's own words, and the day it was struck on. The
   // vouchers can only ever show movement since the oldest one we hold, so a customer
   // who already owed money before that cannot be got right by adding vouchers up.
@@ -223,6 +305,7 @@ function readMaster(doc) {
     groups: unionMaps(doc.groups, doc.histGroups),
     contacts: unionMaps(doc.contacts, doc.histContacts),
     ids: doc.ids || {},
+    vtypes: doc.vtypes || null,
     closing: doc.closing || null,
     closingAsOn: doc.closingAsOn || null,
     opening: doc.opening || null,
@@ -251,6 +334,9 @@ async function ingest(payload) {
     const set = await masterSet(db, branch, payload.master, masterMode);
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
+    // In BOTH modes. A historical pull must not touch the live master's balances, and
+    // does not -- but its own year's snapshot is exactly what it is the only source of.
+    result.snapshots = await storeSnapshots(db, branch, payload.master);
   }
 
   // 2) Vouchers (idempotent upsert on branch+guid, so re-running a day is safe).
@@ -315,6 +401,13 @@ async function resetBranch(payload) {
   if (payload.master !== false) {
     result.masterDeleted = ((await db.collection('masters').deleteOne({ branch })).deletedCount || 0) > 0;
   }
+  // The wrong company's balance snapshots are as wrong as its master, and would go on
+  // answering trial balances for this branch after the vouchers they describe were gone.
+  // Same scope as the vouchers: the periods that START inside the range, or all of them.
+  if (payload.master !== false) {
+    const bq = all ? { branch } : { branch, from: { $gte: from, $lte: to } };
+    result.balancesDeleted = (await db.collection('balances').deleteMany(bq)).deletedCount || 0;
+  }
   if (payload.syncState !== false) {
     result.syncStateCleared = ((await db.collection('sync_state').deleteOne({ branch })).deletedCount || 0) > 0;
   }
@@ -367,6 +460,7 @@ async function syncIncremental(payload) {
     const set = await masterSet(db, branch, payload.master, 'replace');
     await db.collection('masters').updateOne({ branch }, { $set: set }, { upsert: true });
     result.masterUpserted = true;
+    result.snapshots = await storeSnapshots(db, branch, payload.master);
   }
 
   // 1) Replace every changed date wholesale: delete then insert the fresh pull.
@@ -458,4 +552,4 @@ async function syncIncremental(payload) {
   return result;
 }
 
-module.exports = { ingest, resetBranch, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, readMaster, voucherKey, diffMeta, getSyncState, syncIncremental };
+module.exports = { cleanSnapshots, storeSnapshots, ingest, resetBranch, VALID_BRANCHES, cleanVoucher, cleanDetails, cleanContacts, readMaster, voucherKey, diffMeta, getSyncState, syncIncremental };

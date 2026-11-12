@@ -1,6 +1,37 @@
 
 # CDC Dashboard Tools — CHANGELOG
 
+## v2.90 (pipeline, server, diag, portal) — November 2026 — Trial balance as on any date, checked against Tally
+
+**The question was whether the capture is complete, and now the system can answer it
+itself.** A new page, **Trial balance**, gives every ledger's balance for one company as on
+any date — and above it a verdict: each ledger's opening plus every voucher held for that
+year, compared with the closing balance Tally itself reports, ledger by ledger. Where they
+all agree the year is completely captured, shown rather than believed. Where they do not,
+the ledgers are named with the amount each is out by.
+
+**What was missing, and is now collected:**
+
+- **Each year's opening and closing balances.** Only the live company ever had them; an old
+  year's pull was not allowed to store its own. They are now kept per company per financial
+  year, so an old year no longer overwrites anything and every year can be answered for.
+- **The chart of accounts as it stood each year**, so a ledger sits under the group it was
+  in then, not the one it is in today.
+- **The voucher-type master.** Orders, delivery notes and memoranda carry amounts and post
+  nothing; which type is which is now read from Tally (the type each was created from)
+  instead of guessed from its name.
+- **Days Tally would not answer for.** A failed day used to look exactly like a day with no
+  entries. It is now retried, reported, recorded against its year, and fails the run.
+
+**What you need to run, once** (details in `pipeline/SETUP.md`, *Balances for a trial
+balance*): a balances-only pull for the live company of each branch, and
+`run_backfill.ps1 -BalancesOnly` for the old Kolkata years. It pulls no vouchers, so it is
+minutes for all ten years. After that the daily sync keeps the current year fresh.
+
+Not offered: a consolidated trial balance (the branches are separate Tally companies, so
+there is nothing to check a combined one against), and any statement for a year whose
+balances have not been pulled.
+
 ## v2.89 (server, diag) — November 2026 — A window that reaches back further than the data now says so
 
 Asking either page for a window that starts before the oldest voucher held produced figures
