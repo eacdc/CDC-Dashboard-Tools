@@ -41,6 +41,9 @@ param(
     [int]$WatchdogMinutes     = 10,
     # The sync waits a few minutes after logon so the watchdog has Tally up first.
     [int]$SyncDelayMinutes    = 4,
+    # Also keep the local API server (npm start in ..\server) running. Pass -NoServer
+    # on a box whose sync posts to a hosted server instead.
+    [switch]$NoServer,
     [switch]$Remove
 )
 
@@ -48,8 +51,10 @@ $ErrorActionPreference = "Stop"
 $here     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $watchdog = Join-Path $here "StartTally.ps1"
 $syncBat  = Join-Path $here "run_sync.bat"
+$serverPs = Join-Path $here "StartServer.ps1"
 $WATCH_TASK = "CDC_Tally_Watchdog"
 $SYNC_TASK  = "CDC_Tally_Sync_30min"
+$SERVER_TASK = "CDC_Server_Watchdog"
 
 function Say($m) { Write-Host $m }
 
@@ -58,7 +63,7 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
             [Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if ($Remove) {
-    foreach ($t in @($WATCH_TASK, $SYNC_TASK)) {
+    foreach ($t in @($WATCH_TASK, $SYNC_TASK, $SERVER_TASK)) {
         try {
             Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop
             Say ("removed {0}" -f $t)
@@ -141,6 +146,18 @@ Register-ScheduledTask -TaskName $SYNC_TASK -Force `
     -Settings $settings -Principal $principal `
     -Description ("CDC incremental Tally -> MongoDB sync for branch(es) " + $Branches + ".") | Out-Null
 Say ("registered {0}   -- at logon +{1} min, then every {2} min, branches={3}" -f $SYNC_TASK, $SyncDelayMinutes, $SyncMinutes, $Branches)
+
+if (-not $NoServer) {
+    if (-not (Test-Path $serverPs)) { throw ("StartServer.ps1 not found next to this script ({0})." -f $serverPs) }
+    $serverArg = '-ExecutionPolicy Bypass -NoProfile -File "' + $serverPs + '"'
+    $serverAction = New-ScheduledTaskAction -Execute $ps -Argument $serverArg -WorkingDirectory $here
+    Register-ScheduledTask -TaskName $SERVER_TASK -Force `
+        -Action $serverAction -Trigger (LogonTriggerEvery $WatchdogMinutes 0) `
+        -Settings $settings -Principal $principal `
+        -Description "Starts the CDC API server (npm start) if it is not answering /health." | Out-Null
+    Say ("registered {0}  -- at logon, then every {1} min" -f $SERVER_TASK, $WatchdogMinutes)
+    try { Start-ScheduledTask -TaskName $SERVER_TASK; Say "  server watchdog started once now (logs\server_watchdog.log)." } catch { }
+}
 
 # Run the watchdog now, so the install is proved rather than assumed.
 Say ""

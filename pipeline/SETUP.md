@@ -471,7 +471,7 @@ still fires every 30 minutes and logs *"no company answered"* — the dashboard 
 shows last week's figures with nothing on screen looking broken. Three pieces close
 that, and only the third needs a human decision.
 
-**1. Register both tasks** (once, in an *Administrator* PowerShell on the Tally box):
+**1. Register the tasks** (once, in an *Administrator* PowerShell on the Tally box, **from inside the `pipeline` folder** — `cd` there first, or `.\Install-CdcAutostart.ps1` is not found):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Install-CdcAutostart.ps1 -Branches kol
@@ -483,6 +483,7 @@ powershell -ExecutionPolicy Bypass -File .\Install-CdcAutostart.ps1 -Branches ko
 |---|---|---|
 | `CDC_Tally_Watchdog` | at logon, then every 10 min | `StartTally.ps1` — if no company answers the gateway, **starts Tally itself** |
 | `CDC_Tally_Sync_30min` | at logon + 4 min, then every 30 min | `run_sync.bat -Branches …` |
+| `CDC_Server_Watchdog` | at logon, then every 10 min | `StartServer.ps1` — if `http://127.0.0.1:3000/health` does not answer, runs `npm start` in `server\` (minimised window, output in `logs\server.log`). Skip with `-NoServer`. |
 
 Both are **at logon** triggers, not bare schedules: after a restart the gap is minutes
 rather than "whenever the next hour came round". Both are `IgnoreNew`, so the weekly
